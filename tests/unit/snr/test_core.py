@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from gwpy.timeseries import TimeSeries
+
+pytest.importorskip("pycbc", reason="pycbc not installed")
+
 import pycbc.filter
 import pycbc.psd
 import pycbc.types
-import pytest
-from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.snr.core import matched_filter_snr, noise_weighted_inner_product, optimal_snr
 

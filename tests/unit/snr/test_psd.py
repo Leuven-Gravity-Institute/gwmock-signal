@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
-import pycbc.types
 import pytest
+
+pytest.importorskip("pycbc", reason="pycbc not installed")
+
+import pycbc.types
 
 from gwmock_signal.snr.psd import evaluate_psd, from_numpy_psd, load_design_psd
 
