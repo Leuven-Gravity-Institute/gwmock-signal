@@ -54,17 +54,18 @@ def _make_background(detector_names: tuple[str, ...]) -> dict[str, TimeSeries]:
 
 
 def _aligo_psd_numpy(n_freq: int, delta_f: float) -> np.ndarray:
-    """Return aLIGO design PSD (P1200087) as a numpy array.
+    """Return aLIGO design PSD (P1200087) as a numpy array via pycbc.
 
-    Uses pycbc to generate the PSD; bins set to zero by pycbc (below FMIN) are
-    replaced with inf so that the noise matrix remains invertible at all bins.
-    The frequency mask in network_optimal_snr excludes those bins anyway.
+    pycbc zeros both the DC bin and the Nyquist bin by convention.  Replacing
+    those zeros with inf keeps the noise matrix invertible; the inverse of a
+    diagonal inf matrix is the zero matrix, so those bins contribute nothing to
+    the inner product sum.
     """
     from pycbc.psd import analytical
 
     psd_pycbc = analytical.aLIGODesignSensitivityP1200087(n_freq, delta_f, FMIN)
     psd = np.array(psd_pycbc.data, dtype=float)
-    psd[psd == 0.0] = np.inf  # replace sub-FMIN zeros to keep S_n invertible
+    psd[psd == 0.0] = np.inf
     return psd
 
 

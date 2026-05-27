@@ -37,8 +37,8 @@ def network_optimal_snr(
         stack: Multi-detector strain data as a ``DetectorStrainStack``.
         psds: One-sided noise PSD per detector; real numpy arrays of shape
             ``(n_freq,)`` where ``n_freq = n_samples // 2 + 1``.
-            Values must be strictly positive (non-zero) at all bins;
-            set sub-cutoff bins to `np.inf` to exclude them without causing singular matrix errors.
+            Only bins within the frequency mask are inverted, so zero-valued
+            out-of-band entries do not cause singular-matrix errors.
         cross_psds: Off-diagonal cross-PSDs, complex numpy arrays of shape
             ``(n_freq,)``, keyed by ordered detector-name tuples.  The
             function enforces Hermitian symmetry:
@@ -73,16 +73,16 @@ def network_optimal_snr(
             s_n[i, j, :] = cpsd
             s_n[j, i, :] = np.conj(cpsd)  # Hermitian symmetry
 
-    # Invert s_n at each frequency bin; np.linalg.inv broadcasts over the batch
-    # axis. s_n is (n_det, n_det, n_freq); transpose to (n_freq, n_det, n_det)
-    # for batched inversion, then transpose back with (1, 2, 0).
-    s_n_inv = np.linalg.inv(s_n.transpose(2, 0, 1)).transpose(1, 2, 0)
-
-    # Inner product integrand: Re[ s̃*(f_k) · s_n⁻¹(f_k) · s̃(f_k) ]  (Eq. 9)
-    integrand = np.einsum("ik,ijk,jk->k", s_tilde.conj(), s_n_inv, s_tilde).real
-
+    # Apply the frequency mask before inversion so out-of-band bins (where PSDs
+    # may be zero) never reach np.linalg.inv and cannot cause LinAlgError.
     f_high = high_frequency_cutoff if high_frequency_cutoff is not None else freqs[-1]
     mask = (freqs >= low_frequency_cutoff) & (freqs <= f_high)
 
-    rho_sq = 4.0 * delta_f * integrand[mask].sum()
+    s_n_inv_m = np.linalg.inv(s_n.transpose(2, 0, 1)[mask])  # (n_mask, n_det, n_det)
+    s_tilde_m = s_tilde[:, mask]  # (n_det, n_mask)
+
+    # Inner product integrand: Re[ s̃*(f_k) · s_n⁻¹(f_k) · s̃(f_k) ]  (Eq. 9)
+    integrand = np.einsum("ik,kij,jk->k", s_tilde_m.conj(), s_n_inv_m, s_tilde_m).real
+
+    rho_sq = 4.0 * delta_f * integrand.sum()
     return float(np.sqrt(max(rho_sq, 0.0)))
