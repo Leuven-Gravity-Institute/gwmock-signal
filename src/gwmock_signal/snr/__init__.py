@@ -13,12 +13,13 @@
 #
 """SNR computation functions for gravitational-wave signals.
 
-Both functions require pycbc as an optional dependency and raise
+The pycbc-backed functions (`matched_filter_snr`, `optimal_snr`) require pycbc as an optional dependency and raise
 ``ImportError`` with a helpful message when it is absent.
 """
 
 from __future__ import annotations
 
+from gwmock_signal.snr._network import network_optimal_snr
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
 
-__all__ = ["matched_filter_snr", "optimal_snr"]
+__all__ = ["matched_filter_snr", "network_optimal_snr", "optimal_snr"]
