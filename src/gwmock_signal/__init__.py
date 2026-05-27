@@ -30,6 +30,8 @@ _PUBLIC_SYMBOLS = {
     "TransientSimulator": ("gwmock_signal.simulator", "TransientSimulator"),
     "WaveformBackend": ("gwmock_signal.waveform.backends", "WaveformBackend"),
     "list_registered_source_types": ("gwmock_signal.registry", "list_registered_source_types"),
+    "matched_filter_snr": ("gwmock_signal.snr._pycbc", "matched_filter_snr"),
+    "optimal_snr": ("gwmock_signal.snr._pycbc", "optimal_snr"),
     "register_simulator_backend": ("gwmock_signal.registry", "register_simulator_backend"),
     "resolve_simulator_backend": ("gwmock_signal.registry", "resolve_simulator_backend"),
 }
@@ -62,6 +64,8 @@ __all__ = [
     "WaveformBackend",
     "__version__",
     "list_registered_source_types",
+    "matched_filter_snr",
+    "optimal_snr",
     "register_simulator_backend",
     "resolve_simulator_backend",
 ]
