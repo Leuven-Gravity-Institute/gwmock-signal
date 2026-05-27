@@ -30,6 +30,9 @@ _PUBLIC_SYMBOLS = {
     "TransientSimulator": ("gwmock_signal.simulator", "TransientSimulator"),
     "WaveformBackend": ("gwmock_signal.waveform.backends", "WaveformBackend"),
     "list_registered_source_types": ("gwmock_signal.registry", "list_registered_source_types"),
+    "matched_filter_snr": ("gwmock_signal.snr._pycbc", "matched_filter_snr"),
+    "network_optimal_snr": ("gwmock_signal.snr._network", "network_optimal_snr"),
+    "optimal_snr": ("gwmock_signal.snr._pycbc", "optimal_snr"),
     "register_simulator_backend": ("gwmock_signal.registry", "register_simulator_backend"),
     "resolve_simulator_backend": ("gwmock_signal.registry", "resolve_simulator_backend"),
 }
@@ -51,17 +54,4 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))
 
 
-__all__ = [
-    "CBCSimulator",
-    "CustomDetector",
-    "DetectorStrainStack",
-    "GWSimulator",
-    "LALSimulationBackend",
-    "Network",
-    "TransientSimulator",
-    "WaveformBackend",
-    "__version__",
-    "list_registered_source_types",
-    "register_simulator_backend",
-    "resolve_simulator_backend",
-]
+__all__ = [*_PUBLIC_SYMBOLS, "__version__"]  # noqa: PLE0604
