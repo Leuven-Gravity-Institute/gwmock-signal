@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -86,6 +87,21 @@ class TestOptimalSNR:
 
         assert callable(gwmock_signal.optimal_snr)
 
+    def test_calls_sigma_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Success path runs and returns float even when pycbc is replaced by a mock."""
+        mock_htilde = MagicMock()
+        mock_strain = MagicMock()
+        mock_strain.to_pycbc.return_value.to_frequencyseries.return_value = mock_htilde
+
+        mock_pycbc_filter = MagicMock()
+        mock_pycbc_filter.sigma.return_value = 7.5
+        monkeypatch.setitem(sys.modules, "pycbc.filter", mock_pycbc_filter)
+
+        result = optimal_snr(mock_strain, "mock_psd", low_frequency_cutoff=30.0)
+
+        assert result == 7.5
+        mock_pycbc_filter.sigma.assert_called_once_with(mock_htilde, psd="mock_psd", low_frequency_cutoff=30.0)
+
 
 # ---------------------------------------------------------------------------
 # matched_filter_snr
@@ -141,3 +157,27 @@ class TestMatchedFilterSNR:
         import gwmock_signal
 
         assert callable(gwmock_signal.matched_filter_snr)
+
+    def test_calls_matched_filter_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Success path runs and returns a TimeSeries even when pycbc is replaced by a mock."""
+        mock_data = MagicMock()
+        mock_template = MagicMock()
+        mock_snr_result = MagicMock()
+
+        mock_pycbc_filter = MagicMock()
+        mock_pycbc_filter.matched_filter.return_value = mock_snr_result
+        monkeypatch.setitem(sys.modules, "pycbc.filter", mock_pycbc_filter)
+
+        expected_ts = MagicMock(spec=TimeSeries)
+        with patch("gwmock_signal.snr._pycbc.TimeSeries") as mock_ts_class:
+            mock_ts_class.from_pycbc.return_value = expected_ts
+            result = matched_filter_snr(mock_data, mock_template, "mock_psd", low_frequency_cutoff=30.0)
+
+        assert result is expected_ts
+        mock_pycbc_filter.matched_filter.assert_called_once_with(
+            mock_template.to_pycbc(),
+            mock_data.to_pycbc(),
+            psd="mock_psd",
+            low_frequency_cutoff=30.0,
+        )
+        mock_ts_class.from_pycbc.assert_called_once_with(abs(mock_snr_result))
