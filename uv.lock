@@ -578,7 +578,7 @@ provides-extras = ["pycbc"]
 [package.metadata.requires-dev]
 build = [{ name = "hatch", specifier = ">=1.16.5" }]
 dev = [
-    { name = "prek", specifier = ">=0.4.1" },
+    { name = "prek", specifier = ">=0.4.2" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-github-actions-annotate-failures", specifier = ">=0.4.0" },
