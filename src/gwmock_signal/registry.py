@@ -86,6 +86,8 @@ def list_registered_source_types() -> tuple[str, ...]:
 
 
 register_simulator_backend("bbh", CBCSimulator)
+register_simulator_backend("bns", CBCSimulator)
+register_simulator_backend("nsbh", CBCSimulator)
 
 
 __all__ = [

@@ -515,6 +515,33 @@ class TestSourceTypeRegistry:
         assert issubclass(backend, GWSimulator)
         assert backend.__name__ == "CBCSimulator"
 
+    def test_resolve_bns_returns_cbc_simulator(self):
+        """BNS source type resolves to CBCSimulator."""
+        backend = resolve_simulator_backend("bns")
+        assert issubclass(backend, GWSimulator)
+        assert backend.__name__ == "CBCSimulator"
+
+    def test_resolve_nsbh_returns_cbc_simulator(self):
+        """NSBH source type resolves to CBCSimulator."""
+        backend = resolve_simulator_backend("nsbh")
+        assert issubclass(backend, GWSimulator)
+        assert backend.__name__ == "CBCSimulator"
+
+    @pytest.mark.parametrize("source_type", ["bns", "nsbh"])
+    def test_compact_binary_variants_case_insensitive(self, source_type: str):
+        """BNS and NSBH lookups are case-insensitive."""
+        assert resolve_simulator_backend(source_type.upper()) is resolve_simulator_backend(source_type)
+
+    @pytest.mark.parametrize("source_type", ["bns", "nsbh"])
+    def test_list_registered_source_types_includes_compact_binary_variants(self, source_type: str):
+        """BNS and NSBH are present in the default public registry."""
+        assert source_type in gwmock_signal.list_registered_source_types()
+
+    def test_bns_and_nsbh_resolve_to_same_backend_as_bbh(self):
+        """BNS and NSBH share the CBCSimulator backend with BBH."""
+        assert resolve_simulator_backend("bns") is resolve_simulator_backend("bbh")
+        assert resolve_simulator_backend("nsbh") is resolve_simulator_backend("bbh")
+
     def test_source_type_lookup_is_case_insensitive(self):
         """Source-type normalization is lowercase and trims whitespace."""
         assert resolve_simulator_backend("  BBH  ") is resolve_simulator_backend("bbh")
