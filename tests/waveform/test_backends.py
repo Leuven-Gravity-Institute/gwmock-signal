@@ -110,6 +110,22 @@ def test_lal_backend_nontidal_unaffected_by_default_lambdas() -> None:
     assert set(result) == {"plus", "cross"}
 
 
+@pytest.mark.parametrize("param", ["lambda_1", "lambda_2"])
+def test_lal_backend_negative_tidal_param_raises(param: str) -> None:
+    """Negative tidal deformability raises ValueError before reaching LAL."""
+    with pytest.raises(ValueError, match=f"{param} must be >= 0"):
+        LALSimulationBackend().generate_td_waveform(
+            "IMRPhenomD",
+            tc=1_126_259_462.4,
+            sampling_frequency=4096.0,
+            minimum_frequency=20.0,
+            detector_frame_mass_1=36.0,
+            detector_frame_mass_2=29.0,
+            luminosity_distance=410.0,
+            **{param: -1.0},
+        )
+
+
 def test_lal_backend_tidal_alias_conflict_raises() -> None:
     """Passing lambda_1 and tidal_1 simultaneously raises ValueError."""
     with pytest.raises(ValueError, match="Do not mix aliases"):
