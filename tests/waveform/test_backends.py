@@ -63,6 +63,69 @@ def test_pycbc_backend_available_approximants_when_installed() -> None:
     assert "IMRPhenomD" in PyCBCBackend().available_approximants()
 
 
+def test_lal_backend_accepts_tidal_params_for_nrtidal_approximant() -> None:
+    """lambda_1/lambda_2 do not raise ValueError for NRTidal waveforms."""
+    result = LALSimulationBackend().generate_td_waveform(
+        "IMRPhenomPv2_NRTidalv2",
+        tc=1_126_259_462.4,
+        sampling_frequency=4096.0,
+        minimum_frequency=20.0,
+        detector_frame_mass_1=1.4,
+        detector_frame_mass_2=1.4,
+        luminosity_distance=40.0,
+        lambda_1=500.0,
+        lambda_2=300.0,
+    )
+    assert set(result) == {"plus", "cross"}
+    assert isinstance(result["plus"], TimeSeries)
+
+
+def test_lal_backend_accepts_tidal_aliases() -> None:
+    """tidal_1/tidal_2 are accepted as aliases for lambda_1/lambda_2."""
+    result = LALSimulationBackend().generate_td_waveform(
+        "IMRPhenomPv2_NRTidalv2",
+        tc=1_126_259_462.4,
+        sampling_frequency=4096.0,
+        minimum_frequency=20.0,
+        detector_frame_mass_1=1.4,
+        detector_frame_mass_2=1.4,
+        luminosity_distance=40.0,
+        tidal_1=500.0,
+        tidal_2=300.0,
+    )
+    assert set(result) == {"plus", "cross"}
+
+
+def test_lal_backend_nontidal_unaffected_by_default_lambdas() -> None:
+    """Non-tidal waveforms work without tidal params (lambda=0 is safe)."""
+    result = LALSimulationBackend().generate_td_waveform(
+        "IMRPhenomD",
+        tc=1_126_259_462.4,
+        sampling_frequency=4096.0,
+        minimum_frequency=20.0,
+        detector_frame_mass_1=36.0,
+        detector_frame_mass_2=29.0,
+        luminosity_distance=410.0,
+    )
+    assert set(result) == {"plus", "cross"}
+
+
+def test_lal_backend_tidal_alias_conflict_raises() -> None:
+    """Passing lambda_1 and tidal_1 simultaneously raises ValueError."""
+    with pytest.raises(ValueError, match="Do not mix aliases"):
+        LALSimulationBackend().generate_td_waveform(
+            "IMRPhenomD",
+            tc=1_126_259_462.4,
+            sampling_frequency=4096.0,
+            minimum_frequency=20.0,
+            detector_frame_mass_1=36.0,
+            detector_frame_mass_2=29.0,
+            luminosity_distance=410.0,
+            lambda_1=500.0,
+            tidal_1=500.0,
+        )
+
+
 def test_top_level_backend_import_succeeds_without_pycbc() -> None:
     """Top-level backend exports do not require importing PyCBC."""
     code = """
