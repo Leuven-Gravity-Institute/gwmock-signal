@@ -57,14 +57,22 @@ class LALSimulationBackend(WaveformBackend):
         spin_2z = float(_pop_alias(remaining, "spin_2z", "spin2z", default=0.0))
         inclination = float(_pop_alias(remaining, "inclination", default=0.0))
         coa_phase = float(_pop_alias(remaining, "coa_phase", default=0.0))
+        lambda_1 = float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0))
+        lambda_2 = float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0))
         if remaining:
             extras = ", ".join(sorted(remaining))
             raise ValueError(f"Unsupported LAL waveform parameters: {extras}")
         if sampling_frequency <= 0:
             raise ValueError("sampling_frequency must be > 0")
+        if lambda_1 < 0:
+            raise ValueError("lambda_1 must be >= 0")
+        if lambda_2 < 0:
+            raise ValueError("lambda_2 must be >= 0")
 
         approx_enum = lalsimulation.GetApproximantFromString(approximant)
         lal_params = lal.CreateDict()
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, lambda_1)
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, lambda_2)
         hp, hc = lalsimulation.SimInspiralChooseTDWaveform(
             mass1 * MSUN,
             mass2 * MSUN,
