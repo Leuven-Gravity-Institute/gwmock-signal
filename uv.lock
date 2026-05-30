@@ -571,7 +571,7 @@ requires-dist = [
     { name = "lalsuite", specifier = ">=7.26.13" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.11.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "typer", specifier = ">=0.26.1" },
+    { name = "typer", specifier = ">=0.26.2" },
 ]
 provides-extras = ["pycbc"]
 
