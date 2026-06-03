@@ -105,5 +105,7 @@ def test_long_wavelength_overlap_reduction_has_pair_keys() -> None:
 
 def test_stochastic_exports_and_registry() -> None:
     """SGWB simulator is available from public package entry points."""
-    assert StochasticBackgroundSimulator is StochasticBackgroundSimulator
+    import gwmock_signal
+
+    assert gwmock_signal.StochasticBackgroundSimulator is StochasticBackgroundSimulator
     assert resolve_simulator_backend("sgwb") is StochasticBackgroundSimulator
