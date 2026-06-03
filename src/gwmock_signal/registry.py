@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from gwmock_signal.simulator import CBCSimulator, GWSimulator
+from gwmock_signal.stochastic import StochasticBackgroundSimulator
 
 _SOURCE_TYPE_REGISTRY: dict[str, type[GWSimulator]] = {}
 
@@ -88,6 +89,7 @@ def list_registered_source_types() -> tuple[str, ...]:
 register_simulator_backend("bbh", CBCSimulator)
 register_simulator_backend("bns", CBCSimulator)
 register_simulator_backend("nsbh", CBCSimulator)
+register_simulator_backend("sgwb", StochasticBackgroundSimulator)
 
 
 __all__ = [

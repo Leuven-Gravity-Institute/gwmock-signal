@@ -27,6 +27,8 @@ _PUBLIC_SYMBOLS = {
     "GWSimulator": ("gwmock_signal.simulator", "GWSimulator"),
     "LALSimulationBackend": ("gwmock_signal.waveform.backends", "LALSimulationBackend"),
     "Network": ("gwmock_signal.network", "Network"),
+    "StochasticBackgroundSimulator": ("gwmock_signal.stochastic", "StochasticBackgroundSimulator"),
+    "StochasticBackgroundSpectrum": ("gwmock_signal.stochastic", "StochasticBackgroundSpectrum"),
     "TransientSimulator": ("gwmock_signal.simulator", "TransientSimulator"),
     "WaveformBackend": ("gwmock_signal.waveform.backends", "WaveformBackend"),
     "list_registered_source_types": ("gwmock_signal.registry", "list_registered_source_types"),

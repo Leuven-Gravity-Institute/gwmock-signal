@@ -70,6 +70,7 @@ nav = [
     { "Projection" = "api/projection/index.md" },
     { "Injection" = "api/injection/index.md" },
     { "Pipeline" = "api/pipeline/index.md" },
+    { "Stochastic" = "api/stochastic/index.md" },
     { "Multichannel" = "api/multichannel/index.md" },
     { "Network" = "api/network/index.md" },
     { "Simulator" = "api/simulator/index.md" },

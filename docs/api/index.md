@@ -27,6 +27,7 @@ tree (`src/gwmock_signal/`).
 | **[Projection](projection/)**     | `project_polarizations_to_network`                                                                     |
 | **[Injection](injection/)**       | `inject_strain`, `inject_strains_sequential`                                                           |
 | **[Pipeline](pipeline/)**         | `inject_cbc_signal` (CBC orchestration)                                                                |
+| **[Stochastic](stochastic/)**     | `StochasticBackgroundSimulator`, power-law SGWB spectra, ORF helpers                                   |
 | **[Multichannel](multichannel/)** | `DetectorStrainStack`                                                                                  |
 | **[Network](network/)**           | `Network` (presets, `from_file`, detector lists)                                                       |
 | **[Simulator](simulator/)**       | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
@@ -43,6 +44,8 @@ tree (`src/gwmock_signal/`).
 - **[Injection](injection/)** — Strain into segments (`inject_strain`,
   `inject_strains_sequential`).
 - **[Pipeline](pipeline/)** — One-call CBC injection (`inject_cbc_signal`).
+- **[Stochastic](stochastic/)** — SGWB signal generation as correlated
+  multi-detector Gaussian strain.
 - **[Multichannel](multichannel/)** — Stacked IFO strains
   (`DetectorStrainStack`).
 - **[Network](network/)** — Named networks and YAML/JSON network configs.
@@ -58,20 +61,22 @@ tree (`src/gwmock_signal/`).
 `gwmock_signal.__init__`. Prefer these imports in application code; submodule
 paths are stable but longer.
 
-| Symbol                         | Category     | Reference                         |
-| ------------------------------ | ------------ | --------------------------------- |
-| `CBCSimulator`                 | Simulator    | [Simulator API](simulator/)       |
-| `TransientSimulator`           | Simulator    | [Simulator API](simulator/)       |
-| `GWSimulator`                  | Simulator    | [Simulator API](simulator/)       |
-| `DetectorStrainStack`          | Multichannel | [Multichannel API](multichannel/) |
-| `Network`                      | Network      | [Network API](network/)           |
-| `CustomDetector`               | Detector     | [Network API](network/)           |
-| `WaveformBackend`              | Waveform     | [Waveform API](waveform/)         |
-| `LALSimulationBackend`         | Waveform     | [Waveform API](waveform/)         |
-| `resolve_simulator_backend`    | Registry     | [Registry API](registry/)         |
-| `register_simulator_backend`   | Registry     | [Registry API](registry/)         |
-| `list_registered_source_types` | Registry     | [Registry API](registry/)         |
-| `__version__`                  | Version      | _(string)_                        |
+| Symbol                          | Category     | Reference                         |
+| ------------------------------- | ------------ | --------------------------------- |
+| `CBCSimulator`                  | Simulator    | [Simulator API](simulator/)       |
+| `StochasticBackgroundSimulator` | Simulator    | [Stochastic API](stochastic/)     |
+| `StochasticBackgroundSpectrum`  | Spectrum     | [Stochastic API](stochastic/)     |
+| `TransientSimulator`            | Simulator    | [Simulator API](simulator/)       |
+| `GWSimulator`                   | Simulator    | [Simulator API](simulator/)       |
+| `DetectorStrainStack`           | Multichannel | [Multichannel API](multichannel/) |
+| `Network`                       | Network      | [Network API](network/)           |
+| `CustomDetector`                | Detector     | [Network API](network/)           |
+| `WaveformBackend`               | Waveform     | [Waveform API](waveform/)         |
+| `LALSimulationBackend`          | Waveform     | [Waveform API](waveform/)         |
+| `resolve_simulator_backend`     | Registry     | [Registry API](registry/)         |
+| `register_simulator_backend`    | Registry     | [Registry API](registry/)         |
+| `list_registered_source_types`  | Registry     | [Registry API](registry/)         |
+| `__version__`                   | Version      | _(string)_                        |
 
 ## See also
 
