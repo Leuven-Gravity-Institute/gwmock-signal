@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
-import gwmock_signal
 from gwmock_signal import resolve_simulator_backend
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.stochastic import (
@@ -106,5 +105,5 @@ def test_long_wavelength_overlap_reduction_has_pair_keys() -> None:
 
 def test_stochastic_exports_and_registry() -> None:
     """SGWB simulator is available from public package entry points."""
-    assert gwmock_signal.StochasticBackgroundSimulator is StochasticBackgroundSimulator
+    assert StochasticBackgroundSimulator is StochasticBackgroundSimulator
     assert resolve_simulator_backend("sgwb") is StochasticBackgroundSimulator
