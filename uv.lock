@@ -621,7 +621,7 @@ requires-dist = [
 provides-extras = ["pycbc", "sgwb"]
 
 [package.metadata.requires-dev]
-build = [{ name = "hatch", specifier = ">=1.16.5" }]
+build = [{ name = "hatch", specifier = ">=1.17.0" }]
 dev = [
     { name = "prek", specifier = ">=0.4.3" },
     { name = "pytest", specifier = ">=9.0.3" },
