@@ -192,7 +192,7 @@ def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, s
     return out
 
 
-def project_polarizations_to_network(  # noqa: PLR0913
+def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     polarizations: Mapping[str, GWpyTimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
@@ -204,8 +204,9 @@ def project_polarizations_to_network(  # noqa: PLR0913
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
     Built-in and custom detector codes are resolved through the LAL cached
-    detector registry. Polarizations are interpolated in time with cubic
-    splines (see user guide for caveats at edges).
+    detector registry. The geocenter→detector time delay is applied via an
+    exact frequency-domain phase factor; for ``earth_rotation=True`` only
+    the small per-sample residual around the mean delay uses a cubic spline.
 
     Args:
         polarizations: Mapping containing ``plus`` and ``cross`` GWpy time series
@@ -217,8 +218,11 @@ def project_polarizations_to_network(  # noqa: PLR0913
         declination: Source declination in radians.
         polarization_angle: Polarization angle psi in radians (tensor modes).
         earth_rotation: If ``True``, evaluate antenna patterns at time-dependent
-            GPS times (recommended for longer signals). If ``False``, use a single
-            reference time at the segment midpoint for patterns and delays.
+            GPS times (recommended for longer signals); the mean delay is applied
+            exactly in FD and the per-sample residual via cubic spline (residual
+            amplitude attenuation ≈ ``(π f Δτ_res / f_s)⁴``). If ``False``, use
+            a single constant delay applied via an exact FD phase factor and
+            antenna patterns evaluated at the segment midpoint.
 
     Returns:
             Mapping from each detector name to the projected strain as a GWpy time
@@ -239,23 +243,12 @@ def project_polarizations_to_network(  # noqa: PLR0913
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
     time_array_wrt_reference = time_array - reference_time
 
-    minimum_number_of_data_points = 4
-    interp_kind = "cubic" if len(time_array_wrt_reference) >= minimum_number_of_data_points else "linear"
-
-    hp_func = interp1d(
-        time_array_wrt_reference,
-        hp.to_value(),
-        kind=interp_kind,
-        bounds_error=False,
-        fill_value=0.0,
-    )
-    hc_func = interp1d(
-        time_array_wrt_reference,
-        hc.to_value(),
-        kind=interp_kind,
-        bounds_error=False,
-        fill_value=0.0,
-    )
+    dt = float(hp.dt.value)
+    hp_vals = hp.to_value()
+    hc_vals = hc.to_value()
+    freqs = np.fft.rfftfreq(len(hp_vals), d=dt)
+    hp_rfft = np.fft.rfft(hp_vals)
+    hc_rfft = np.fft.rfft(hc_vals)
 
     strains: dict[str, GWpyTimeSeries] = {}
 
@@ -276,7 +269,29 @@ def project_polarizations_to_network(  # noqa: PLR0913
             prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, np.full(len(time_array), sindec)], axis=-1)
             time_delays = -np.dot(prop_dir, location) / constants.c.value
 
-            shifted_times = time_array_wrt_reference - time_delays
+            # Mean delay applied exactly via FD phase shift; tiny per-sample residual via spline.
+            mean_delay = float(np.mean(time_delays))
+            residual = time_delays - mean_delay
+            phase = np.exp(-2j * np.pi * freqs * mean_delay)
+            hp_mean = np.fft.irfft(hp_rfft * phase, n=len(hp_vals))
+            hc_mean = np.fft.irfft(hc_rfft * phase, n=len(hc_vals))
+            interp_kind = "cubic" if len(hp_vals) >= 4 else "linear"  # noqa: PLR2004
+            hp_res_func = interp1d(
+                time_array_wrt_reference,
+                hp_mean,
+                kind=interp_kind,
+                bounds_error=False,
+                fill_value=0.0,
+            )
+            hc_res_func = interp1d(
+                time_array_wrt_reference,
+                hc_mean,
+                kind=interp_kind,
+                bounds_error=False,
+                fill_value=0.0,
+            )
+            hp_shifted = hp_res_func(time_array_wrt_reference - residual)
+            hc_shifted = hc_res_func(time_array_wrt_reference - residual)
 
             # Vectorized antenna pattern (same math as _antenna_pattern_lal, batched)
             gmst_antenna = _gmst_accurate_array(time_array + time_delays)
@@ -321,10 +336,11 @@ def project_polarizations_to_network(  # noqa: PLR0913
                 polarization_angle=polarization_angle,
                 t_gps=reference_time,
             )
-            shifted_times = time_array_wrt_reference - time_delay
+            # Exact FD phase shift — lossless, no spline attenuation.
+            phase = np.exp(-2j * np.pi * freqs * time_delay)
+            hp_shifted = np.fft.irfft(hp_rfft * phase, n=len(hp_vals))
+            hc_shifted = np.fft.irfft(hc_rfft * phase, n=len(hc_vals))
 
-        hp_shifted = hp_func(shifted_times)
-        hc_shifted = hc_func(shifted_times)
         response = fp_vals * hp_shifted + fc_vals * hc_shifted
 
         strains[name] = GWpyTimeSeries(

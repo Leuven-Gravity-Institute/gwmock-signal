@@ -7,7 +7,6 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
-from scipy.interpolate import interp1d
 
 from gwmock_signal.projection.network import project_polarizations_to_network
 
@@ -31,11 +30,10 @@ def _project_with_pycbc_reference(  # noqa: PLR0913
 
     time_array = np.asarray(hp.times.value, dtype=float)
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
-    time_array_wrt_reference = time_array - reference_time
-
-    interp_kind = "cubic" if len(time_array_wrt_reference) >= 4 else "linear"
-    hp_func = interp1d(time_array_wrt_reference, hp.value, kind=interp_kind, bounds_error=False, fill_value=0.0)
-    hc_func = interp1d(time_array_wrt_reference, hc.value, kind=interp_kind, bounds_error=False, fill_value=0.0)
+    dt = float(hp.dt.value)
+    freqs = np.fft.rfftfreq(len(hp.value), d=dt)
+    hp_rfft = np.fft.rfft(hp.value)
+    hc_rfft = np.fft.rfft(hc.value)
 
     strains: dict[str, np.ndarray] = {}
     for name in detector_names:
@@ -52,8 +50,10 @@ def _project_with_pycbc_reference(  # noqa: PLR0913
             t_gps=reference_time,
             polarization_type="tensor",
         )
-        shifted_times = time_array_wrt_reference - time_delay
-        strains[name] = np.asarray(fp * hp_func(shifted_times) + fc * hc_func(shifted_times), dtype=float)
+        phase = np.exp(-2j * np.pi * freqs * time_delay)
+        hp_shifted = np.fft.irfft(hp_rfft * phase, n=len(hp.value))
+        hc_shifted = np.fft.irfft(hc_rfft * phase, n=len(hc.value))
+        strains[name] = np.asarray(fp * hp_shifted + fc * hc_shifted, dtype=float)
     return strains
 
 
@@ -188,6 +188,30 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
     assert set(out) == set(names)
     assert mock_time_delay.call_count == len(names)
     assert mock_antenna_pattern.call_count == len(names)
+
+
+@patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0))
+@patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal")
+def test_half_sample_shift_preserves_amplitude(mock_td, mock_ap) -> None:
+    """FD phase shift retains 500 Hz RMS amplitude to <0.05% after a half-sample delay."""
+    fs = 2048.0
+    n = 2048
+    mock_td.return_value = 0.5 / fs
+    t = np.arange(n) / fs
+    amplitude = 3.0
+    hp = TimeSeries(amplitude * np.sin(2 * np.pi * 500.0 * t), t0=0.0, sample_rate=fs)
+    hc = TimeSeries(np.zeros(n), t0=0.0, sample_rate=fs)
+    out = project_polarizations_to_network(
+        {"plus": hp, "cross": hc},
+        ["H1"],
+        right_ascension=0.0,
+        declination=0.0,
+        polarization_angle=0.0,
+        earth_rotation=False,
+    )
+    rms_out = np.sqrt(np.mean(out["H1"].value ** 2))
+    rms_in = amplitude / np.sqrt(2)  # RMS of a pure sinusoid
+    assert abs(rms_out - rms_in) / rms_in < 5e-4
 
 
 def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
