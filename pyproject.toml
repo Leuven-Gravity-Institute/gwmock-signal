@@ -21,7 +21,7 @@ dynamic = ["version"]
 dependencies = [
   "typer>=0.26.7",
   "gwpy>=4.0.1",
-  "lalsuite>=7.26.13",
+  "lalsuite>=7.26.14",
   "pyyaml>=6.0.3",
 ]
 
@@ -34,7 +34,7 @@ conflicts = [[{ extra = "pycbc" }, { extra = "sgwb" }]]
 
 [dependency-groups]
 dev = [
-  "ruff>=0.15.15",
+  "ruff>=0.15.16",
   "prek>=0.4.4",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.15.1",
@@ -42,7 +42,7 @@ dev = [
   "pytest>=9.0.3",
   "pytest-github-actions-annotate-failures>=0.4.0",
 ]
-docs = ["zensical>=0.0.43", "mkdocstrings-python>=2.0.3"]
+docs = ["zensical>=0.0.44", "mkdocstrings-python>=2.0.3"]
 build = ["hatch>=1.17.0"]
 release = ["git-cliff>=2.13.1"]
 
