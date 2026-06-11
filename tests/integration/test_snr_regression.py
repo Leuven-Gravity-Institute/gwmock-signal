@@ -122,6 +122,4 @@ def test_matched_filter_snr_peak_consistent_with_optimal() -> None:
     snr_ts = matched_filter_snr(h1_strain, h1_strain, psd, low_frequency_cutoff=FMIN)
 
     assert isinstance(snr_ts, TimeSeries)
-    # Loose tolerance: matched_filter_snr uses the natural-grid PSD while
-    # optimal_snr zero-pads to a finer grid, so they differ by ~0.07%.
-    assert snr_ts.value.max() == pytest.approx(opt, rel=2e-3)
+    assert snr_ts.value.max() == pytest.approx(opt, rel=1e-4)
