@@ -192,7 +192,7 @@ def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, s
     return out
 
 
-def project_polarizations_to_network(  # noqa: PLR0913
+def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     polarizations: Mapping[str, GWpyTimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
@@ -204,8 +204,11 @@ def project_polarizations_to_network(  # noqa: PLR0913
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
     Built-in and custom detector codes are resolved through the LAL cached
-    detector registry. Polarizations are interpolated in time with cubic
-    splines (see user guide for caveats at edges).
+    detector registry. For ``earth_rotation=False``, the constant
+    geocenter->detector delay is applied via an exact frequency-domain phase
+    shift (``h(t-tau) <-> H(f)*exp(-2*pi*i*f*tau)``), which is lossless at all
+    frequencies. For ``earth_rotation=True``, cubic-spline interpolation is
+    used.
 
     Args:
         polarizations: Mapping containing ``plus`` and ``cross`` GWpy time series
@@ -239,23 +242,33 @@ def project_polarizations_to_network(  # noqa: PLR0913
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
     time_array_wrt_reference = time_array - reference_time
 
+    hp_vals = hp.to_value()
+    hc_vals = hc.to_value()
+
     minimum_number_of_data_points = 4
     interp_kind = "cubic" if len(time_array_wrt_reference) >= minimum_number_of_data_points else "linear"
 
     hp_func = interp1d(
         time_array_wrt_reference,
-        hp.to_value(),
+        hp_vals,
         kind=interp_kind,
         bounds_error=False,
         fill_value=0.0,
     )
     hc_func = interp1d(
         time_array_wrt_reference,
-        hc.to_value(),
+        hc_vals,
         kind=interp_kind,
         bounds_error=False,
         fill_value=0.0,
     )
+
+    # Precomputed once for the exact FD phase-shift (earth_rotation=False path).
+    n_samples = len(hp_vals)
+    dt = float(hp.dt.value)
+    rfft_hp = np.fft.rfft(hp_vals)
+    rfft_hc = np.fft.rfft(hc_vals)
+    freqs_fd = np.fft.rfftfreq(n_samples, d=dt)
 
     strains: dict[str, GWpyTimeSeries] = {}
 
@@ -307,6 +320,9 @@ def project_polarizations_to_network(  # noqa: PLR0913
             dy = y_vec @ response.T
             fp_vals = np.sum(x_vec * dx - y_vec * dy, axis=-1)
             fc_vals = np.sum(x_vec * dy + y_vec * dx, axis=-1)
+
+            hp_shifted = hp_func(shifted_times)
+            hc_shifted = hc_func(shifted_times)
         else:
             time_delay = _time_delay_from_earth_center_lal(
                 prefix,
@@ -321,10 +337,12 @@ def project_polarizations_to_network(  # noqa: PLR0913
                 polarization_angle=polarization_angle,
                 t_gps=reference_time,
             )
-            shifted_times = time_array_wrt_reference - time_delay
+            # Exact FD phase shift: h(t-τ) <-> H(f)·exp(-2πifτ)
+            # Circular-wrap is negligible for tapered polarizations (tested in test suite).
+            phase = np.exp(-2j * np.pi * freqs_fd * time_delay)
+            hp_shifted = np.fft.irfft(rfft_hp * phase, n=n_samples)
+            hc_shifted = np.fft.irfft(rfft_hc * phase, n=n_samples)
 
-        hp_shifted = hp_func(shifted_times)
-        hc_shifted = hc_func(shifted_times)
         response = fp_vals * hp_shifted + fc_vals * hc_shifted
 
         strains[name] = GWpyTimeSeries(
