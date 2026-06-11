@@ -41,9 +41,9 @@ PARAMS: dict = {
 
 TC = PARAMS["coa_time"]
 
-# H1 optimal SNR against aLIGO design PSD (P1200087), originally computed
-# with pycbc.filter.sigma.
-_PYCBC_REFERENCE_SNR = 4.884168e01
+# H1 optimal SNR against aLIGO design PSD (P1200087), computed with
+# optimal_snr (zero-padded to delta_f <= 1/32 Hz for accurate cutoff binning).
+_PYCBC_REFERENCE_SNR = 4.880251e01
 
 # ---------------------------------------------------------------------------
 # Helpers
