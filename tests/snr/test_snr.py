@@ -119,6 +119,50 @@ class TestOptimalSNR:
         assert result == 7.5
         mock_pycbc_filter.sigma.assert_called_once_with(mock_htilde, psd=mock_psd_interp, low_frequency_cutoff=30.0)
 
+    def test_padding_branch_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Padding branch runs (natural_delta_f > target_delta_f) under mocked pycbc.
+
+        Covers the zero-padding path (the strain is extended to reach target_delta_f)
+        without requiring the optional pycbc backend, so coverage holds when pycbc
+        is absent from the test environment.
+        """
+        mock_htilde = MagicMock()
+        mock_psd_interp = MagicMock()
+
+        # The padded TimeSeries that pycbc_types.TimeSeries(...) returns; its
+        # to_frequencyseries() feeds sigma.
+        mock_td_padded = MagicMock()
+        mock_td_padded.to_frequencyseries.return_value = mock_htilde
+
+        # duration=2.0 → natural_delta_f=0.5 > target=1/32 → padding fires.
+        mock_td = MagicMock()
+        mock_td.duration = 2.0
+        mock_td.sample_rate = 512.0
+        mock_td.__len__.return_value = 1024
+
+        mock_strain = MagicMock()
+        mock_strain.to_pycbc.return_value = mock_td
+
+        mock_pycbc_filter = MagicMock()
+        mock_pycbc_filter.sigma.return_value = 9.0
+        mock_pycbc_psd = MagicMock()
+        mock_pycbc_psd.interpolate.return_value = mock_psd_interp
+        mock_pycbc_types = MagicMock()
+        mock_pycbc_types.TimeSeries.return_value = mock_td_padded
+        mock_pycbc_types.FrequencySeries.return_value = mock_psd_interp
+
+        monkeypatch.setitem(sys.modules, "pycbc.filter", mock_pycbc_filter)
+        monkeypatch.setitem(sys.modules, "pycbc.psd", mock_pycbc_psd)
+        monkeypatch.setitem(sys.modules, "pycbc.types", mock_pycbc_types)
+
+        result = optimal_snr(mock_strain, "mock_psd", low_frequency_cutoff=25.0)
+
+        assert result == 9.0
+        # The padded TimeSeries was constructed and its FFT was passed to sigma.
+        mock_pycbc_types.TimeSeries.assert_called_once()
+        mock_td_padded.to_frequencyseries.assert_called_once()
+        mock_pycbc_filter.sigma.assert_called_once_with(mock_htilde, psd=mock_psd_interp, low_frequency_cutoff=25.0)
+
 
 # ---------------------------------------------------------------------------
 # matched_filter_snr
@@ -221,6 +265,56 @@ class TestMatchedFilterSNR:
             low_frequency_cutoff=30.0,
         )
         mock_ts_class.from_pycbc.assert_called_once_with(mock_snr_trimmed)
+
+    def test_padding_branch_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Padding branch runs (natural_delta_f > target_delta_f) under mocked pycbc.
+
+        Covers the zero-padding path for both template and data — including the
+        ``n_target > n_data`` data-extension branch — without the optional pycbc
+        backend, so coverage holds when pycbc is absent from the environment.
+        """
+        mock_htilde = MagicMock()
+        mock_psd_interp = MagicMock()
+
+        # Single padded TimeSeries returned for the padded template, padded data,
+        # and trimmed SNR; its to_frequencyseries() feeds the matched filter.
+        mock_padded = MagicMock()
+        mock_padded.to_frequencyseries.return_value = mock_htilde
+
+        # template duration=2.0 → natural_delta_f=0.5 > target=1/32 → padding fires.
+        # len(td_data)=0 → n_target = n_padded > n_data → data branch also runs.
+        mock_td_template = MagicMock()
+        mock_td_template.duration = 2.0
+        mock_td_template.sample_rate = 512.0
+        mock_td_data = MagicMock()
+
+        mock_template = MagicMock()
+        mock_template.to_pycbc.return_value = mock_td_template
+        mock_data = MagicMock()
+        mock_data.to_pycbc.return_value = mock_td_data
+
+        mock_pycbc_filter = MagicMock()
+        mock_pycbc_filter.matched_filter.return_value = MagicMock()
+        mock_pycbc_psd = MagicMock()
+        mock_pycbc_psd.interpolate.return_value = mock_psd_interp
+        mock_pycbc_types = MagicMock()
+        mock_pycbc_types.TimeSeries.return_value = mock_padded
+        mock_pycbc_types.FrequencySeries.return_value = mock_psd_interp
+
+        monkeypatch.setitem(sys.modules, "pycbc.filter", mock_pycbc_filter)
+        monkeypatch.setitem(sys.modules, "pycbc.psd", mock_pycbc_psd)
+        monkeypatch.setitem(sys.modules, "pycbc.types", mock_pycbc_types)
+
+        expected_ts = MagicMock(spec=TimeSeries)
+        with patch("gwmock_signal.snr._pycbc.TimeSeries") as mock_ts_class:
+            mock_ts_class.from_pycbc.return_value = expected_ts
+            result = matched_filter_snr(mock_data, mock_template, "mock_psd", low_frequency_cutoff=25.0)
+
+        assert result is expected_ts
+        # Both template and data were padded (plus the trimmed SNR) → ≥3 constructions.
+        assert mock_pycbc_types.TimeSeries.call_count >= 3
+        mock_padded.to_frequencyseries.assert_called_once()
+        mock_pycbc_filter.matched_filter.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
