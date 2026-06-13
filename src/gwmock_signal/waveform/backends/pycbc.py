@@ -61,6 +61,8 @@ class PyCBCBackend(WaveformBackend):
             "spin2z": _pop_alias(remaining, "spin_2z", "spin2z", default=0.0),
             "inclination": _pop_alias(remaining, "inclination", default=0.0),
             "coa_phase": _pop_alias(remaining, "coa_phase", default=0.0),
+            "lambda1": _pop_alias(remaining, "lambda_1", "lambda1", "tidal_1", default=0.0),
+            "lambda2": _pop_alias(remaining, "lambda_2", "lambda2", "tidal_2", default=0.0),
         }
         translated.update(remaining)
         return pycbc_waveform_wrapper(
