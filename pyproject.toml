@@ -21,7 +21,7 @@ dynamic = ["version"]
 dependencies = [
   "typer>=0.26.7",
   "gwpy>=4.0.1",
-  "lalsuite>=7.26.14",
+  "lalsuite>=7.26.15",
   "pyyaml>=6.0.3",
 ]
 

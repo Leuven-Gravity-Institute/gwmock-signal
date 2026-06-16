@@ -611,7 +611,7 @@ release = [
 requires-dist = [
     { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.5.1" },
     { name = "gwpy", specifier = ">=4.0.1" },
-    { name = "lalsuite", specifier = ">=7.26.14" },
+    { name = "lalsuite", specifier = ">=7.26.15" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.11.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "typer", specifier = ">=0.26.7" },
