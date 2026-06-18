@@ -19,9 +19,10 @@ GWpy ``plus``/``cross`` series required by :class:`WaveformBackend`, so ripple c
 be used wherever the LAL/PyCBC backends are. The conversion runs on host (NumPy);
 an on-device JAX pipeline is a separate, later effort (see ``PLAN.md``).
 
-Only aligned-spin, point-particle models are supported so far (``IMRPhenomD``,
-``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``); tidal and precessing models
-are added in later PRs.
+Supported so far: aligned-spin point-particle models (``IMRPhenomD``,
+``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``) and their NRTidal variants
+(``IMRPhenomD_NRTidalv2``, ``IMRPhenomXAS_NRTidalv3``). Precessing models are
+added in a later PR.
 """
 
 from __future__ import annotations
@@ -35,10 +36,16 @@ from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
 
-#: Aligned-spin, point-particle (non-tidal) models sharing one parameter mapping.
+#: Aligned-spin, point-particle (non-tidal) models.
 #: Each takes ripple params ``M_c, eta, s1_z, s2_z, d_L, phase_c, iota``.
-#: Tidal and precessing models are added in later PRs.
-_SUPPORTED_APPROXIMANTS = ("IMRPhenomD", "IMRPhenomHM", "IMRPhenomXAS", "IMRPhenomXHM")
+_ALIGNED_SPIN_MODELS = ("IMRPhenomD", "IMRPhenomHM", "IMRPhenomXAS", "IMRPhenomXHM")
+
+#: Aligned-spin models with an NRTidal sector; they additionally take
+#: ``lambda_1, lambda_2``. Precessing models are added in a later PR.
+_TIDAL_MODELS = ("IMRPhenomD_NRTidalv2", "IMRPhenomXAS_NRTidalv3")
+
+#: All approximants this backend can generate.
+_SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 _DEFAULT_RINGDOWN_FRACTION = 0.1
@@ -121,7 +128,7 @@ class RippleBackend(WaveformBackend):
         inclination = float(_pop_alias(remaining, "inclination", default=0.0))
         coa_phase = float(_pop_alias(remaining, "coa_phase", default=0.0))
 
-        # These approximants are aligned-spin, point-particle (non-tidal) models.
+        # Every supported approximant is non-precessing: in-plane spins must be zero.
         in_plane_spins = {
             "spin_1x": _pop_alias(remaining, "spin_1x", "spin1x", default=0.0),
             "spin_1y": _pop_alias(remaining, "spin_1y", "spin1y", default=0.0),
@@ -135,8 +142,13 @@ class RippleBackend(WaveformBackend):
             )
         lambda_1 = float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0))
         lambda_2 = float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0))
-        if lambda_1 or lambda_2:
+        is_tidal = approximant in _TIDAL_MODELS
+        if not is_tidal and (lambda_1 or lambda_2):
             raise ValueError(f"{approximant} does not support tidal parameters; use an NRTidal approximant.")
+        if lambda_1 < 0:
+            raise ValueError("lambda_1 must be >= 0")
+        if lambda_2 < 0:
+            raise ValueError("lambda_2 must be >= 0")
         if remaining:
             extras = ", ".join(sorted(remaining))
             raise ValueError(f"Unsupported ripple waveform parameters: {extras}")
@@ -151,6 +163,9 @@ class RippleBackend(WaveformBackend):
             distance=distance,
             inclination=inclination,
             coa_phase=coa_phase,
+            lambda_1=lambda_1,
+            lambda_2=lambda_2,
+            is_tidal=is_tidal,
             sampling_frequency=sampling_frequency,
             minimum_frequency=minimum_frequency,
             f_ref=f_ref,
@@ -194,6 +209,9 @@ class RippleBackend(WaveformBackend):
         distance: float,
         inclination: float,
         coa_phase: float,
+        lambda_1: float,
+        lambda_2: float,
+        is_tidal: bool,
         sampling_frequency: float,
         minimum_frequency: float,
         f_ref: float,
@@ -214,19 +232,20 @@ class RippleBackend(WaveformBackend):
 
         # ripple's class interface fixes its internal tc=0; coalescence is placed
         # in the time grid below via the roll.
+        ripple_params = {
+            "M_c": chirp_mass,
+            "eta": eta,
+            "s1_z": chi1,
+            "s2_z": chi2,
+            "d_L": distance,
+            "phase_c": coa_phase,
+            "iota": inclination,
+        }
+        if is_tidal:
+            ripple_params["lambda_1"] = lambda_1
+            ripple_params["lambda_2"] = lambda_2
         waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref)
-        polarizations = waveform(
-            jnp.asarray(freqs),
-            {
-                "M_c": chirp_mass,
-                "eta": eta,
-                "s1_z": chi1,
-                "s2_z": chi2,
-                "d_L": distance,
-                "phase_c": coa_phase,
-                "iota": inclination,
-            },
-        )
+        polarizations = waveform(jnp.asarray(freqs), ripple_params)
         hp_f = polarizations["p"]
         hc_f = polarizations["c"]
 

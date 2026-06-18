@@ -65,6 +65,8 @@ def test_ripple_backend_available_approximants() -> None:
         "IMRPhenomHM",
         "IMRPhenomXAS",
         "IMRPhenomXHM",
+        "IMRPhenomD_NRTidalv2",
+        "IMRPhenomXAS_NRTidalv3",
     }
 
 
@@ -118,6 +120,49 @@ def test_ripple_backend_rejects_unknown_param() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     with pytest.raises(ValueError, match="Unsupported ripple waveform parameters"):
         _generate(not_a_param=1.0)
+
+
+_BNS_PARAMS: dict[str, float] = {
+    "detector_frame_mass_1": 1.6,
+    "detector_frame_mass_2": 1.4,
+    "luminosity_distance": 100.0,
+    "inclination": 0.6,
+}
+
+
+def _generate_tidal(approximant: str, **overrides: object) -> dict[str, TimeSeries]:
+    """Run a default BNS tidal waveform with optional parameter overrides."""
+    params: dict[str, object] = {**_BNS_PARAMS, **overrides}
+    return RippleBackend().generate_td_waveform(
+        approximant,
+        tc=_TC,
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        **params,
+    )
+
+
+def test_ripple_backend_tidal_model_accepts_lambda() -> None:
+    """An NRTidal model accepts lambda_1/lambda_2 and returns time series."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = _generate_tidal("IMRPhenomD_NRTidalv2", lambda_1=400.0, lambda_2=500.0)
+    assert set(result) == {"plus", "cross"}
+    assert isinstance(result["plus"], TimeSeries)
+
+
+def test_ripple_backend_tidal_accepts_tidal_aliases() -> None:
+    """tidal_1/tidal_2 are accepted as aliases for lambda_1/lambda_2."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = _generate_tidal("IMRPhenomXAS_NRTidalv3", tidal_1=400.0, tidal_2=500.0)
+    assert set(result) == {"plus", "cross"}
+
+
+@pytest.mark.parametrize("param", ["lambda_1", "lambda_2"])
+def test_ripple_backend_negative_tidal_raises(param: str) -> None:
+    """Negative tidal deformability raises ValueError before reaching ripple."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match=f"{param} must be >= 0"):
+        _generate_tidal("IMRPhenomD_NRTidalv2", **{param: -1.0})
 
 
 def _match(a: np.ndarray, b: np.ndarray, sampling_frequency: float, f_min: float) -> float:
@@ -177,4 +222,36 @@ def test_ripple_matches_lal(  # noqa: PLR0913
 
     for pol in ("plus", "cross"):
         match = _match(ripple[pol].value, lal[pol].value, _FS, _F_MIN)
+        assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
+
+
+# f_min=40 Hz keeps the BNS segment short enough for a fast integration test.
+_TIDAL_F_MIN = 40.0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("approximant", ["IMRPhenomD_NRTidalv2", "IMRPhenomXAS_NRTidalv3"])
+def test_ripple_tidal_matches_lal(approximant: str) -> None:
+    """Ripple NRTidal models agree with LAL, including the tidal sector (white match > 0.99)."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    from gwmock_signal.waveform.backends import LALSimulationBackend
+
+    common = {
+        "tc": _TC,
+        "sampling_frequency": _FS,
+        "minimum_frequency": _TIDAL_F_MIN,
+        "detector_frame_mass_1": 1.6,
+        "detector_frame_mass_2": 1.4,
+        "luminosity_distance": 100.0,
+        "spin_1z": 0.02,
+        "spin_2z": -0.01,
+        "inclination": 0.6,
+        "lambda_1": 400.0,
+        "lambda_2": 500.0,
+    }
+    ripple = RippleBackend().generate_td_waveform(approximant, **common)
+    lal = LALSimulationBackend().generate_td_waveform(approximant, **common)
+
+    for pol in ("plus", "cross"):
+        match = _match(ripple[pol].value, lal[pol].value, _FS, _TIDAL_F_MIN)
         assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
