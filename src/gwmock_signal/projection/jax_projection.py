@@ -206,3 +206,47 @@ def time_delay_from_geocenter(
         ]
     )
     return -jnp.tensordot(location, propagation_direction, axes=1) / _SPEED_OF_LIGHT_M_S
+
+
+def project_polarizations_fd(  # noqa: PLR0913
+    frequencies: ArrayLike,
+    plus: ArrayLike,
+    cross: ArrayLike,
+    *,
+    f_plus: ArrayLike,
+    f_cross: ArrayLike,
+    time_delay: ArrayLike,
+    n_samples: int,
+    sampling_frequency: float,
+) -> Array:
+    """Project frequency-domain polarizations onto one detector, returning strain in time.
+
+    Forms the detector response ``F+ h+ + Fx hx`` in the frequency domain, applies the
+    geocenter-to-detector delay as the exact phase shift ``exp(-2j pi f tau)``, and
+    inverse real-FFTs to the time-domain strain. This is the on-device counterpart of
+    the ``earth_rotation=False`` branch of
+    :func:`gwmock_signal.projection.network.project_polarizations_to_network`.
+
+    The coalescence stays where the input ``plus``/``cross`` place it (``t = 0`` for
+    :class:`~gwmock_signal.waveform.backends.ripple.FrequencyDomainPolarizations`); the
+    caller positions it within the analysis segment.
+
+    Args:
+        frequencies: One-sided frequency grid in Hz, shape ``(n_samples // 2 + 1,)``.
+        plus: Frequency-domain plus polarization on ``frequencies``.
+        cross: Frequency-domain cross polarization on ``frequencies``.
+        f_plus: Plus antenna-pattern factor (scalar for ``earth_rotation=False``).
+        f_cross: Cross antenna-pattern factor.
+        time_delay: Geocenter-to-detector delay in seconds.
+        n_samples: Length of the real time series the inverse FFT produces.
+        sampling_frequency: Sample rate in Hz (the ``irfft`` is scaled by it, i.e. ``/dt``).
+
+    Returns:
+        The time-domain detector strain, shape ``(n_samples,)``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    frequencies = jnp.asarray(frequencies)
+    strain_f = f_plus * jnp.asarray(plus) + f_cross * jnp.asarray(cross)
+    strain_f = strain_f * jnp.exp(-2j * jnp.pi * frequencies * time_delay)
+    return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency

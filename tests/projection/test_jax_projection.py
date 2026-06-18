@@ -13,6 +13,7 @@ from gwmock_signal.projection.geometry import reconstructed_geometry  # noqa: E4
 from gwmock_signal.projection.jax_projection import (  # noqa: E402
     antenna_pattern,
     gmst_rad,
+    project_polarizations_fd,
     time_delay_from_geocenter,
 )
 from gwmock_signal.projection.network import (  # noqa: E402
@@ -137,3 +138,104 @@ def test_projection_primitives_are_jit_traceable() -> None:
     tau = jax.jit(lambda loc, g: time_delay_from_geocenter(loc, g, right_ascension=ra, declination=dec))(location, gmst)
     assert np.isfinite(float(fp[0]))
     assert np.isfinite(float(tau))
+
+
+def test_project_polarizations_fd_combines_and_delays() -> None:
+    """With unit F+ and no delay, the projection is just the inverse FFT of plus."""
+    fs = 1024.0
+    n = 256
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    rng = np.random.default_rng(0)
+    plus = rng.standard_normal(len(freqs)) + 1j * rng.standard_normal(len(freqs))
+    cross = rng.standard_normal(len(freqs)) + 1j * rng.standard_normal(len(freqs))
+
+    only_plus = np.asarray(
+        project_polarizations_fd(
+            freqs, plus, cross, f_plus=1.0, f_cross=0.0, time_delay=0.0, n_samples=n, sampling_frequency=fs
+        )
+    )
+    plus_td = np.fft.irfft(plus, n=n) * fs
+    assert np.max(np.abs(only_plus - plus_td)) < 1e-9 * np.max(np.abs(plus_td))
+
+    # f_cross selects the cross polarization; a delay is a pure phase shift (norm preserved).
+    only_cross = np.asarray(
+        project_polarizations_fd(
+            freqs, plus, cross, f_plus=0.0, f_cross=1.0, time_delay=0.0, n_samples=n, sampling_frequency=fs
+        )
+    )
+    cross_td = np.fft.irfft(cross, n=n) * fs
+    assert np.max(np.abs(only_cross - cross_td)) < 1e-9 * np.max(np.abs(cross_td))
+
+    # An integer-sample delay equals a cyclic roll of the undelayed strain.
+    shift = 5
+    delayed = np.asarray(
+        project_polarizations_fd(
+            freqs, plus, cross, f_plus=1.0, f_cross=0.0, time_delay=shift / fs, n_samples=n, sampling_frequency=fs
+        )
+    )
+    assert np.max(np.abs(delayed - np.roll(only_plus, shift))) < 1e-9 * np.max(np.abs(only_plus))
+
+
+@pytest.mark.integration
+def test_device_projection_matches_host_pipeline() -> None:
+    """The on-device FD projection reproduces the host (NumPy) earth_rotation=False path.
+
+    End-to-end check that ripple FD -> JAX antenna/delay/projection -> irfft equals
+    project_polarizations_to_network for the same event, to a zero-lag overlap (so the
+    delay timing is validated, not just the morphology).
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    from gwpy.timeseries import TimeSeries
+
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.waveform.backends import RippleBackend
+
+    fs, f_min = 2048.0, 20.0
+    ra, dec, psi = 1.375, -1.211, 2.659
+    params = {
+        "detector_frame_mass_1": 40.0,
+        "detector_frame_mass_2": 31.0,
+        "luminosity_distance": 400.0,
+        "spin_1z": 0.5,
+        "spin_2z": -0.2,
+        "inclination": 0.9,
+        "coa_phase": 0.3,
+    }
+    fd = RippleBackend().generate_fd_polarizations(
+        "IMRPhenomD", sampling_frequency=fs, minimum_frequency=f_min, **params
+    )
+    n, dt = fd.n_samples, 1.0 / fs
+
+    # Unplaced time-domain polarizations (coalescence at t=0), fed to the host path.
+    t0 = 1126259462.0
+    pols = {
+        "plus": TimeSeries(np.fft.irfft(np.asarray(fd.plus), n=n) / dt, t0=t0, dt=dt),
+        "cross": TimeSeries(np.fft.irfft(np.asarray(fd.cross), n=n) / dt, t0=t0, dt=dt),
+    }
+    host = project_polarizations_to_network(
+        pols, ["H1"], right_ascension=ra, declination=dec, polarization_angle=psi, earth_rotation=False
+    )["H1"]
+
+    # Device path: F+, Fx and tau at the host's reference time (segment midpoint).
+    times = pols["plus"].times.value
+    reference_time = 0.5 * (times[0] + times[-1])
+    gmst = _gmst_accurate(reference_time)
+    response, location = reconstructed_geometry("H1")
+    f_plus, f_cross = antenna_pattern(response, gmst, right_ascension=ra, declination=dec, polarization_angle=psi)
+    tau = time_delay_from_geocenter(location, gmst, right_ascension=ra, declination=dec)
+    device = np.asarray(
+        project_polarizations_fd(
+            fd.frequencies,
+            fd.plus,
+            fd.cross,
+            f_plus=f_plus,
+            f_cross=f_cross,
+            time_delay=tau,
+            n_samples=n,
+            sampling_frequency=fs,
+        )
+    )
+
+    a, b = host.value, device
+    overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
+    assert overlap > 0.9999, f"zero-lag overlap {overlap:.6f} below threshold"
