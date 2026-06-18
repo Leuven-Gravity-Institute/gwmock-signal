@@ -28,15 +28,13 @@ pages for more details:
 
 ### Requirements
 
-- Python 3.12-3.13 (We adopt the SPEC 0 policy for the Python support version)
-- We do not support Python 3.14 because `lalsuite` does not have a wheel for
-  Python 3.14 yet ([#825](https://git.ligo.org/lscsoft/lalsuite/-/issues/825))
+- Python 3.12-3.14 (We adopt the SPEC 0 policy for the Python support version)
 - Operating System: Linux, or macOS
 
-**Note:** The package is built and tested against **Python 3.12 and 3.13**
-(`requires-python` is `>=3.12,<3.14`). When creating a virtual environment with
-`uv`, pin a supported interpreter, for example `uv venv --python 3.12`, so you
-do not accidentally pick an unsupported version.
+**Note:** The package is built and tested against **Python 3.12-3.14**
+(`requires-python` is `>=3.12`). When creating a virtual environment with `uv`,
+pin a supported interpreter, for example `uv venv --python 3.12`, so you do not
+accidentally pick an unsupported version.
 
 ### Install from PyPI
 
