@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend, WaveformBackend
+from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend, RippleBackend, WaveformBackend
 from gwmock_signal.waveform.factory import WaveformFactory
 
 
@@ -33,6 +33,7 @@ def __getattr__(name: str):
 __all__ = [
     "LALSimulationBackend",
     "PyCBCBackend",
+    "RippleBackend",
     "WaveformBackend",
     "WaveformFactory",
     "pycbc_waveform_wrapper",

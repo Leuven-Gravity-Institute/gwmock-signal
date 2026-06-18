@@ -1,0 +1,168 @@
+"""Tests for the ripple (JAX) waveform backend."""
+
+from __future__ import annotations
+
+import importlib
+from unittest.mock import patch
+
+import numpy as np
+import pytest
+from gwpy.timeseries import TimeSeries
+
+from gwmock_signal.waveform.backends import RippleBackend
+
+_BBH_PARAMS: dict[str, float] = {
+    "detector_frame_mass_1": 36.0,
+    "detector_frame_mass_2": 29.0,
+    "luminosity_distance": 410.0,
+    "inclination": 0.4,
+}
+_TC = 1_126_259_462.4
+_FS = 2048.0
+_F_MIN = 20.0
+
+
+def _generate(**overrides: object) -> dict[str, TimeSeries]:
+    """Run a default IMRPhenomD ripple waveform with optional parameter overrides."""
+    params: dict[str, object] = {**_BBH_PARAMS, **overrides}
+    return RippleBackend().generate_td_waveform(
+        "IMRPhenomD",
+        tc=_TC,
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        **params,
+    )
+
+
+def test_ripple_backend_raises_helpful_import_error_when_ripple_missing() -> None:
+    """RippleBackend fails at instantiation time with installation guidance."""
+    real_import_module = importlib.import_module
+
+    def _import_module(name: str, package: str | None = None):
+        if name.startswith("ripplegw") or name == "jax":
+            raise ImportError(f"{name} unavailable")
+        return real_import_module(name, package)
+
+    with (
+        patch("gwmock_signal.waveform.backends.ripple.importlib.import_module", side_effect=_import_module),
+        pytest.raises(ImportError, match=r"gwmock-signal\[jax\]"),
+    ):
+        RippleBackend()
+
+
+def test_ripple_backend_rejects_invalid_ringdown_fraction() -> None:
+    """ringdown_fraction outside (0, 1) raises ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match="ringdown_fraction"):
+        RippleBackend(ringdown_fraction=1.0)
+
+
+def test_ripple_backend_available_approximants() -> None:
+    """The backend advertises IMRPhenomD."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    assert RippleBackend().available_approximants() == ["IMRPhenomD"]
+
+
+def test_ripple_backend_rejects_unsupported_approximant() -> None:
+    """An unsupported approximant raises a helpful ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match="does not support approximant"):
+        RippleBackend().generate_td_waveform(
+            "IMRPhenomXPHM",
+            tc=_TC,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            **_BBH_PARAMS,
+        )
+
+
+def test_ripple_backend_generates_timeseries_dict() -> None:
+    """A minimal ripple waveform call returns GWpy time series with the right grid."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = _generate()
+    assert set(result) == {"plus", "cross"}
+    assert isinstance(result["plus"], TimeSeries)
+    assert isinstance(result["cross"], TimeSeries)
+    assert result["plus"].dt.value == pytest.approx(1.0 / _FS)
+
+
+def test_ripple_backend_places_coalescence_at_tc() -> None:
+    """The plus-polarization peak lands near the requested coalescence time."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    hp = _generate()["plus"]
+    peak_time = float(hp.times.value[int(np.argmax(np.abs(hp.value)))])
+    assert peak_time == pytest.approx(_TC, abs=0.1)
+
+
+def test_ripple_backend_rejects_in_plane_spin() -> None:
+    """IMRPhenomD is aligned-spin only; nonzero in-plane spin raises ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match="in-plane spins must be zero"):
+        _generate(spin_1x=0.3)
+
+
+def test_ripple_backend_rejects_tidal_params() -> None:
+    """IMRPhenomD has no tidal sector; nonzero lambda raises ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match="does not support tidal"):
+        _generate(lambda_1=500.0)
+
+
+def test_ripple_backend_rejects_unknown_param() -> None:
+    """Unrecognized waveform parameters raise ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    with pytest.raises(ValueError, match="Unsupported ripple waveform parameters"):
+        _generate(not_a_param=1.0)
+
+
+def _match(a: np.ndarray, b: np.ndarray, sampling_frequency: float, f_min: float) -> float:
+    """White (flat-PSD) match between two real time series, maximized over time and phase."""
+    n = 1 << (int(np.ceil(np.log2(max(len(a), len(b))))) + 1)
+    spectrum_a = np.fft.rfft(a, n=n)
+    spectrum_b = np.fft.rfft(b, n=n)
+    in_band = np.fft.rfftfreq(n, d=1.0 / sampling_frequency) >= f_min
+    spectrum_a = np.where(in_band, spectrum_a, 0.0)
+    spectrum_b = np.where(in_band, spectrum_b, 0.0)
+    cross = spectrum_a * np.conj(spectrum_b)
+    full = np.zeros(n, dtype=complex)
+    full[: len(cross)] = cross
+    correlation = np.fft.ifft(full) * n  # complex overlap as a function of time shift
+    norm = np.sqrt(np.sum(np.abs(spectrum_a) ** 2) * np.sum(np.abs(spectrum_b) ** 2))
+    return float(np.max(np.abs(correlation)) / norm)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("mass1", "mass2", "chi1", "chi2", "iota"),
+    [
+        (36.0, 29.0, 0.0, 0.0, 0.4),
+        (40.0, 35.0, 0.6, -0.3, 1.0),
+        (1.6, 1.3, 0.0, 0.0, 0.7),
+    ],
+)
+def test_ripple_imrphenomd_matches_lal(mass1: float, mass2: float, chi1: float, chi2: float, iota: float) -> None:
+    """Ripple IMRPhenomD agrees with LAL IMRPhenomD (white match > 0.99).
+
+    This is the anchor that validates the frequency->time conditioning against an
+    external reference rather than only internal consistency.
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    from gwmock_signal.waveform.backends import LALSimulationBackend
+
+    common = {
+        "tc": _TC,
+        "sampling_frequency": _FS,
+        "minimum_frequency": _F_MIN,
+        "detector_frame_mass_1": mass1,
+        "detector_frame_mass_2": mass2,
+        "luminosity_distance": 400.0,
+        "spin_1z": chi1,
+        "spin_2z": chi2,
+        "inclination": iota,
+    }
+    ripple = RippleBackend().generate_td_waveform("IMRPhenomD", **common)
+    lal = LALSimulationBackend().generate_td_waveform("IMRPhenomD", **common)
+
+    for pol in ("plus", "cross"):
+        match = _match(ripple[pol].value, lal[pol].value, _FS, _F_MIN)
+        assert match > 0.99, f"{pol} match {match:.4f} below threshold"
