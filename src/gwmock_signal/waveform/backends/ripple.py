@@ -19,7 +19,9 @@ GWpy ``plus``/``cross`` series required by :class:`WaveformBackend`, so ripple c
 be used wherever the LAL/PyCBC backends are. The conversion runs on host (NumPy);
 an on-device JAX pipeline is a separate, later effort (see ``PLAN.md``).
 
-Only ``IMRPhenomD`` is supported so far; additional models are added in later PRs.
+Only aligned-spin, point-particle models are supported so far (``IMRPhenomD``,
+``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``); tidal and precessing models
+are added in later PRs.
 """
 
 from __future__ import annotations
@@ -33,8 +35,10 @@ from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
 
-#: Models supported by this backend so far. Expanded in later PRs.
-_SUPPORTED_APPROXIMANTS = ("IMRPhenomD",)
+#: Aligned-spin, point-particle (non-tidal) models sharing one parameter mapping.
+#: Each takes ripple params ``M_c, eta, s1_z, s2_z, d_L, phase_c, iota``.
+#: Tidal and precessing models are added in later PRs.
+_SUPPORTED_APPROXIMANTS = ("IMRPhenomD", "IMRPhenomHM", "IMRPhenomXAS", "IMRPhenomXHM")
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 _DEFAULT_RINGDOWN_FRACTION = 0.1
@@ -68,8 +72,8 @@ class RippleBackend(WaveformBackend):
         try:
             self._jax = importlib.import_module("jax")
             self._jnp = importlib.import_module("jax.numpy")
+            self._ripplegw = importlib.import_module("ripplegw")
             self._conversions = importlib.import_module("ripplegw.conversions")
-            self._phenomd = importlib.import_module("ripplegw.waveforms.IMRPhenomD")
             self._constants = importlib.import_module("ripplegw.constants")
         except ImportError as exc:
             raise ImportError(_RIPPLE_IMPORT_ERROR) from exc
@@ -117,7 +121,7 @@ class RippleBackend(WaveformBackend):
         inclination = float(_pop_alias(remaining, "inclination", default=0.0))
         coa_phase = float(_pop_alias(remaining, "coa_phase", default=0.0))
 
-        # IMRPhenomD is an aligned-spin, point-particle (non-tidal) model.
+        # These approximants are aligned-spin, point-particle (non-tidal) models.
         in_plane_spins = {
             "spin_1x": _pop_alias(remaining, "spin_1x", "spin1x", default=0.0),
             "spin_1y": _pop_alias(remaining, "spin_1y", "spin1y", default=0.0),
@@ -127,18 +131,19 @@ class RippleBackend(WaveformBackend):
         nonzero_in_plane = sorted(name for name, value in in_plane_spins.items() if float(value) != 0.0)
         if nonzero_in_plane:
             raise ValueError(
-                f"IMRPhenomD is an aligned-spin model; in-plane spins must be zero: {', '.join(nonzero_in_plane)}"
+                f"{approximant} is an aligned-spin model; in-plane spins must be zero: {', '.join(nonzero_in_plane)}"
             )
         lambda_1 = float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0))
         lambda_2 = float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0))
         if lambda_1 or lambda_2:
-            raise ValueError("IMRPhenomD does not support tidal parameters; use an NRTidal approximant.")
+            raise ValueError(f"{approximant} does not support tidal parameters; use an NRTidal approximant.")
         if remaining:
             extras = ", ".join(sorted(remaining))
             raise ValueError(f"Unsupported ripple waveform parameters: {extras}")
 
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
         hp_t, hc_t, epoch = self._condition_to_time_domain(
+            approximant=approximant,
             mass1=mass1,
             mass2=mass2,
             chi1=chi1,
@@ -181,6 +186,7 @@ class RippleBackend(WaveformBackend):
     def _condition_to_time_domain(  # noqa: PLR0913
         self,
         *,
+        approximant: str,
         mass1: float,
         mass2: float,
         chi1: float,
@@ -206,9 +212,23 @@ class RippleBackend(WaveformBackend):
         delta_f = sampling_frequency / n_samples
         freqs = np.arange(n_samples // 2 + 1) * delta_f
 
-        # tc=0 here: coalescence is placed in the time grid below via the roll.
-        theta = jnp.array([chirp_mass, eta, chi1, chi2, distance, 0.0, coa_phase, inclination])
-        hp_f, hc_f = self._phenomd.gen_IMRPhenomD_hphc(jnp.asarray(freqs), theta, f_ref)
+        # ripple's class interface fixes its internal tc=0; coalescence is placed
+        # in the time grid below via the roll.
+        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref)
+        polarizations = waveform(
+            jnp.asarray(freqs),
+            {
+                "M_c": chirp_mass,
+                "eta": eta,
+                "s1_z": chi1,
+                "s2_z": chi2,
+                "d_L": distance,
+                "phase_c": coa_phase,
+                "iota": inclination,
+            },
+        )
+        hp_f = polarizations["p"]
+        hc_f = polarizations["c"]
 
         # Zero out-of-band bins (including DC, where the amplitude diverges) and
         # guard against any non-finite values before the inverse FFT.

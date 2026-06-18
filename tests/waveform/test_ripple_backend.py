@@ -58,9 +58,14 @@ def test_ripple_backend_rejects_invalid_ringdown_fraction() -> None:
 
 
 def test_ripple_backend_available_approximants() -> None:
-    """The backend advertises IMRPhenomD."""
+    """The backend advertises the supported aligned-spin models."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
-    assert RippleBackend().available_approximants() == ["IMRPhenomD"]
+    assert set(RippleBackend().available_approximants()) == {
+        "IMRPhenomD",
+        "IMRPhenomHM",
+        "IMRPhenomXAS",
+        "IMRPhenomXHM",
+    }
 
 
 def test_ripple_backend_rejects_unsupported_approximant() -> None:
@@ -133,15 +138,22 @@ def _match(a: np.ndarray, b: np.ndarray, sampling_frequency: float, f_min: float
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("mass1", "mass2", "chi1", "chi2", "iota"),
+    ("approximant", "mass1", "mass2", "chi1", "chi2", "iota"),
     [
-        (36.0, 29.0, 0.0, 0.0, 0.4),
-        (40.0, 35.0, 0.6, -0.3, 1.0),
-        (1.6, 1.3, 0.0, 0.0, 0.7),
+        # One representative configuration per supported aligned-spin model.
+        ("IMRPhenomD", 40.0, 31.0, 0.5, -0.2, 0.9),
+        ("IMRPhenomHM", 40.0, 31.0, 0.5, -0.2, 0.9),
+        ("IMRPhenomXAS", 40.0, 31.0, 0.5, -0.2, 0.9),
+        ("IMRPhenomXHM", 40.0, 31.0, 0.5, -0.2, 0.9),
+        # Extra mass/spin coverage on the baseline model.
+        ("IMRPhenomD", 36.0, 29.0, 0.0, 0.0, 0.4),
+        ("IMRPhenomD", 1.6, 1.3, 0.0, 0.0, 0.7),
     ],
 )
-def test_ripple_imrphenomd_matches_lal(mass1: float, mass2: float, chi1: float, chi2: float, iota: float) -> None:
-    """Ripple IMRPhenomD agrees with LAL IMRPhenomD (white match > 0.99).
+def test_ripple_matches_lal(  # noqa: PLR0913
+    approximant: str, mass1: float, mass2: float, chi1: float, chi2: float, iota: float
+) -> None:
+    """Ripple agrees with the LAL implementation of the same approximant (white match > 0.99).
 
     This is the anchor that validates the frequency->time conditioning against an
     external reference rather than only internal consistency.
@@ -160,9 +172,9 @@ def test_ripple_imrphenomd_matches_lal(mass1: float, mass2: float, chi1: float, 
         "spin_2z": chi2,
         "inclination": iota,
     }
-    ripple = RippleBackend().generate_td_waveform("IMRPhenomD", **common)
-    lal = LALSimulationBackend().generate_td_waveform("IMRPhenomD", **common)
+    ripple = RippleBackend().generate_td_waveform(approximant, **common)
+    lal = LALSimulationBackend().generate_td_waveform(approximant, **common)
 
     for pol in ("plus", "cross"):
         match = _match(ripple[pol].value, lal[pol].value, _FS, _F_MIN)
-        assert match > 0.99, f"{pol} match {match:.4f} below threshold"
+        assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
