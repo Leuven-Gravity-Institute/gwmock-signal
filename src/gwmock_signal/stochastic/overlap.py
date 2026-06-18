@@ -21,7 +21,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from gwmock_signal.detector import CustomDetector
-from gwmock_signal.projection.network import _make_detectors, _reconstructed_geometry
+from gwmock_signal.projection.geometry import reconstructed_geometry
+from gwmock_signal.projection.network import _make_detectors
 
 DETECTOR_PAIR_SIZE = 2
 DetectorSpec = str | CustomDetector
@@ -44,7 +45,7 @@ def detector_names(detectors: Sequence[DetectorSpec]) -> list[str]:
 
 def detector_tensors(detectors: Sequence[DetectorSpec]) -> dict[str, NDArray[np.float64]]:
     """Resolve detector response tensors through the package geometry layer."""
-    return {name: _reconstructed_geometry(prefix)[0] for name, prefix in _make_detectors(detectors)}
+    return {name: reconstructed_geometry(prefix)[0] for name, prefix in _make_detectors(detectors)}
 
 
 def long_wavelength_overlap_reduction(
