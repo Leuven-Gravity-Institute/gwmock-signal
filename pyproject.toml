@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 pycbc = ["pycbc>=2.11.0"]
 sgwb = ["gwmock-noise>=0.5.1"]
+jax = ["ripplegw>=0.2.0"]
 
 [tool.uv]
 conflicts = [[{ extra = "pycbc" }, { extra = "sgwb" }]]
