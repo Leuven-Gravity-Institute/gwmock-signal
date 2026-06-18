@@ -18,9 +18,11 @@ from __future__ import annotations
 from gwmock_signal.waveform.backends.base import WaveformBackend
 from gwmock_signal.waveform.backends.lal import LALSimulationBackend
 from gwmock_signal.waveform.backends.pycbc import PyCBCBackend
+from gwmock_signal.waveform.backends.ripple import RippleBackend
 
 __all__ = [
     "LALSimulationBackend",
     "PyCBCBackend",
+    "RippleBackend",
     "WaveformBackend",
 ]
