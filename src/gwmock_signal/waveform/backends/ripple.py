@@ -19,10 +19,10 @@ GWpy ``plus``/``cross`` series required by :class:`WaveformBackend`, so ripple c
 be used wherever the LAL/PyCBC backends are. The conversion runs on host (NumPy);
 an on-device JAX pipeline is a separate, later effort (see ``PLAN.md``).
 
-Supported so far: aligned-spin point-particle models (``IMRPhenomD``,
-``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``), the tidal-capable
-``TaylorF2``, and the NRTidal variants (``IMRPhenomD_NRTidalv2``,
-``IMRPhenomXAS_NRTidalv3``). Precessing models are added in a later PR.
+Supported: aligned-spin point-particle models (``IMRPhenomD``, ``IMRPhenomHM``,
+``IMRPhenomXAS``, ``IMRPhenomXHM``), the tidal-capable ``TaylorF2`` and NRTidal
+variants (``IMRPhenomD_NRTidalv2``, ``IMRPhenomXAS_NRTidalv3``), and the
+precessing models (``IMRPhenomPv2``, ``IMRPhenomXP``, ``IMRPhenomXPHM``).
 """
 
 from __future__ import annotations
@@ -42,11 +42,14 @@ _ALIGNED_SPIN_MODELS = ("IMRPhenomD", "IMRPhenomHM", "IMRPhenomXAS", "IMRPhenomX
 
 #: Aligned-spin models that additionally take tidal deformabilities
 #: ``lambda_1, lambda_2`` (the NRTidal variants and the post-Newtonian inspiral TaylorF2).
-#: Precessing models are added in a later PR.
 _TIDAL_MODELS = ("TaylorF2", "IMRPhenomD_NRTidalv2", "IMRPhenomXAS_NRTidalv3")
 
+#: Precessing models taking the full six spin components
+#: ``s1_x, s1_y, s1_z, s2_x, s2_y, s2_z``.
+_PRECESSING_MODELS = ("IMRPhenomPv2", "IMRPhenomXP", "IMRPhenomXPHM")
+
 #: All approximants this backend can generate.
-_SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS
+_SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS + _PRECESSING_MODELS
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 _DEFAULT_RINGDOWN_FRACTION = 0.1
@@ -124,23 +127,26 @@ class RippleBackend(WaveformBackend):
         mass1 = float(_pop_alias(remaining, "detector_frame_mass_1", "mass1"))
         mass2 = float(_pop_alias(remaining, "detector_frame_mass_2", "mass2"))
         distance = float(_pop_alias(remaining, "luminosity_distance", "distance"))
-        chi1 = float(_pop_alias(remaining, "spin_1z", "spin1z", default=0.0))
-        chi2 = float(_pop_alias(remaining, "spin_2z", "spin2z", default=0.0))
+        spins = {
+            "spin_1x": float(_pop_alias(remaining, "spin_1x", "spin1x", default=0.0)),
+            "spin_1y": float(_pop_alias(remaining, "spin_1y", "spin1y", default=0.0)),
+            "spin_1z": float(_pop_alias(remaining, "spin_1z", "spin1z", default=0.0)),
+            "spin_2x": float(_pop_alias(remaining, "spin_2x", "spin2x", default=0.0)),
+            "spin_2y": float(_pop_alias(remaining, "spin_2y", "spin2y", default=0.0)),
+            "spin_2z": float(_pop_alias(remaining, "spin_2z", "spin2z", default=0.0)),
+        }
         inclination = float(_pop_alias(remaining, "inclination", default=0.0))
         coa_phase = float(_pop_alias(remaining, "coa_phase", default=0.0))
 
-        # Every supported approximant is non-precessing: in-plane spins must be zero.
-        in_plane_spins = {
-            "spin_1x": _pop_alias(remaining, "spin_1x", "spin1x", default=0.0),
-            "spin_1y": _pop_alias(remaining, "spin_1y", "spin1y", default=0.0),
-            "spin_2x": _pop_alias(remaining, "spin_2x", "spin2x", default=0.0),
-            "spin_2y": _pop_alias(remaining, "spin_2y", "spin2y", default=0.0),
-        }
-        nonzero_in_plane = sorted(name for name, value in in_plane_spins.items() if float(value) != 0.0)
-        if nonzero_in_plane:
-            raise ValueError(
-                f"{approximant} is an aligned-spin model; in-plane spins must be zero: {', '.join(nonzero_in_plane)}"
-            )
+        is_precessing = approximant in _PRECESSING_MODELS
+        if not is_precessing:
+            in_plane = ("spin_1x", "spin_1y", "spin_2x", "spin_2y")
+            nonzero_in_plane = sorted(name for name in in_plane if spins[name] != 0.0)
+            if nonzero_in_plane:
+                raise ValueError(
+                    f"{approximant} is an aligned-spin model; "
+                    f"in-plane spins must be zero: {', '.join(nonzero_in_plane)}"
+                )
         lambda_1 = float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0))
         lambda_2 = float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0))
         is_tidal = approximant in _TIDAL_MODELS
@@ -159,14 +165,14 @@ class RippleBackend(WaveformBackend):
             approximant=approximant,
             mass1=mass1,
             mass2=mass2,
-            chi1=chi1,
-            chi2=chi2,
+            spins=spins,
             distance=distance,
             inclination=inclination,
             coa_phase=coa_phase,
             lambda_1=lambda_1,
             lambda_2=lambda_2,
             is_tidal=is_tidal,
+            is_precessing=is_precessing,
             sampling_frequency=sampling_frequency,
             minimum_frequency=minimum_frequency,
             f_ref=f_ref,
@@ -205,14 +211,14 @@ class RippleBackend(WaveformBackend):
         approximant: str,
         mass1: float,
         mass2: float,
-        chi1: float,
-        chi2: float,
+        spins: dict[str, float],
         distance: float,
         inclination: float,
         coa_phase: float,
         lambda_1: float,
         lambda_2: float,
         is_tidal: bool,
+        is_precessing: bool,
         sampling_frequency: float,
         minimum_frequency: float,
         f_ref: float,
@@ -236,12 +242,17 @@ class RippleBackend(WaveformBackend):
         ripple_params = {
             "M_c": chirp_mass,
             "eta": eta,
-            "s1_z": chi1,
-            "s2_z": chi2,
+            "s1_z": spins["spin_1z"],
+            "s2_z": spins["spin_2z"],
             "d_L": distance,
             "phase_c": coa_phase,
             "iota": inclination,
         }
+        if is_precessing:
+            ripple_params["s1_x"] = spins["spin_1x"]
+            ripple_params["s1_y"] = spins["spin_1y"]
+            ripple_params["s2_x"] = spins["spin_2x"]
+            ripple_params["s2_y"] = spins["spin_2y"]
         if is_tidal:
             ripple_params["lambda_1"] = lambda_1
             ripple_params["lambda_2"] = lambda_2
