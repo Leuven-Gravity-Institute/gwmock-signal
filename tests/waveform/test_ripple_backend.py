@@ -58,7 +58,7 @@ def test_ripple_backend_rejects_invalid_ringdown_fraction() -> None:
 
 
 def test_ripple_backend_available_approximants() -> None:
-    """The backend advertises the supported aligned-spin models."""
+    """The backend advertises every supported model."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     assert set(RippleBackend().available_approximants()) == {
         "IMRPhenomD",
@@ -68,6 +68,9 @@ def test_ripple_backend_available_approximants() -> None:
         "TaylorF2",
         "IMRPhenomD_NRTidalv2",
         "IMRPhenomXAS_NRTidalv3",
+        "IMRPhenomPv2",
+        "IMRPhenomXP",
+        "IMRPhenomXPHM",
     }
 
 
@@ -76,7 +79,7 @@ def test_ripple_backend_rejects_unsupported_approximant() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     with pytest.raises(ValueError, match="does not support approximant"):
         RippleBackend().generate_td_waveform(
-            "IMRPhenomXPHM",
+            "SineGaussian",
             tc=_TC,
             sampling_frequency=_FS,
             minimum_frequency=_F_MIN,
@@ -107,6 +110,29 @@ def test_ripple_backend_rejects_in_plane_spin() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     with pytest.raises(ValueError, match="in-plane spins must be zero"):
         _generate(spin_1x=0.3)
+
+
+def test_ripple_backend_precessing_accepts_in_plane_spin() -> None:
+    """A precessing model accepts in-plane spins and returns time series."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = RippleBackend().generate_td_waveform(
+        "IMRPhenomPv2",
+        tc=_TC,
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        detector_frame_mass_1=40.0,
+        detector_frame_mass_2=30.0,
+        luminosity_distance=400.0,
+        spin_1x=0.3,
+        spin_1y=0.1,
+        spin_1z=0.2,
+        spin_2x=-0.1,
+        spin_2y=0.2,
+        spin_2z=0.1,
+        inclination=0.6,
+    )
+    assert set(result) == {"plus", "cross"}
+    assert np.all(np.isfinite(result["plus"].value))
 
 
 def test_ripple_backend_rejects_tidal_params() -> None:
@@ -348,3 +374,34 @@ def test_ripple_taylorf2_matches_lal_fd() -> None:
     in_band = (freqs[:n_bins] >= _TIDAL_F_MIN) & (freqs[:n_bins] <= min(f_isco, _FS / 2))
     match = _fd_match(ripple_fd[:n_bins], lal_fd[:n_bins], in_band)
     assert match > 0.99, f"TaylorF2 FD match {match:.4f} below threshold"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("approximant", ["IMRPhenomPv2", "IMRPhenomXP", "IMRPhenomXPHM"])
+def test_ripple_precessing_matches_lal(approximant: str) -> None:
+    """Ripple precessing models agree with LAL, including in-plane spins (white match > 0.99)."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    from gwmock_signal.waveform.backends import LALSimulationBackend
+
+    common = {
+        "tc": _TC,
+        "sampling_frequency": _FS,
+        "minimum_frequency": _F_MIN,
+        "detector_frame_mass_1": 40.0,
+        "detector_frame_mass_2": 30.0,
+        "luminosity_distance": 400.0,
+        "spin_1x": 0.3,
+        "spin_1y": 0.1,
+        "spin_1z": 0.2,
+        "spin_2x": -0.1,
+        "spin_2y": 0.2,
+        "spin_2z": 0.1,
+        "inclination": 0.6,
+        "coa_phase": 0.2,
+    }
+    ripple = RippleBackend().generate_td_waveform(approximant, **common)
+    lal = LALSimulationBackend().generate_td_waveform(approximant, **common)
+
+    for pol in ("plus", "cross"):
+        match = _match(ripple[pol].value, lal[pol].value, _FS, _F_MIN)
+        assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
