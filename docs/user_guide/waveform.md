@@ -47,6 +47,18 @@ Waveform generation is split into three layers:
       **`gwmock-signal[pycbc]`** (see [Installation](installation.md)). Extra
       parameters are forwarded to PyCBC like a direct `get_td_waveform` call.
 
+    - **`RippleBackend`** (optional) — uses
+      **[ripple](https://github.com/GW-JAX-Team/ripple)** (JAX). ripple is a
+      **frequency-domain** generator; the backend conditions its output into the
+      time-domain `plus`/`cross` series via an inverse FFT. Requires installing
+      **`gwmock-signal[jax]`** (see [Installation](installation.md)). Supports a
+      fixed set of approximants (see below). The conversion runs on **CPU host
+      memory** — there is **no GPU acceleration yet**. Constructor options:
+      `f_ref` (reference frequency; defaults to `minimum_frequency`),
+      `segment_duration` (fixed analysis length in seconds; auto-estimated from
+      the chirp time when omitted), and `ringdown_fraction` (fraction of the
+      segment reserved after coalescence).
+
 3. **`WaveformFactory`** — on construction, takes
    `backend: WaveformBackend | None` (default `LALSimulationBackend()`),
    registers **one callable per** name returned by
@@ -55,8 +67,8 @@ Waveform generation is split into three layers:
 
 [`CBCSimulator`](../api/simulator/) and [`inject_cbc_signal`](../api/pipeline/)
 accept an optional `waveform_backend` and build a `WaveformFactory(backend=…)`
-internally. The CLI `inject cbc` exposes **`--backend lal`** (default) or
-**`--backend pycbc`**.
+internally. The CLI `inject cbc` exposes **`--backend lal`** (default),
+**`--backend pycbc`**, or **`--backend ripple`**.
 
 ## Supported waveform model names
 
@@ -67,6 +79,16 @@ on your installed **`lalsuite`** / **PyCBC** versions.
 | ----------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **LAL** (default) | Every approximant for which LAL marks a **time-domain** implementation (`SimInspiralImplementedTDApproximants`) | Core (`lalsuite`)        |
 | **PyCBC**         | `pycbc.waveform.td_approximants()`                                                                              | Optional extra `[pycbc]` |
+| **ripple**        | Fixed curated set (see below)                                                                                   | Optional extra `[jax]`   |
+
+Unlike LAL/PyCBC, the **ripple** backend supports a **fixed** set of
+approximants: `IMRPhenomD`, `IMRPhenomHM`, `IMRPhenomXAS`, `IMRPhenomXHM`,
+`TaylorF2`, `IMRPhenomD_NRTidalv2`, `IMRPhenomXAS_NRTidalv3`, `IMRPhenomPv2`,
+`IMRPhenomXP`, `IMRPhenomXPHM`. List them with
+`RippleBackend().available_approximants()`. Aligned-spin models reject in-plane
+spins; only the NRTidal variants and `TaylorF2` accept `lambda_1`/`lambda_2`;
+only the precessing models (`IMRPhenomPv2`, `IMRPhenomXP`, `IMRPhenomXPHM`)
+accept in-plane spin components.
 
 **List every name in your environment**
 
