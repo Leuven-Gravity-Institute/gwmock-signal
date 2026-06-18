@@ -290,8 +290,57 @@ def test_inject_cbc_pycbc_backend_surfaces_install_hint(params_file: Path) -> No
     assert "gwmock-signal[pycbc]" in result.output
 
 
+def test_inject_cbc_ripple_backend_accepted(params_file: Path) -> None:
+    """--backend ripple runs the injection pipeline end-to-end."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = runner.invoke(
+        app,
+        [
+            "inject",
+            "cbc",
+            "--params",
+            str(params_file),
+            "--network",
+            "H1L1",
+            "--duration",
+            _DURATION,
+            "--sample-rate",
+            _SAMPLE_RATE,
+            "--f-min",
+            _F_MIN,
+            "--backend",
+            "ripple",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_inject_cbc_ripple_backend_surfaces_install_hint(params_file: Path) -> None:
+    """--backend ripple surfaces the optional-extra install hint on ImportError."""
+    with patch(
+        "gwmock_signal.cli.inject.RippleBackend",
+        side_effect=ImportError("ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "inject",
+                "cbc",
+                "--params",
+                str(params_file),
+                "--network",
+                "H1L1",
+                "--backend",
+                "ripple",
+            ],
+        )
+    assert result.exit_code == 2
+    # ImportError from RippleBackend is wrapped as typer.BadParameter (SystemExit(2)).
+    assert "gwmock-signal[jax]" in result.output
+
+
 def test_inject_cbc_invalid_backend(params_file: Path) -> None:
-    """--backend rejects values other than lal and pycbc."""
+    """--backend rejects values other than lal, pycbc, and ripple."""
     result = runner.invoke(
         app,
         [
