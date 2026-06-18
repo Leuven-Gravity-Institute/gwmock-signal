@@ -26,7 +26,7 @@ from gwpy.timeseries import TimeSeries, TimeSeriesDict
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
-from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend
+from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend, RippleBackend
 
 inject_app = typer.Typer(
     name="inject",
@@ -74,12 +74,16 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915
         str,
         typer.Option(
             "--approximant",
-            help="Time-domain approximant name for the selected --backend (LAL or PyCBC list differs; see user guide).",
+            help="Time-domain approximant name for the selected --backend "
+            "(LAL, PyCBC, and ripple lists differ; see user guide).",
         ),
     ] = "IMRPhenomD",
     backend: Annotated[
         str,
-        typer.Option("--backend", help="Waveform backend: 'lal' (default) or 'pycbc'."),
+        typer.Option(
+            "--backend",
+            help="Waveform backend: 'lal' (default), 'pycbc', or 'ripple' (JAX; currently IMRPhenomD only).",
+        ),
     ] = "lal",
     seed: Annotated[
         int | None,
@@ -165,10 +169,15 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915
         raise typer.BadParameter("--f-min must be > 0", param_hint="--f-min")
 
     backend_name = backend.strip().lower()
-    if backend_name not in {"lal", "pycbc"}:
-        raise typer.BadParameter("--backend must be either 'lal' or 'pycbc'", param_hint="--backend")
+    backend_factories = {
+        "lal": LALSimulationBackend,
+        "pycbc": PyCBCBackend,
+        "ripple": RippleBackend,
+    }
+    if backend_name not in backend_factories:
+        raise typer.BadParameter("--backend must be one of 'lal', 'pycbc', or 'ripple'", param_hint="--backend")
     try:
-        waveform_backend = LALSimulationBackend() if backend_name == "lal" else PyCBCBackend()
+        waveform_backend = backend_factories[backend_name]()
     except ImportError as exc:
         raise typer.BadParameter(str(exc), param_hint="--backend") from exc
 
