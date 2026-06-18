@@ -20,9 +20,9 @@ be used wherever the LAL/PyCBC backends are. The conversion runs on host (NumPy)
 an on-device JAX pipeline is a separate, later effort (see ``PLAN.md``).
 
 Supported so far: aligned-spin point-particle models (``IMRPhenomD``,
-``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``) and their NRTidal variants
-(``IMRPhenomD_NRTidalv2``, ``IMRPhenomXAS_NRTidalv3``). Precessing models are
-added in a later PR.
+``IMRPhenomHM``, ``IMRPhenomXAS``, ``IMRPhenomXHM``), the tidal-capable
+``TaylorF2``, and the NRTidal variants (``IMRPhenomD_NRTidalv2``,
+``IMRPhenomXAS_NRTidalv3``). Precessing models are added in a later PR.
 """
 
 from __future__ import annotations
@@ -40,9 +40,10 @@ _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gw
 #: Each takes ripple params ``M_c, eta, s1_z, s2_z, d_L, phase_c, iota``.
 _ALIGNED_SPIN_MODELS = ("IMRPhenomD", "IMRPhenomHM", "IMRPhenomXAS", "IMRPhenomXHM")
 
-#: Aligned-spin models with an NRTidal sector; they additionally take
-#: ``lambda_1, lambda_2``. Precessing models are added in a later PR.
-_TIDAL_MODELS = ("IMRPhenomD_NRTidalv2", "IMRPhenomXAS_NRTidalv3")
+#: Aligned-spin models that additionally take tidal deformabilities
+#: ``lambda_1, lambda_2`` (the NRTidal variants and the post-Newtonian inspiral TaylorF2).
+#: Precessing models are added in a later PR.
+_TIDAL_MODELS = ("TaylorF2", "IMRPhenomD_NRTidalv2", "IMRPhenomXAS_NRTidalv3")
 
 #: All approximants this backend can generate.
 _SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS
