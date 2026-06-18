@@ -40,7 +40,8 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from jaxtyping import Array, Float
+    from jax import Array
+    from jax.typing import ArrayLike
 
 # Julian Date of the GPS epoch (1980-01-06 00:00:00 UTC).
 _JD_GPS_EPOCH = 2444244.5
@@ -55,14 +56,16 @@ _TT_MINUS_TAI = 32.184
 # explicit value for other epochs. UTC = GPS - (tai_minus_utc + _GPS_MINUS_TAI).
 _DEFAULT_TAI_MINUS_UTC = 37.0
 _ARCSEC_TO_RAD = math.pi / 648000.0
+# Speed of light (exact, SI); matches astropy.constants.c.value.
+_SPEED_OF_LIGHT_M_S = 299792458.0
 
 
 def gmst_rad(
-    t_gps: Float[Array, ...],
+    t_gps: ArrayLike,
     *,
     tai_minus_utc: float = _DEFAULT_TAI_MINUS_UTC,
     dut1: float = 0.0,
-) -> Float[Array, ...]:
+) -> Array:
     """Greenwich Mean Sidereal Time in radians (IAU 2006), as a JAX array.
 
     Mirrors Astropy's ``Time(..., format="gps").sidereal_time("mean")`` using the
@@ -106,3 +109,100 @@ def gmst_rad(
     )
 
     return jnp.mod(era + poly_arcsec * _ARCSEC_TO_RAD, 2.0 * jnp.pi)
+
+
+def antenna_pattern(
+    response: ArrayLike,
+    gmst: ArrayLike,
+    *,
+    right_ascension: float,
+    declination: float,
+    polarization_angle: float,
+) -> tuple[Array, Array]:
+    """Tensor antenna-pattern factors (F+, Fx) for one detector, as JAX arrays.
+
+    Traceable counterpart of ``_antenna_pattern_lal`` in
+    :mod:`gwmock_signal.projection.network`, using the same formula but taking the
+    detector response tensor and sidereal time as inputs (single source of truth:
+    ``response`` from :func:`gwmock_signal.projection.geometry.reconstructed_geometry`,
+    ``gmst`` from :func:`gmst_rad`).
+
+    For ``earth_rotation=False`` callers pass a scalar ``gmst`` (evaluated once at
+    the reference time); the time-dependent path passes an array (e.g. via ``vmap``).
+
+    Args:
+        response: 3x3 detector response tensor.
+        gmst: Greenwich Mean Sidereal Time in radians (scalar or array).
+        right_ascension: Source right ascension in radians.
+        declination: Source declination in radians.
+        polarization_angle: Polarization angle psi in radians.
+
+    Returns:
+        ``(f_plus, f_cross)``, each the shape of ``gmst``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    response = jnp.asarray(response, dtype=jnp.float64)
+    gha = jnp.asarray(gmst, dtype=jnp.float64) - right_ascension
+    ones = jnp.ones_like(gha)  # broadcast the gha-independent z-component to gmst's shape
+    cosgha, singha = jnp.cos(gha), jnp.sin(gha)
+    cosdec, sindec = jnp.cos(declination), jnp.sin(declination)
+    cospsi, sinpsi = jnp.cos(polarization_angle), jnp.sin(polarization_angle)
+
+    x = jnp.stack(
+        [
+            -cospsi * singha - sinpsi * cosgha * sindec,
+            -cospsi * cosgha + sinpsi * singha * sindec,
+            sinpsi * cosdec * ones,
+        ]
+    )
+    y = jnp.stack(
+        [
+            sinpsi * singha - cospsi * cosgha * sindec,
+            sinpsi * cosgha + cospsi * singha * sindec,
+            cospsi * cosdec * ones,
+        ]
+    )
+    dx = response @ x
+    dy = response @ y
+    f_plus = jnp.sum(x * dx - y * dy, axis=0)
+    f_cross = jnp.sum(x * dy + y * dx, axis=0)
+    return f_plus, f_cross
+
+
+def time_delay_from_geocenter(
+    location: ArrayLike,
+    gmst: ArrayLike,
+    *,
+    right_ascension: float,
+    declination: float,
+) -> Array:
+    """Geocenter-to-detector time delay (seconds) for one detector, as a JAX array.
+
+    Traceable counterpart of ``_time_delay_from_earth_center_lal`` in
+    :mod:`gwmock_signal.projection.network`, using the same formula but taking the
+    detector location and sidereal time as inputs. As with :func:`antenna_pattern`,
+    pass a scalar ``gmst`` for ``earth_rotation=False``.
+
+    Args:
+        location: Earth-fixed detector position in metres (3-vector).
+        gmst: Greenwich Mean Sidereal Time in radians (scalar or array).
+        right_ascension: Source right ascension in radians.
+        declination: Source declination in radians.
+
+    Returns:
+        Time delay in seconds, the shape of ``gmst``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    location = jnp.asarray(location, dtype=jnp.float64)
+    gha = jnp.asarray(gmst, dtype=jnp.float64) - right_ascension
+    cosdec, sindec = jnp.cos(declination), jnp.sin(declination)
+    propagation_direction = jnp.stack(
+        [
+            cosdec * jnp.cos(gha),
+            -cosdec * jnp.sin(gha),
+            sindec * jnp.ones_like(gha),
+        ]
+    )
+    return -jnp.tensordot(location, propagation_direction, axes=1) / _SPEED_OF_LIGHT_M_S

@@ -9,7 +9,17 @@ from astropy.time import Time
 jax = pytest.importorskip("jax", reason="jax not installed")
 jax.config.update("jax_enable_x64", True)  # GPS times / Julian dates need float64
 
-from gwmock_signal.projection.jax_projection import gmst_rad  # noqa: E402
+from gwmock_signal.projection.geometry import reconstructed_geometry  # noqa: E402
+from gwmock_signal.projection.jax_projection import (  # noqa: E402
+    antenna_pattern,
+    gmst_rad,
+    time_delay_from_geocenter,
+)
+from gwmock_signal.projection.network import (  # noqa: E402
+    _antenna_pattern_lal,
+    _gmst_accurate,
+    _time_delay_from_earth_center_lal,
+)
 
 # GPS times spanning the 36 s (pre-2017) and 37 s leap-second eras.
 _GPS_TIMES = [1126259462.4, 1187008882.4, 1238166018.0, 1370000000.0]
@@ -68,3 +78,62 @@ def test_gmst_is_jit_traceable() -> None:
     jitted = float(jax.jit(gmst_rad)(t_gps))
     # JIT may fuse float ops; agreement to 9 significant figures is far below the µs anchor.
     assert eager == pytest.approx(jitted, rel=1e-9)
+
+
+# Sky positions (right_ascension, declination, polarization_angle) in radians.
+_SKY = [(1.375, -1.211, 2.659), (0.1, 0.2, 0.3), (5.0, 1.0, 0.0)]
+_DETECTORS = ["H1", "L1", "V1"]
+
+
+@pytest.mark.parametrize("prefix", _DETECTORS)
+@pytest.mark.parametrize(("ra", "dec", "psi"), _SKY)
+def test_antenna_pattern_matches_numpy(prefix: str, ra: float, dec: float, psi: float) -> None:
+    """JAX antenna pattern equals the NumPy implementation (same gmst and geometry)."""
+    t_gps = 1370000000.0
+    gmst = _gmst_accurate(t_gps)
+    response, _ = reconstructed_geometry(prefix)
+    fp_np, fc_np = _antenna_pattern_lal(
+        prefix, right_ascension=ra, declination=dec, polarization_angle=psi, t_gps=t_gps
+    )
+    fp_jax, fc_jax = antenna_pattern(response, gmst, right_ascension=ra, declination=dec, polarization_angle=psi)
+    assert float(fp_jax) == pytest.approx(fp_np, rel=1e-9, abs=1e-12)
+    assert float(fc_jax) == pytest.approx(fc_np, rel=1e-9, abs=1e-12)
+
+
+@pytest.mark.parametrize("prefix", _DETECTORS)
+@pytest.mark.parametrize(("ra", "dec", "psi"), _SKY)
+def test_time_delay_matches_numpy(prefix: str, ra: float, dec: float, psi: float) -> None:
+    """JAX geocenter time delay equals the NumPy implementation (same gmst and geometry)."""
+    t_gps = 1370000000.0
+    gmst = _gmst_accurate(t_gps)
+    _, location = reconstructed_geometry(prefix)
+    tau_np = _time_delay_from_earth_center_lal(prefix, right_ascension=ra, declination=dec, t_gps=t_gps)
+    tau_jax = time_delay_from_geocenter(location, gmst, right_ascension=ra, declination=dec)
+    assert float(tau_jax) == pytest.approx(tau_np, rel=1e-9, abs=1e-15)
+
+
+def test_antenna_pattern_array_matches_scalar() -> None:
+    """An array of sidereal times gives per-element the scalar results (shape preserved)."""
+    response, _ = reconstructed_geometry("H1")
+    ra, dec, psi = _SKY[0]
+    gmst_values = np.array([0.3, 1.1, 4.5, 6.0])
+    fp_arr, fc_arr = antenna_pattern(response, gmst_values, right_ascension=ra, declination=dec, polarization_angle=psi)
+    assert np.asarray(fp_arr).shape == gmst_values.shape
+    for i, g in enumerate(gmst_values):
+        fp_s, fc_s = antenna_pattern(response, float(g), right_ascension=ra, declination=dec, polarization_angle=psi)
+        assert float(fp_arr[i]) == pytest.approx(float(fp_s), abs=1e-12)
+        assert float(fc_arr[i]) == pytest.approx(float(fc_s), abs=1e-12)
+
+
+def test_projection_primitives_are_jit_traceable() -> None:
+    """antenna_pattern and time_delay_from_geocenter are JAX-traceable (jit)."""
+    response, location = reconstructed_geometry("L1")
+    ra, dec, psi = _SKY[1]
+    gmst = _gmst_accurate(1370000000.0)
+
+    fp = jax.jit(lambda r, g: antenna_pattern(r, g, right_ascension=ra, declination=dec, polarization_angle=psi))(
+        response, gmst
+    )
+    tau = jax.jit(lambda loc, g: time_delay_from_geocenter(loc, g, right_ascension=ra, declination=dec))(location, gmst)
+    assert np.isfinite(float(fp[0]))
+    assert np.isfinite(float(tau))
