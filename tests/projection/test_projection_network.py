@@ -177,7 +177,7 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
 
     names = ["H1", "L1"]
     with patch.dict(
-        "gwmock_signal.projection.network.lal.cached_detector_by_prefix",
+        "gwmock_signal.projection.geometry.lal.cached_detector_by_prefix",
         {"H1": object(), "L1": object()},
         clear=False,
     ):

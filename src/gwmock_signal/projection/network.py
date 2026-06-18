@@ -16,16 +16,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
-import lal
 import numpy as np
-from astropy import constants, coordinates, units
-from astropy.coordinates.matrix_utilities import rotation_matrix
+from astropy import constants
 from astropy.time import Time
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 from scipy.interpolate import interp1d
+
+from gwmock_signal.projection.geometry import get_lal_detector, reconstructed_geometry
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -57,16 +56,6 @@ def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tupl
     return hp, hc
 
 
-def _get_lal_detector(prefix: str) -> lal.Detector:
-    """Return one detector from LAL's cached prefix registry."""
-    try:
-        return cast(lal.Detector, lal.cached_detector_by_prefix[prefix])
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown or unsupported detector {prefix!r}. Use a valid LAL interferometer code (e.g. 'H1', 'L1', 'V1')."
-        ) from exc
-
-
 def _gmst_accurate(t_gps: float) -> float:
     """Return Greenwich mean sidereal time in radians using Astropy."""
     return float(Time(float(t_gps), format="gps", scale="utc", location=(0, 0)).sidereal_time("mean").rad)
@@ -77,33 +66,6 @@ def _gmst_accurate_array(t_gps: np.ndarray) -> np.ndarray:
     return np.asarray(Time(t_gps, format="gps", scale="utc", location=(0, 0)).sidereal_time("mean").rad, dtype=float)
 
 
-@cache
-def _reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return detector response and location reconstructed from one LAL detector."""
-    fr_detector = _get_lal_detector(prefix).frDetector
-
-    arm_response = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
-    rotation_longitude = rotation_matrix(-fr_detector.vertexLongitudeRadians * units.rad, "z")
-    rotation_latitude = rotation_matrix(-(np.pi / 2.0 - fr_detector.vertexLatitudeRadians) * units.rad, "y")
-
-    responses: list[np.ndarray] = []
-    for azimuth, altitude in (
-        (fr_detector.yArmAzimuthRadians, fr_detector.yArmAltitudeRadians),
-        (fr_detector.xArmAzimuthRadians, fr_detector.xArmAltitudeRadians),
-    ):
-        rotation_azimuth = rotation_matrix(azimuth * units.rad, "z")
-        rotation_altitude = rotation_matrix(-altitude * units.rad, "y")
-        rotation = rotation_longitude @ rotation_latitude @ rotation_azimuth @ rotation_altitude
-        responses.append(np.asarray(rotation @ arm_response @ rotation.T / 2.0, dtype=float))
-
-    location = coordinates.EarthLocation.from_geodetic(
-        fr_detector.vertexLongitudeRadians * units.rad,
-        fr_detector.vertexLatitudeRadians * units.rad,
-        height=fr_detector.vertexElevation * units.meter,
-    )
-    return responses[0] - responses[1], np.array([location.x.value, location.y.value, location.z.value], dtype=float)
-
-
 def _time_delay_from_earth_center_lal(
     prefix: str,
     *,
@@ -112,7 +74,7 @@ def _time_delay_from_earth_center_lal(
     t_gps: float,
 ) -> float:
     """Return the geocenter time delay for one reconstructed detector geometry."""
-    _, location = _reconstructed_geometry(prefix)
+    _, location = reconstructed_geometry(prefix)
     gha = _gmst_accurate(t_gps) - right_ascension
     cosdec = np.cos(declination)
     propagation_direction = np.array(
@@ -137,7 +99,7 @@ def _antenna_pattern_lal(
     t_gps: float,
 ) -> tuple[float, float]:
     """Return tensor antenna-pattern factors for one reconstructed detector geometry."""
-    response, _ = _reconstructed_geometry(prefix)
+    response, _ = reconstructed_geometry(prefix)
     gha = _gmst_accurate(t_gps) - right_ascension
     cosgha = np.cos(gha)
     singha = np.sin(gha)
@@ -180,7 +142,7 @@ def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, s
     for raw in detector_specs:
         if isinstance(raw, str):
             name = str(raw)
-            _get_lal_detector(name)
+            get_lal_detector(name)
             out.append((name, name))
         else:
             from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
@@ -283,7 +245,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     for name, prefix in detectors:
         if earth_rotation:
-            response, location = _reconstructed_geometry(prefix)
+            response, location = reconstructed_geometry(prefix)
 
             # Vectorized time delay: time_delay = -location · prop_dir / c
             prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, np.full(len(time_array), sindec)], axis=-1)
