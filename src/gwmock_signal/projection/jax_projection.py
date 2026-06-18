@@ -36,8 +36,11 @@ imported by the device path or its tests, never by always-loaded modules
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jaxtyping import Array, Float
+import math
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from jaxtyping import Array, Float
 
 # Julian Date of the GPS epoch (1980-01-06 00:00:00 UTC).
 _JD_GPS_EPOCH = 2444244.5
@@ -51,7 +54,7 @@ _TT_MINUS_TAI = 32.184
 # Default TAI - UTC (leap seconds), valid from 2017-01-01. Step IERS data: pass an
 # explicit value for other epochs. UTC = GPS - (tai_minus_utc + _GPS_MINUS_TAI).
 _DEFAULT_TAI_MINUS_UTC = 37.0
-_ARCSEC_TO_RAD = jnp.pi / 648000.0
+_ARCSEC_TO_RAD = math.pi / 648000.0
 
 
 def gmst_rad(
@@ -79,6 +82,8 @@ def gmst_rad(
     Returns:
         GMST in radians wrapped to ``[0, 2*pi)``, same shape as ``t_gps``.
     """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
     t_gps = jnp.asarray(t_gps, dtype=jnp.float64)
     utc_seconds = t_gps - (tai_minus_utc + _GPS_MINUS_TAI)
     jd_utc = _JD_GPS_EPOCH + utc_seconds / _SECONDS_PER_DAY
