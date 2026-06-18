@@ -28,11 +28,16 @@ precessing models (``IMRPhenomPv2``, ``IMRPhenomXP``, ``IMRPhenomXPHM``).
 from __future__ import annotations
 
 import importlib
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
+
+if TYPE_CHECKING:
+    from jax import Array
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
 
@@ -57,6 +62,42 @@ _DEFAULT_RINGDOWN_FRACTION = 0.1
 _SEGMENT_BUFFER_SECONDS = 2.0
 #: Floor on the segment length (seconds) for very short signals.
 _MIN_SEGMENT_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class FrequencyDomainPolarizations:
+    """Frequency-domain plus/cross polarizations on a uniform one-sided grid.
+
+    The polarizations are evaluated with coalescence at ``t = 0`` (ripple's internal
+    ``tc = 0``) and out-of-band bins zeroed; ``frequencies``, ``plus`` and ``cross``
+    are JAX arrays (on-device). ``n_samples`` and ``sampling_frequency`` describe the
+    real time series an inverse real FFT would produce (``len(frequencies) ==
+    n_samples // 2 + 1``). This is the on-device hand-off for the projection kernel;
+    the time-domain backend conditions it into GWpy series.
+    """
+
+    frequencies: Array
+    plus: Array
+    cross: Array
+    sampling_frequency: float
+    n_samples: int
+
+
+@dataclass(frozen=True)
+class _ResolvedParameters:
+    """Validated, backend-native CBC parameters shared by the FD and TD entry points."""
+
+    mass1: float
+    mass2: float
+    spins: dict[str, float]
+    distance: float
+    inclination: float
+    coa_phase: float
+    lambda_1: float
+    lambda_2: float
+    is_tidal: bool
+    is_precessing: bool
+    f_ref: float
 
 
 class RippleBackend(WaveformBackend):
@@ -113,6 +154,54 @@ class RippleBackend(WaveformBackend):
         **params: object,
     ) -> dict[str, TimeSeries]:
         """Generate plus/cross polarizations from ripple, conditioned to time domain."""
+        fd = self.generate_fd_polarizations(
+            approximant,
+            sampling_frequency=sampling_frequency,
+            minimum_frequency=minimum_frequency,
+            **params,
+        )
+        hp_t, hc_t, epoch = self._to_time_domain(fd)
+        t0 = epoch + tc
+        dt = 1.0 / sampling_frequency
+        return {
+            "plus": TimeSeries(hp_t, t0=t0, dt=dt),
+            "cross": TimeSeries(hc_t, t0=t0, dt=dt),
+        }
+
+    def generate_fd_polarizations(
+        self,
+        approximant: str,
+        *,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> FrequencyDomainPolarizations:
+        """Generate ripple's frequency-domain plus/cross polarizations (on-device).
+
+        This is the building block the on-device (GPU) projection path consumes: the
+        polarizations stay as JAX arrays and are not conditioned to the time domain.
+        ``generate_td_waveform`` calls this and then inverse-FFTs the result.
+
+        Args:
+            approximant: A supported ripple approximant name.
+            sampling_frequency: Sample rate in Hz; sets the Nyquist frequency.
+            minimum_frequency: Low-frequency cutoff in Hz; bins below it are zeroed.
+            **params: CBC source parameters (gwmock-pop canonical names or aliases).
+
+        Returns:
+            A :class:`FrequencyDomainPolarizations` with coalescence at ``t = 0``.
+        """
+        resolved = self._resolve_parameters(approximant, sampling_frequency, minimum_frequency, **params)
+        return self._evaluate_fd(approximant, resolved, sampling_frequency, minimum_frequency)
+
+    def _resolve_parameters(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> _ResolvedParameters:
+        """Validate inputs and translate canonical parameters to backend-native ones."""
         if approximant not in _SUPPORTED_APPROXIMANTS:
             raise ValueError(
                 f"RippleBackend does not support approximant {approximant!r}. "
@@ -160,9 +249,7 @@ class RippleBackend(WaveformBackend):
             extras = ", ".join(sorted(remaining))
             raise ValueError(f"Unsupported ripple waveform parameters: {extras}")
 
-        f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
-        hp_t, hc_t, epoch = self._condition_to_time_domain(
-            approximant=approximant,
+        return _ResolvedParameters(
             mass1=mass1,
             mass2=mass2,
             spins=spins,
@@ -173,16 +260,8 @@ class RippleBackend(WaveformBackend):
             lambda_2=lambda_2,
             is_tidal=is_tidal,
             is_precessing=is_precessing,
-            sampling_frequency=sampling_frequency,
-            minimum_frequency=minimum_frequency,
-            f_ref=f_ref,
+            f_ref=self._f_ref if self._f_ref is not None else minimum_frequency,
         )
-        t0 = epoch + tc
-        dt = 1.0 / sampling_frequency
-        return {
-            "plus": TimeSeries(hp_t, t0=t0, dt=dt),
-            "cross": TimeSeries(hc_t, t0=t0, dt=dt),
-        }
 
     def _segment_samples(self, chirp_mass_solar: float, minimum_frequency: float, sampling_frequency: float) -> int:
         """Return an even sample count whose duration contains the full inspiral.
@@ -205,76 +284,73 @@ class RippleBackend(WaveformBackend):
             n_samples += 1
         return n_samples
 
-    def _condition_to_time_domain(  # noqa: PLR0913
+    def _evaluate_fd(
         self,
-        *,
         approximant: str,
-        mass1: float,
-        mass2: float,
-        spins: dict[str, float],
-        distance: float,
-        inclination: float,
-        coa_phase: float,
-        lambda_1: float,
-        lambda_2: float,
-        is_tidal: bool,
-        is_precessing: bool,
+        resolved: _ResolvedParameters,
         sampling_frequency: float,
         minimum_frequency: float,
-        f_ref: float,
-    ) -> tuple[np.ndarray, np.ndarray, float]:
-        """Evaluate ripple in the frequency domain and inverse-FFT to time domain.
-
-        Returns ``(hp, hc, epoch)`` where ``epoch`` is the time of the first sample
-        relative to coalescence (negative), so the caller places coalescence at
-        ``epoch + tc``.
-        """
+    ) -> FrequencyDomainPolarizations:
+        """Evaluate ripple on the analysis frequency grid (coalescence at t=0)."""
         jnp = self._jnp
-        chirp_mass, eta = self._conversions.ms_to_Mc_eta(jnp.array([mass1, mass2]))
+        spins = resolved.spins
+        chirp_mass, eta = self._conversions.ms_to_Mc_eta(jnp.array([resolved.mass1, resolved.mass2]))
 
         n_samples = self._segment_samples(float(chirp_mass), minimum_frequency, sampling_frequency)
-        dt = 1.0 / sampling_frequency
         delta_f = sampling_frequency / n_samples
-        freqs = np.arange(n_samples // 2 + 1) * delta_f
+        freqs = jnp.arange(n_samples // 2 + 1) * delta_f
 
         # ripple's class interface fixes its internal tc=0; coalescence is placed
-        # in the time grid below via the roll.
+        # in the time grid by _to_time_domain.
         ripple_params = {
             "M_c": chirp_mass,
             "eta": eta,
             "s1_z": spins["spin_1z"],
             "s2_z": spins["spin_2z"],
-            "d_L": distance,
-            "phase_c": coa_phase,
-            "iota": inclination,
+            "d_L": resolved.distance,
+            "phase_c": resolved.coa_phase,
+            "iota": resolved.inclination,
         }
-        if is_precessing:
+        if resolved.is_precessing:
             ripple_params["s1_x"] = spins["spin_1x"]
             ripple_params["s1_y"] = spins["spin_1y"]
             ripple_params["s2_x"] = spins["spin_2x"]
             ripple_params["s2_y"] = spins["spin_2y"]
-        if is_tidal:
-            ripple_params["lambda_1"] = lambda_1
-            ripple_params["lambda_2"] = lambda_2
-        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref)
-        polarizations = waveform(jnp.asarray(freqs), ripple_params)
-        hp_f = polarizations["p"]
-        hc_f = polarizations["c"]
+        if resolved.is_tidal:
+            ripple_params["lambda_1"] = resolved.lambda_1
+            ripple_params["lambda_2"] = resolved.lambda_2
+        waveform = self._ripplegw.waveform_preset[approximant](f_ref=resolved.f_ref)
+        polarizations = waveform(freqs, ripple_params)
 
         # Zero out-of-band bins (including DC, where the amplitude diverges) and
-        # guard against any non-finite values before the inverse FFT.
+        # guard against any non-finite values, keeping everything on device.
         in_band = freqs >= minimum_frequency
-        hp_f = np.nan_to_num(np.where(in_band, np.asarray(hp_f), 0.0))
-        hc_f = np.nan_to_num(np.where(in_band, np.asarray(hc_f), 0.0))
+        hp_f = jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0))
+        hc_f = jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0))
+        return FrequencyDomainPolarizations(
+            frequencies=freqs,
+            plus=hp_f,
+            cross=hc_f,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+        )
 
+    def _to_time_domain(self, fd: FrequencyDomainPolarizations) -> tuple[np.ndarray, np.ndarray, float]:
+        """Inverse-FFT frequency-domain polarizations and place coalescence in the segment.
+
+        Returns ``(hp, hc, epoch)`` where ``epoch`` is the time of the first sample
+        relative to coalescence (negative), so the caller places coalescence at
+        ``epoch + tc``.
+        """
+        dt = 1.0 / fd.sampling_frequency
         # Inverse real FFT: h(t) = irfft(h(f)) / dt (continuous-transform normalization).
-        hp_t = np.fft.irfft(hp_f, n=n_samples) / dt
-        hc_t = np.fft.irfft(hc_f, n=n_samples) / dt
+        hp_t = np.fft.irfft(np.asarray(fd.plus), n=fd.n_samples) / dt
+        hc_t = np.fft.irfft(np.asarray(fd.cross), n=fd.n_samples) / dt
 
         # With tc=0 coalescence lands at sample 0 and the inspiral wraps to the tail.
         # Roll it forward so coalescence sits near the segment end, leaving the
         # inspiral contiguous before it and a small ringdown pad after.
-        merger_index = round((1.0 - self._ringdown_fraction) * n_samples)
+        merger_index = round((1.0 - self._ringdown_fraction) * fd.n_samples)
         hp_t = np.roll(hp_t, merger_index)
         hc_t = np.roll(hc_t, merger_index)
         epoch = -merger_index * dt

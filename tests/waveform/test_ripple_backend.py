@@ -405,3 +405,94 @@ def test_ripple_precessing_matches_lal(approximant: str) -> None:
     for pol in ("plus", "cross"):
         match = _match(ripple[pol].value, lal[pol].value, _FS, _F_MIN)
         assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
+
+
+def test_generate_fd_polarizations_grid_and_masking() -> None:
+    """generate_fd_polarizations returns on-device FD arrays on a valid one-sided grid."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    import jax
+
+    fd = RippleBackend().generate_fd_polarizations(
+        "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, **_BBH_PARAMS
+    )
+    assert fd.sampling_frequency == _FS
+    assert fd.frequencies.shape == (fd.n_samples // 2 + 1,)
+    assert fd.plus.shape == fd.frequencies.shape == fd.cross.shape
+    assert isinstance(fd.plus, jax.Array)  # stays on device (not converted to NumPy)
+
+    freqs = np.asarray(fd.frequencies)
+    assert freqs[0] == 0.0
+    assert np.allclose(np.diff(freqs), _FS / fd.n_samples)
+    # Out-of-band bins (including DC) are zeroed and the result is finite.
+    assert np.all(np.asarray(fd.plus)[freqs < _F_MIN] == 0.0)
+    assert np.all(np.isfinite(np.asarray(fd.plus)))
+
+
+def test_generate_fd_polarizations_conditions_to_td_waveform() -> None:
+    """Inverse-FFTing and placing the FD output reproduces generate_td_waveform exactly."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    ringdown_fraction = 0.1
+    backend = RippleBackend(ringdown_fraction=ringdown_fraction)
+    fd = backend.generate_fd_polarizations(
+        "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, **_BBH_PARAMS
+    )
+    td = backend.generate_td_waveform(
+        "IMRPhenomD", tc=_TC, sampling_frequency=_FS, minimum_frequency=_F_MIN, **_BBH_PARAMS
+    )
+
+    dt = 1.0 / _FS
+    merger_index = round((1.0 - ringdown_fraction) * fd.n_samples)
+    for pol, key in ((fd.plus, "plus"), (fd.cross, "cross")):
+        reconstructed = np.roll(np.fft.irfft(np.asarray(pol), n=fd.n_samples) / dt, merger_index)
+        np.testing.assert_allclose(reconstructed, td[key].value, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.integration
+def test_generate_fd_polarizations_matches_lal_fd() -> None:
+    """Ripple's frequency-domain IMRPhenomD agrees with LAL's FD IMRPhenomD (match > 0.99)."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    import lal
+    import lalsimulation
+
+    mass1, mass2, chi1, chi2, iota, phic = 40.0, 31.0, 0.5, -0.2, 0.9, 0.3
+    fd = RippleBackend().generate_fd_polarizations(
+        "IMRPhenomD",
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        detector_frame_mass_1=mass1,
+        detector_frame_mass_2=mass2,
+        luminosity_distance=400.0,
+        spin_1z=chi1,
+        spin_2z=chi2,
+        inclination=iota,
+        coa_phase=phic,
+    )
+    freqs = np.asarray(fd.frequencies)
+    delta_f = _FS / fd.n_samples
+    lal_hp, _ = lalsimulation.SimInspiralChooseFDWaveform(
+        mass1 * lal.MSUN_SI,
+        mass2 * lal.MSUN_SI,
+        0.0,
+        0.0,
+        chi1,
+        0.0,
+        0.0,
+        chi2,
+        400.0 * lal.PC_SI * 1e6,
+        iota,
+        phic,
+        0.0,
+        0.0,
+        0.0,
+        delta_f,
+        _F_MIN,
+        _FS / 2,
+        _F_MIN,
+        lal.CreateDict(),
+        lalsimulation.GetApproximantFromString("IMRPhenomD"),
+    )
+    lal_fd = np.asarray(lal_hp.data.data)
+    n_bins = min(len(freqs), len(lal_fd))
+    in_band = freqs[:n_bins] >= _F_MIN
+    match = _fd_match(np.asarray(fd.plus)[:n_bins], lal_fd[:n_bins], in_band)
+    assert match > 0.99, f"FD match {match:.4f} below threshold"
