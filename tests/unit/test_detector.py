@@ -261,3 +261,34 @@ class TestMixedNetworkProjection:
         for key, ts in result.items():
             assert isinstance(ts, GWpyTimeSeries), f"{key}: expected GWpyTimeSeries"
             assert len(ts) == n
+
+
+def test_to_lal_reallocates_auto_generated_prefix_on_collision() -> None:
+    """Two auto-prefixed detectors that initially draw the same prefix must not clash.
+
+    Reproduces the construct-then-register window: prefixes are allocated at
+    construction, but two siblings built before either registers can draw the same
+    auto prefix. The second ``to_lal`` must re-allocate instead of raising.
+    """
+    prefixes = iter(["ZZ", "ZZ", "ZY"])  # both built as 'ZZ'; the re-allocation yields 'ZY'
+    for stale in ("ZZ", "ZY"):
+        lal.cached_detector_by_prefix.pop(stale, None)
+    try:
+        with patch("gwmock_signal.detector._generate_detector_prefix", lambda: next(prefixes)):
+            first = _make_h1_custom(name="auto_first")  # prefix="" -> 'ZZ'
+            second = _make_h1_custom(name="auto_second")  # -> 'ZZ'
+            first_lal = first.to_lal()  # registers 'ZZ'
+            second_lal = second.to_lal()  # 'ZZ' taken + auto-generated -> re-allocate -> 'ZY'
+        assert first_lal.frDetector.prefix == "ZZ"
+        assert second_lal.frDetector.prefix == "ZY"
+        assert second.to_lal() is second_lal  # cached, idempotent
+    finally:
+        for prefix in ("ZZ", "ZY"):
+            lal.cached_detector_by_prefix.pop(prefix, None)
+
+
+def test_to_lal_explicit_prefix_collision_still_raises() -> None:
+    """An explicitly chosen prefix that clashes remains a hard error."""
+    detector = _make_h1_custom(name="explicit", prefix="H1")  # H1 is a built-in LAL prefix
+    with pytest.raises(ValueError, match="already registered in LAL"):
+        detector.to_lal()

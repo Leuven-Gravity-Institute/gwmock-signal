@@ -133,10 +133,18 @@ class CustomDetector:
         if self._lal_detector is None:
             detector_prefix = self._lal_prefix
             if detector_prefix in lal.cached_detector_by_prefix:
-                raise ValueError(
-                    f"Detector prefix {detector_prefix!r} is already registered in LAL; "
-                    "choose a unique prefix for CustomDetector."
-                )
+                if self.prefix:
+                    # User explicitly chose this prefix: a clash is a real error.
+                    raise ValueError(
+                        f"Detector prefix {detector_prefix!r} is already registered in LAL; "
+                        "choose a unique prefix for CustomDetector."
+                    )
+                # Auto-generated prefix: it was allocated at construction against the
+                # registry as it was then, but another detector (e.g. a sibling in the
+                # same network) has since registered the same prefix. Allocate a fresh
+                # one now, atomically with registration below, to close that window.
+                detector_prefix = _generate_detector_prefix()
+                object.__setattr__(self, "_lal_prefix", detector_prefix)
             fr_detector = lal.FrDetector()
             fr_detector.name = self.name
             fr_detector.prefix = detector_prefix
