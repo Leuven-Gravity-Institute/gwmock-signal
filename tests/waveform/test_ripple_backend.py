@@ -65,6 +65,7 @@ def test_ripple_backend_available_approximants() -> None:
         "IMRPhenomHM",
         "IMRPhenomXAS",
         "IMRPhenomXHM",
+        "TaylorF2",
         "IMRPhenomD_NRTidalv2",
         "IMRPhenomXAS_NRTidalv3",
     }
@@ -255,3 +256,95 @@ def test_ripple_tidal_matches_lal(approximant: str) -> None:
     for pol in ("plus", "cross"):
         match = _match(ripple[pol].value, lal[pol].value, _FS, _TIDAL_F_MIN)
         assert match > 0.99, f"{approximant} {pol} match {match:.4f} below threshold"
+
+
+def _fd_match(spectrum_a: np.ndarray, spectrum_b: np.ndarray, in_band: np.ndarray) -> float:
+    """White FD match between two spectra over ``in_band``, maximized over time and phase."""
+    spectrum_a = np.where(in_band, spectrum_a, 0.0)
+    spectrum_b = np.where(in_band, spectrum_b, 0.0)
+    cross = spectrum_a * np.conj(spectrum_b)
+    n = 2 * (len(cross) - 1)
+    full = np.zeros(n, dtype=complex)
+    full[: len(cross)] = cross
+    correlation = np.fft.ifft(full) * n
+    norm = np.sqrt(np.sum(np.abs(spectrum_a) ** 2) * np.sum(np.abs(spectrum_b) ** 2))
+    return float(np.max(np.abs(correlation)) / norm)
+
+
+def test_ripple_taylorf2_generates_finite_timeseries() -> None:
+    """TaylorF2 conditions to a finite time series despite ripple's above-ISCO NaNs."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    result = _generate_tidal("TaylorF2", lambda_1=400.0, lambda_2=500.0)
+    assert set(result) == {"plus", "cross"}
+    assert np.all(np.isfinite(result["plus"].value))
+    assert np.all(np.isfinite(result["cross"].value))
+
+
+@pytest.mark.integration
+def test_ripple_taylorf2_matches_lal_fd() -> None:
+    """Ripple TaylorF2 agrees with LAL's frequency-domain TaylorF2 (match > 0.99).
+
+    LAL provides no time-domain TaylorF2 generator, so the backend's conditioned
+    time series is transformed back to the frequency domain and compared against
+    ``SimInspiralChooseFDWaveform`` over the inspiral band (up to the ISCO).
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    import lal
+    import lalsimulation
+
+    mass1, mass2 = 1.6, 1.4
+    chi1, chi2, lambda_1, lambda_2, iota, phic = 0.02, -0.01, 400.0, 500.0, 0.6, 0.2
+    hp = RippleBackend().generate_td_waveform(
+        "TaylorF2",
+        tc=_TC,
+        sampling_frequency=_FS,
+        minimum_frequency=_TIDAL_F_MIN,
+        detector_frame_mass_1=mass1,
+        detector_frame_mass_2=mass2,
+        luminosity_distance=100.0,
+        spin_1z=chi1,
+        spin_2z=chi2,
+        inclination=iota,
+        coa_phase=phic,
+        lambda_1=lambda_1,
+        lambda_2=lambda_2,
+    )["plus"]
+
+    n = len(hp.value)
+    delta_f = _FS / n
+    ripple_fd = np.fft.rfft(hp.value)
+    freqs = np.fft.rfftfreq(n, d=1.0 / _FS)
+
+    pars = lal.CreateDict()
+    lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(pars, lambda_1)
+    lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(pars, lambda_2)
+    lal_hp, _ = lalsimulation.SimInspiralChooseFDWaveform(
+        mass1 * lal.MSUN_SI,
+        mass2 * lal.MSUN_SI,
+        0.0,
+        0.0,
+        chi1,
+        0.0,
+        0.0,
+        chi2,
+        100.0 * lal.PC_SI * 1e6,
+        iota,
+        phic,
+        0.0,
+        0.0,
+        0.0,
+        delta_f,
+        _TIDAL_F_MIN,
+        _FS / 2,
+        _TIDAL_F_MIN,
+        pars,
+        lalsimulation.GetApproximantFromString("TaylorF2"),
+    )
+    lal_fd = np.asarray(lal_hp.data.data)
+
+    n_bins = min(len(ripple_fd), len(lal_fd))
+    # TaylorF2 terminates at the Schwarzschild ISCO; compare only the inspiral band.
+    f_isco = 1.0 / (6.0**1.5 * np.pi * (mass1 + mass2) * lal.MTSUN_SI)
+    in_band = (freqs[:n_bins] >= _TIDAL_F_MIN) & (freqs[:n_bins] <= min(f_isco, _FS / 2))
+    match = _fd_match(ripple_fd[:n_bins], lal_fd[:n_bins], in_band)
+    assert match > 0.99, f"TaylorF2 FD match {match:.4f} below threshold"
