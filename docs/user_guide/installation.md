@@ -52,9 +52,10 @@ uv pip install gwmock-signal
 
 The wheel includes **runtime dependencies** declared in `pyproject.toml`:
 **`typer`**, **`gwpy`**, **`lalsuite`**, **`pyyaml`**, and their transitive
-installs. **PyCBC** is **not** a core dependency; install it with the optional
-extra **`gwmock-signal[pycbc]`** when you want the PyCBC waveform backend or the
-`pycbc_waveform_wrapper` helper.
+installs. **PyCBC** and **ripple** are **not** core dependencies; install them
+with the optional extras **`gwmock-signal[pycbc]`** (PyCBC waveform backend or
+the `pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the
+JAX/ripple waveform backend, which pulls in `rippleGW` and JAX).
 
 There is **no** `gwmock-signal[dev]` extra on PyPI; contributor tooling lives in
 **uv dependency groups** in the repository (see **Install from source**).
@@ -62,6 +63,9 @@ There is **no** `gwmock-signal[dev]` extra on PyPI; contributor tooling lives in
 ```bash
 # Optional waveform backend (PyCBC)
 uv pip install 'gwmock-signal[pycbc]'
+
+# Optional waveform backend (JAX/ripple); installs CPU JAX by default
+uv pip install 'gwmock-signal[jax]'
 ```
 
 ## Install from source
@@ -138,6 +142,11 @@ Declared in `pyproject.toml` for the library:
 
 - **pycbc** — alternate waveform backend (`PyCBCBackend`) and
   `pycbc_waveform_wrapper`
+
+**Optional** (`pip install 'gwmock-signal[jax]'`):
+
+- **rippleGW** (and JAX) — JAX/ripple waveform backend (`RippleBackend`); CPU
+  JAX by default
 
 Numerical arrays (`numpy`, etc.) are pulled in transitively (for example by
 `gwpy` and `lalsuite`).
