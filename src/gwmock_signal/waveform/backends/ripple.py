@@ -239,7 +239,9 @@ class RippleBackend(WaveformBackend):
                 jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0)),
             )
 
-        plus, cross = self._jax.vmap(_one)(ripple_params)
+        # jit-compile the vmapped evaluation so the whole batch fuses into one
+        # kernel (the main GPU win); compiled once per (n_events, n_samples) shape.
+        plus, cross = self._jax.jit(self._jax.vmap(_one))(ripple_params)
         return FrequencyDomainPolarizations(
             frequencies=freqs,
             plus=plus,
