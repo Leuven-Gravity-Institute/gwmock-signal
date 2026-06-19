@@ -139,6 +139,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
         )
         return jnp.roll(strain, merger_index)  # place coalescence near the segment end
 
+    # jit-compile the vmapped projection so each detector's batch fuses into one
+    # kernel; compiled once and reused across detectors (shared shapes).
+    project_batch = jax.jit(jax.vmap(_project_event))
+
     per_detector = []
     for name in detector_names:
         response, location = reconstructed_geometry(name)
@@ -150,7 +154,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
             polarization_angle=polarization_angle,
         )
         time_delay = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
-        per_detector.append(jax.vmap(_project_event)(fd.plus, fd.cross, f_plus, f_cross, time_delay))
+        per_detector.append(project_batch(fd.plus, fd.cross, f_plus, f_cross, time_delay))
 
     strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples)
     return BatchedDetectorStrain(
