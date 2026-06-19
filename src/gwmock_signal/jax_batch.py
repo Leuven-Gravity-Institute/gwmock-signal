@@ -31,7 +31,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.injection import inject_strains_sequential
+from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
@@ -157,6 +160,70 @@ def simulate_cbc_batch(  # noqa: PLR0913
         epoch=epoch,
         sampling_frequency=sampling_frequency,
     )
+
+
+def assemble_segments(
+    batch: BatchedDetectorStrain,
+    *,
+    segment_duration: float,
+    segment_start_times: Sequence[float],
+    backgrounds: Sequence[Mapping[str, TimeSeries]] | None = None,
+    interpolate_if_offset: bool = True,
+) -> list[DetectorStrainStack]:
+    """Scatter the batched signals into fixed-duration data segments (in memory).
+
+    Each output segment spans ``[start, start + segment_duration)``. Every signal
+    that overlaps a segment is injected into it with
+    :func:`~gwmock_signal.injection.inject_strains_sequential`, which crops the
+    signal to the segment span — so a signal longer than ``segment_duration``
+    contributes its overlapping part to each of the consecutive segments it spans.
+
+    Args:
+        batch: Batched per-event/detector strain from :func:`simulate_cbc_batch`.
+        segment_duration: Duration of every output segment, in seconds.
+        segment_start_times: GPS start time of each output segment (typically a
+            contiguous tiling, e.g. ``start + k * segment_duration``).
+        backgrounds: Optional per-segment backgrounds, aligned with
+            ``segment_start_times``; each maps detector name to a background
+            ``TimeSeries`` to inject into. When ``None`` (default), zero-noise
+            segments are created.
+        interpolate_if_offset: Forwarded to ``inject_strains_sequential`` for
+            signals whose start is not on a segment-sample boundary.
+
+    Returns:
+        One :class:`~gwmock_signal.multichannel.stack.DetectorStrainStack` per
+        entry in ``segment_start_times`` (same order), with channels in
+        ``batch.detector_names`` order.
+    """
+    if backgrounds is not None and len(backgrounds) != len(segment_start_times):
+        raise ValueError("backgrounds must be aligned one-to-one with segment_start_times.")
+
+    strain = np.asarray(batch.strain)
+    _, _, n_samples = strain.shape
+    sampling_frequency = batch.sampling_frequency
+    dt = 1.0 / sampling_frequency
+    signal_start = batch.epoch + np.asarray(batch.coa_time, dtype=float)
+    signal_end = signal_start + n_samples * dt
+    n_segment_samples = round(segment_duration * sampling_frequency)
+    detectors = batch.detector_names
+
+    segments: list[DetectorStrainStack] = []
+    for k, raw_start in enumerate(segment_start_times):
+        seg_start = float(raw_start)
+        seg_end = seg_start + segment_duration
+        overlapping = np.nonzero((signal_start < seg_end) & (signal_end > seg_start))[0]
+        channels: dict[str, TimeSeries] = {}
+        for d, name in enumerate(detectors):
+            if backgrounds is not None:
+                background = backgrounds[k][name]
+            else:
+                background = TimeSeries(np.zeros(n_segment_samples), t0=seg_start, sample_rate=sampling_frequency)
+            injections = [TimeSeries(strain[i, d], t0=float(signal_start[i]), dt=dt) for i in overlapping]
+            channels[name] = inject_strains_sequential(
+                background, injections, interpolate_if_offset=interpolate_if_offset
+            )
+        segments.append(DetectorStrainStack.from_mapping(detectors, channels))
+    return segments
 
 
 def _required(parameters: Mapping[str, object], name: str) -> object:
