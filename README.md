@@ -118,6 +118,11 @@ python -c "import gwmock_signal; print(gwmock_signal.__version__)"
   **batched, on-device (GPU) catalogue simulation** that assembles signals into
   fixed-duration data segments — see
   [Batched GPU simulation](https://leuven-gravity-institute.github.io/gwmock-signal/user_guide/gpu-batched-simulation/).
+  Its agreement with the LAL baseline and its speed across backends/hardware are
+  tracked in
+  [Consistency](https://leuven-gravity-institute.github.io/gwmock-signal/dev/consistency/)
+  and
+  [Performance](https://leuven-gravity-institute.github.io/gwmock-signal/dev/performance/).
 
 Python API:
 
@@ -145,6 +150,12 @@ gwmock-signal inject cbc --params examples/gw150914_like.json --network H1L1V1 -
   parameters, `--network`), **Custom backends**, and **Examples** (library
   walkthroughs)
 - **API reference:** signatures, types, and exceptions (mkdocstrings)
+- **Benchmarks:**
+  [Performance](https://leuven-gravity-institute.github.io/gwmock-signal/dev/performance/)
+  (wall time, core-hours, memory, and output size across backends, methods, and
+  hardware) and
+  [Consistency](https://leuven-gravity-institute.github.io/gwmock-signal/dev/consistency/)
+  (ripple-vs-LAL agreement)
 
 ### Public source-type backend lookup
 
