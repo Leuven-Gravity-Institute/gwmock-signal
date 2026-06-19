@@ -133,3 +133,7 @@ dmypy.json
 
 # Node.js
 node_modules/
+
+# Benchmark run outputs and (uncommitted) cluster submission scripts
+benchmarks/results/
+benchmarks/submit/
