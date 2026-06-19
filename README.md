@@ -49,9 +49,11 @@ uv pip install gwmock-signal
 #### PyPI install scope
 
 The PyPI wheel includes **runtime dependencies only** (see `dependencies` in
-`pyproject.toml`). The only published optional extra is `gwmock-signal[pycbc]`;
-development and documentation dependencies remain **uv dependency groups** used
-when you work from a **git clone** (see **Development installation** below).
+`pyproject.toml`). The published optional extras are `gwmock-signal[pycbc]` (the
+PyCBC waveform backend) and `gwmock-signal[jax]` (the JAX/ripple waveform
+backend and batched GPU simulation); development and documentation dependencies
+remain **uv dependency groups** used when you work from a **git clone** (see
+**Development installation** below).
 
 ### Install from Source
 
@@ -111,6 +113,11 @@ python -c "import gwmock_signal; print(gwmock_signal.__version__)"
   built-in CBC pipeline without installing `pycbc`.
 - `pycbc` (optional): install with `pip install 'gwmock-signal[pycbc]'` to use
   `PyCBCBackend`.
+- `ripple` (optional): install with `pip install 'gwmock-signal[jax]'` to use
+  the JAX/ripple backend (`RippleBackend`). Beyond the CLI/CPU path, it enables
+  **batched, on-device (GPU) catalogue simulation** that assembles signals into
+  fixed-duration data segments — see
+  [Batched GPU simulation](https://leuven-gravity-institute.github.io/gwmock-signal/user_guide/gpu-batched-simulation/).
 
 Python API:
 
