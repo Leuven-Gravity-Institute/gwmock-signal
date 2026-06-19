@@ -166,7 +166,7 @@ def _output_bytes(segments, *, write_dir: Path | None) -> int:
     return total
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     """Run one configuration and write its benchmark record."""
     parser = argparse.ArgumentParser(description="Benchmark CBC catalogue generation for one configuration.")
     parser.add_argument("--backend", choices=("lal", "pycbc", "ripple"), required=True)
@@ -178,18 +178,42 @@ def main() -> None:
     parser.add_argument("--minimum-frequency", type=float, default=20.0)
     parser.add_argument("--segment-duration", type=float, default=64.0)
     parser.add_argument("--start-time", type=float, default=1_126_259_462.0)
-    parser.add_argument("--end-time", type=float, default=1_126_259_462.0 + 3.0e7)
+    parser.add_argument(
+        "--end-time",
+        type=float,
+        default=1_126_259_462.0 + 8192.0,
+        help="Span [start, end) is tiled with fixed segments and held in memory; the "
+        "default is ~128 x 64 s segments. A full year of segments is TBs — keep the "
+        "span bounded (or raise --max-product-gb deliberately).",
+    )
     parser.add_argument("--chunk-size", type=int, default=None, help="Batched method only.")
     parser.add_argument("--n-chirp-mass-bins", type=int, default=1, help="Batched method only.")
     parser.add_argument("--n-cpu-cores", type=int, default=None, help="Override for CPU core-hours.")
     parser.add_argument("--n-gpus", type=int, default=None, help="Override for GPU-hours.")
     parser.add_argument("--label", default=None, help="Human-readable label for this run.")
     parser.add_argument("--write-data", action="store_true", help="Write segments to measure on-disk size.")
+    parser.add_argument(
+        "--max-product-gb",
+        type=float,
+        default=8.0,
+        help="Refuse to run if the in-memory data product would exceed this (guards against OOM).",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
 
     if args.method == "batched" and args.backend != "ripple":
         parser.error("the batched method is only available for the ripple backend")
+
+    # The span is tiled with fixed-duration segments and the whole product is held in
+    # memory; refuse absurd spans up front instead of OOMing the node mid-run.
+    n_segments = int(np.ceil((args.end_time - args.start_time) / args.segment_duration))
+    n_segment_samples = round(args.segment_duration * args.sampling_frequency)
+    product_gb = n_segments * len(args.detectors) * n_segment_samples * _BYTES_PER_SAMPLE / 1e9
+    if product_gb > args.max_product_gb:
+        parser.error(
+            f"data product is ~{product_gb:.1f} GB ({n_segments} segments x {len(args.detectors)} detectors), "
+            f"over --max-product-gb={args.max_product_gb}. Shorten the span (--end-time) or raise the cap."
+        )
 
     catalogue = build_catalogue(args.n_events, gps_start=args.start_time)
     catalogue["coa_time"] = np.clip(catalogue["coa_time"], args.start_time, args.end_time)
