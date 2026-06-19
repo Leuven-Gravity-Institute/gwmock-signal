@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
-from gwmock_signal.jax_batch import BatchedDetectorStrain, assemble_segments
+from gwmock_signal.jax_batch import BatchedDetectorStrain, assemble_segments, simulate_cbc_catalogue
 
 # 8 Hz sampling; 4 s segments => 32 samples per segment.
 _FS = 8.0
@@ -87,4 +87,34 @@ def test_assemble_segments_rejects_misaligned_backgrounds() -> None:
             segment_duration=_SEGMENT_DURATION,
             segment_start_times=[0.0, 4.0],
             backgrounds=[{"H1": TimeSeries(np.zeros(_SEG_SAMPLES), t0=0.0, sample_rate=_FS)}],
+        )
+
+
+def test_simulate_cbc_catalogue_rejects_nonpositive_segment_duration() -> None:
+    """segment_duration must be > 0 (validated before any generation)."""
+    with pytest.raises(ValueError, match="segment_duration must be > 0"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            ["H1"],
+            sampling_frequency=2048.0,
+            minimum_frequency=20.0,
+            parameters={},
+            segment_duration=0.0,
+            start_time=0.0,
+            end_time=16.0,
+        )
+
+
+def test_simulate_cbc_catalogue_rejects_empty_span() -> None:
+    """end_time must be after start_time (validated before any generation)."""
+    with pytest.raises(ValueError, match="end_time must be greater"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            ["H1"],
+            sampling_frequency=2048.0,
+            minimum_frequency=20.0,
+            parameters={},
+            segment_duration=4.0,
+            start_time=10.0,
+            end_time=10.0,
         )

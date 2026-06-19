@@ -109,3 +109,44 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
             a, b = host.value, device[i, j]
             overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
             assert overlap > 0.999, f"event {i} {detector} overlap {overlap:.5f}"
+
+
+def test_simulate_cbc_catalogue_tiles_span_and_places_signals() -> None:
+    """The catalogue wrapper tiles the span and places each signal in its segment(s)."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    catalogue = {
+        "detector_frame_mass_1": np.array([40.0, 38.0]),
+        "detector_frame_mass_2": np.array([31.0, 33.0]),
+        "luminosity_distance": np.array([400.0, 450.0]),
+        "spin_1z": np.array([0.3, -0.1]),
+        "spin_2z": np.array([-0.2, 0.1]),
+        "inclination": np.array([0.9, 0.6]),
+        "coa_phase": np.array([0.3, 1.0]),
+        "right_ascension": np.array([1.375, 0.5]),
+        "declination": np.array([-1.211, 0.3]),
+        "polarization_angle": np.array([2.659, 0.0]),
+        "coa_time": np.array([100.0, 130.0]),
+    }
+    segment_duration, start_time, end_time = 16.0, 64.0, 160.0
+    segments = simulate_cbc_catalogue(
+        "IMRPhenomD",
+        _DETECTORS,
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=catalogue,
+        segment_duration=segment_duration,
+        start_time=start_time,
+        end_time=end_time,
+        backend=RippleBackend(segment_duration=8.0),  # 8 s generation buffer
+    )
+
+    assert len(segments) == 6  # ceil((160 - 64) / 16)
+    for k, stack in enumerate(segments):
+        assert stack["H1"].t0.value == pytest.approx(start_time + k * segment_duration)
+
+    # Segments before/after every signal are zero; segments overlapping a coalescence are not.
+    assert np.all(np.asarray(segments[0]["H1"].value) == 0.0)  # [64, 80): no signal
+    assert np.all(np.asarray(segments[5]["H1"].value) == 0.0)  # [144, 160): no signal
+    assert np.any(np.asarray(segments[2]["H1"].value) != 0.0)  # [96, 112): event 0 coalescence (100)
+    assert np.any(np.asarray(segments[3]["H1"].value) != 0.0)  # [112, 128): event 1 inspiral toward 130

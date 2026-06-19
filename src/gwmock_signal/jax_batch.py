@@ -226,6 +226,71 @@ def assemble_segments(
     return segments
 
 
+def simulate_cbc_catalogue(  # noqa: PLR0913
+    approximant: str,
+    detector_names: Sequence[str],
+    *,
+    sampling_frequency: float,
+    minimum_frequency: float,
+    parameters: Mapping[str, object],
+    segment_duration: float,
+    start_time: float,
+    end_time: float,
+    backend: RippleBackend | None = None,
+    interpolate_if_offset: bool = True,
+) -> list[DetectorStrainStack]:
+    """Generate a catalogue on device and assemble it into fixed-duration segments.
+
+    Convenience wrapper that runs :func:`simulate_cbc_batch` and then
+    :func:`assemble_segments`, tiling ``[start_time, end_time)`` into contiguous
+    zero-noise segments of ``segment_duration``. Signals are placed at their
+    ``coa_time`` and split across the segments they span; signals outside the span
+    simply do not appear. For non-zero backgrounds use the two-step API
+    (:func:`simulate_cbc_batch` then :func:`assemble_segments`) so you can supply a
+    background per segment.
+
+    Args:
+        approximant: A supported ripple approximant name.
+        detector_names: Detector codes (e.g. ``"H1"``, ``"L1"``).
+        sampling_frequency: Sample rate in Hz.
+        minimum_frequency: Low-frequency cutoff in Hz.
+        parameters: Canonical catalogue parameters as struct-of-arrays (see
+            :func:`simulate_cbc_batch`).
+        segment_duration: Duration of every output segment, in seconds.
+        start_time: GPS start of the first segment.
+        end_time: GPS time the tiling must cover up to; the final segment is the
+            first one whose span reaches or passes ``end_time``.
+        backend: Optional configured :class:`RippleBackend`.
+        interpolate_if_offset: Forwarded to :func:`assemble_segments`.
+
+    Returns:
+        One :class:`~gwmock_signal.multichannel.stack.DetectorStrainStack` per
+        segment, in time order.
+    """
+    if segment_duration <= 0:
+        raise ValueError("segment_duration must be > 0")
+    if end_time <= start_time:
+        raise ValueError("end_time must be greater than start_time")
+
+    n_segments = int(np.ceil((end_time - start_time) / segment_duration))
+    segment_start_times = start_time + np.arange(n_segments) * segment_duration
+
+    batch = simulate_cbc_batch(
+        approximant,
+        detector_names,
+        sampling_frequency=sampling_frequency,
+        minimum_frequency=minimum_frequency,
+        parameters=parameters,
+        backend=backend,
+    )
+    return assemble_segments(
+        batch,
+        segment_duration=segment_duration,
+        segment_start_times=segment_start_times,
+        interpolate_if_offset=interpolate_if_offset,
+    )
+
+
 def _required(parameters: Mapping[str, object], name: str) -> object:
     """Return a required batch parameter or raise a clear error."""
     if name not in parameters:
