@@ -17,15 +17,27 @@ and are reproducible.
 
 ## Metrics
 
-Each run records, with full provenance (the released `gwmock-signal` version,
-the CPU/GPU model, and library versions):
+Each run produces the catalogue **twice** — a **cold** run that pays one-time
+JIT/XLA compilation and a **warm** steady-state run — and records, with full
+provenance (the released `gwmock-signal` version, the CPU/GPU model, and library
+versions):
 
-- **Wall time** — end-to-end seconds to produce the catalogue.
-- **CPU core-hours / GPU-hours** — wall time × allocated CPU cores (or GPUs).
-- **Peak / average memory** — resident set size (and peak GPU memory where
-  present).
+- **Wall time (cold / warm)** — end-to-end seconds, before and after
+  compilation.
+- **Compile time** — `cold − warm`, the one-time cost a production-scale
+  catalogue amortizes away. (The eager per-event path has no JIT, so cold ≈
+  warm.)
+- **CPU core-hours / GPU-hours (cold / warm)** — wall time × allocated CPU cores
+  (or GPUs).
+- **Peak / average memory** — peak resident set across both runs, average over
+  the warm run (and peak GPU memory where present).
 - **Output-data size** — bytes of the produced data segments.
-- **Throughput** — events per second.
+- **Throughput (cold / warm)** — events per second.
+
+The headline comparison is the **warm** throughput: at catalogue scale the
+compile cost vanishes, so steady state is what a year-long run actually sees.
+The cold bars are kept beside it because the GPU's compile is larger than the
+CPU's, which can mask the device's advantage at small event counts.
 
 ## Reproducing
 
