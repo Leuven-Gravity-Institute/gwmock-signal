@@ -65,8 +65,10 @@ nav = [
   { "Security" = "security.md" },
   { "Contributing" = "contributing.md" },
   { "Troubleshooting" = "dev/troubleshooting.md" },
-  { "Performance" = "dev/performance.md" },
-  { "Consistency" = "dev/consistency.md" },
+  { "Benchmarks" = [
+    { "Performance" = "dev/performance.md" },
+    { "Consistency" = "dev/consistency.md" },
+  ] },
   { "API" = [
     { "Overview" = "api/index.md" },
     { "Waveform" = "api/waveform/index.md" },

@@ -21,6 +21,12 @@ remains the default; this page covers the batched device path.
     [Installation](installation.md)). The batched API lives in
     `gwmock_signal.jax_batch`.
 
+!!! tip "See also"
+
+    The speed of this batched/GPU path against the per-event CPU baseline is
+    quantified in [Performance](../dev/performance.md), and the ripple backend's
+    agreement with the LAL baseline in [Consistency](../dev/consistency.md).
+
 ## Two independent durations
 
 A catalogue mixes two notions of "duration" that this API keeps separate:
