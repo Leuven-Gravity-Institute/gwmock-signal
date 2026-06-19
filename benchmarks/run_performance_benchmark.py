@@ -14,7 +14,10 @@
 """Benchmark producing a CBC catalogue data product for one backend/method/hardware.
 
 Each invocation runs **one** configuration (backend x method) on a synthetic
-catalogue and writes a single JSON record with the timing, CPU/GPU core-hours,
+catalogue and writes a single JSON record. The workload is run twice: a **cold**
+run that pays one-time JIT/XLA compilation and a **warm** steady-state run; the
+record reports both wall times plus the ``compile_seconds`` difference (which a
+production-scale catalogue amortizes away), alongside CPU/GPU core-hours,
 peak/average memory, output-data size, and full run provenance (release version,
 CPU/GPU model, library versions). A submission script launches one invocation per
 point in the backend x method x hardware matrix; the plotting script aggregates the
@@ -163,7 +166,7 @@ def _output_bytes(segments, *, write_dir: Path | None) -> int:
     return total
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     """Run one configuration and write its benchmark record."""
     parser = argparse.ArgumentParser(description="Benchmark CBC catalogue generation for one configuration.")
     parser.add_argument("--backend", choices=("lal", "pycbc", "ripple"), required=True)
@@ -175,18 +178,42 @@ def main() -> None:
     parser.add_argument("--minimum-frequency", type=float, default=20.0)
     parser.add_argument("--segment-duration", type=float, default=64.0)
     parser.add_argument("--start-time", type=float, default=1_126_259_462.0)
-    parser.add_argument("--end-time", type=float, default=1_126_259_462.0 + 3.0e7)
+    parser.add_argument(
+        "--end-time",
+        type=float,
+        default=1_126_259_462.0 + 8192.0,
+        help="Span [start, end) is tiled with fixed segments and held in memory; the "
+        "default is ~128 x 64 s segments. A full year of segments is TBs — keep the "
+        "span bounded (or raise --max-product-gb deliberately).",
+    )
     parser.add_argument("--chunk-size", type=int, default=None, help="Batched method only.")
     parser.add_argument("--n-chirp-mass-bins", type=int, default=1, help="Batched method only.")
     parser.add_argument("--n-cpu-cores", type=int, default=None, help="Override for CPU core-hours.")
     parser.add_argument("--n-gpus", type=int, default=None, help="Override for GPU-hours.")
     parser.add_argument("--label", default=None, help="Human-readable label for this run.")
     parser.add_argument("--write-data", action="store_true", help="Write segments to measure on-disk size.")
+    parser.add_argument(
+        "--max-product-gb",
+        type=float,
+        default=8.0,
+        help="Refuse to run if the in-memory data product would exceed this (guards against OOM).",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
 
     if args.method == "batched" and args.backend != "ripple":
         parser.error("the batched method is only available for the ripple backend")
+
+    # The span is tiled with fixed-duration segments and the whole product is held in
+    # memory; refuse absurd spans up front instead of OOMing the node mid-run.
+    n_segments = int(np.ceil((args.end_time - args.start_time) / args.segment_duration))
+    n_segment_samples = round(args.segment_duration * args.sampling_frequency)
+    product_gb = n_segments * len(args.detectors) * n_segment_samples * _BYTES_PER_SAMPLE / 1e9
+    if product_gb > args.max_product_gb:
+        parser.error(
+            f"data product is ~{product_gb:.1f} GB ({n_segments} segments x {len(args.detectors)} detectors), "
+            f"over --max-product-gb={args.max_product_gb}. Shorten the span (--end-time) or raise the cap."
+        )
 
     catalogue = build_catalogue(args.n_events, gps_start=args.start_time)
     catalogue["coa_time"] = np.clip(catalogue["coa_time"], args.start_time, args.end_time)
@@ -210,14 +237,30 @@ def main() -> None:
             )
         return _per_event_catalogue(_waveform_backend(args.backend), args.approximant, args.detectors, catalogue, **run)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        write_dir = Path(tmp) if args.write_data else None
+    def run_once(write_dir):
+        """Run the workload once under resource measurement and return the usage."""
         with measure() as usage:
             segments = workload()
             usage.output_bytes = _output_bytes(segments, write_dir=write_dir)
+        return usage
+
+    with tempfile.TemporaryDirectory() as tmp:
+        write_dir = Path(tmp) if args.write_data else None
+        # The cold run pays one-time JIT/XLA compilation (and OS/page-cache warm-up);
+        # the warm run is the steady state a production-scale catalogue actually sees.
+        # Their difference is the compile cost that amortizes away at scale. Both are
+        # recorded so the docs can report cold *and* warm side by side.
+        cold = run_once(write_dir)
+        warm = run_once(write_dir)
 
     prov = provenance(n_cpu_cores=args.n_cpu_cores, n_gpus=args.n_gpus)
-    wall_hours = usage.wall_seconds / 3600.0
+
+    def _per_second(wall: float) -> float | None:
+        return args.n_events / wall if wall else None
+
+    def _core_hours(wall: float, units: int) -> float:
+        return wall / 3600.0 * units
+
     record = {
         "label": args.label or f"{args.backend}-{args.method}",
         "configuration": {
@@ -231,23 +274,30 @@ def main() -> None:
             **run,
         },
         "metrics": {
-            "wall_seconds": usage.wall_seconds,
-            "cpu_core_hours": wall_hours * prov["n_cpu_cores"],
-            "gpu_hours": wall_hours * prov["n_gpus"],
-            "peak_rss_bytes": usage.peak_rss_bytes,
-            "average_rss_bytes": usage.average_rss_bytes,
-            "gpu_peak_bytes": usage.gpu_peak_bytes,
-            "output_bytes": usage.output_bytes,
-            "events_per_second": args.n_events / usage.wall_seconds if usage.wall_seconds else None,
+            "wall_seconds_cold": cold.wall_seconds,
+            "wall_seconds_warm": warm.wall_seconds,
+            "compile_seconds": max(cold.wall_seconds - warm.wall_seconds, 0.0),
+            "events_per_second_cold": _per_second(cold.wall_seconds),
+            "events_per_second_warm": _per_second(warm.wall_seconds),
+            "cpu_core_hours_cold": _core_hours(cold.wall_seconds, prov["n_cpu_cores"]),
+            "cpu_core_hours_warm": _core_hours(warm.wall_seconds, prov["n_cpu_cores"]),
+            "gpu_hours_cold": _core_hours(cold.wall_seconds, prov["n_gpus"]),
+            "gpu_hours_warm": _core_hours(warm.wall_seconds, prov["n_gpus"]),
+            "peak_rss_bytes": max(cold.peak_rss_bytes, warm.peak_rss_bytes),
+            "average_rss_bytes": warm.average_rss_bytes,
+            "gpu_peak_bytes": max(cold.gpu_peak_bytes or 0, warm.gpu_peak_bytes or 0),
+            "output_bytes": cold.output_bytes,
         },
         "provenance": prov,
     }
     write_result(args.output_json, record)
-    metrics = record["metrics"]
+    m = record["metrics"]
     print(
-        f"{record['label']}: {metrics['wall_seconds']:.2f} s, {metrics['cpu_core_hours']:.3f} CPU-core-h, "
-        f"{metrics['gpu_hours']:.3f} GPU-h, peak {metrics['peak_rss_bytes'] / 1e9:.2f} GB, "
-        f"output {metrics['output_bytes'] / 1e6:.1f} MB  (gwmock-signal {prov['gwmock_signal_version']})"
+        f"{record['label']}: cold {m['wall_seconds_cold']:.2f} s / warm {m['wall_seconds_warm']:.2f} s "
+        f"(compile {m['compile_seconds']:.2f} s), "
+        f"warm {m['cpu_core_hours_warm']:.3f} CPU-core-h, {m['gpu_hours_warm']:.3f} GPU-h, "
+        f"peak {m['peak_rss_bytes'] / 1e9:.2f} GB, output {m['output_bytes'] / 1e6:.1f} MB  "
+        f"(gwmock-signal {prov['gwmock_signal_version']})"
     )
     with contextlib.suppress(KeyError):
         print(f"  CPU={prov['cpu_model']}  GPU={prov['gpu_models'] or 'none'}")

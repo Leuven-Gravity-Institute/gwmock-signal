@@ -14,9 +14,11 @@
 """Render performance figures from the JSON records written by the benchmark runner.
 
 Reads every ``*.json`` under ``--results-dir`` and produces one figure per metric
-(wall time, core-hours, peak memory, throughput) into ``--output-dir``. Each bar is
-labelled with the run label, device, and the gwmock-signal version that produced it,
-so figures stay self-describing in the docs.
+into ``--output-dir``. Timing metrics that have a cold and a warm variant (wall time,
+core-hours, throughput) are drawn as grouped cold/warm bars so the one-time compile
+cost is visible next to the steady state. Each bar is labelled with the run label,
+device, and the gwmock-signal version that produced it, so figures stay
+self-describing in the docs.
 
     uv run python benchmarks/plot_performance.py --results-dir results --output-dir docs/dev/figures
 """
@@ -32,12 +34,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from benchutils import load_results
 
-_METRICS = (
-    ("wall_seconds", "Wall time [s]", "performance_walltime.svg"),
-    ("cpu_core_hours", "CPU core-hours", "performance_cpu_core_hours.svg"),
-    ("gpu_hours", "GPU-hours", "performance_gpu_hours.svg"),
+# Metrics with a cold/warm pair -> grouped bars: (cold_key, warm_key, axis label, filename).
+_PAIRED_METRICS = (
+    ("wall_seconds_cold", "wall_seconds_warm", "Wall time [s]", "performance_walltime.svg"),
+    ("cpu_core_hours_cold", "cpu_core_hours_warm", "CPU core-hours", "performance_cpu_core_hours.svg"),
+    ("gpu_hours_cold", "gpu_hours_warm", "GPU-hours", "performance_gpu_hours.svg"),
+    ("events_per_second_cold", "events_per_second_warm", "Throughput [events/s]", "performance_throughput.svg"),
+)
+# Single-value metrics -> one bar each.
+_SINGLE_METRICS = (
+    ("compile_seconds", "One-time compile [s]", "performance_compile.svg"),
     ("peak_rss_bytes", "Peak memory [GB]", "performance_peak_memory.svg"),
-    ("events_per_second", "Throughput [events/s]", "performance_throughput.svg"),
+    ("output_bytes", "Output data [GB]", "performance_output.svg"),
 )
 
 
@@ -71,22 +79,44 @@ def main() -> None:
     versions = sorted({record["provenance"]["gwmock_signal_version"] for record in records})
     labels = [_bar_label(record) for record in records]
     subtitle = f"gwmock-signal {', '.join(versions)}"
+    positions = range(len(records))
 
-    for metric, axis_label, filename in _METRICS:
-        values = [_value(record, metric) for record in records]
-        if not any(values):
-            continue  # e.g. no GPU runs -> skip the GPU-hours figure
+    def _new_axes():
         figure, axes = plt.subplots(figsize=(max(6.0, 1.6 * len(records)), 4.5))
-        axes.bar(range(len(records)), values, color="#2c7fb8")
-        axes.set_xticks(range(len(records)))
+        axes.set_xticks(list(positions))
         axes.set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
-        axes.set_ylabel(axis_label)
-        axes.set_title(f"{axis_label}\n{subtitle}", fontsize=10)
         axes.grid(axis="y", alpha=0.3)
+        return figure, axes
+
+    def _save(figure, filename):
         figure.tight_layout()
         figure.savefig(args.output_dir / filename)
         plt.close(figure)
         print(f"wrote {args.output_dir / filename}")
+
+    for cold_key, warm_key, axis_label, filename in _PAIRED_METRICS:
+        cold = [_value(record, cold_key) for record in records]
+        warm = [_value(record, warm_key) for record in records]
+        if not any(cold) and not any(warm):
+            continue  # e.g. no GPU runs -> skip the GPU-hours figure
+        figure, axes = _new_axes()
+        width = 0.4
+        axes.bar([p - width / 2 for p in positions], cold, width, label="cold (incl. compile)", color="#7fcdbb")
+        axes.bar([p + width / 2 for p in positions], warm, width, label="warm (steady state)", color="#2c7fb8")
+        axes.set_ylabel(axis_label)
+        axes.set_title(f"{axis_label} — cold vs warm\n{subtitle}", fontsize=10)
+        axes.legend(fontsize=8)
+        _save(figure, filename)
+
+    for metric, axis_label, filename in _SINGLE_METRICS:
+        values = [_value(record, metric) for record in records]
+        if not any(values):
+            continue
+        figure, axes = _new_axes()
+        axes.bar(list(positions), values, color="#2c7fb8")
+        axes.set_ylabel(axis_label)
+        axes.set_title(f"{axis_label}\n{subtitle}", fontsize=10)
+        _save(figure, filename)
 
 
 if __name__ == "__main__":
