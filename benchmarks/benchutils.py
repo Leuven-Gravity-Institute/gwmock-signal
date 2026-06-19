@@ -58,7 +58,8 @@ def _cpu_model() -> str:
             if line.startswith("model name"):
                 return line.split(":", 1)[1].strip()
     except OSError:
-        pass
+        # Best-effort provenance: if /proc/cpuinfo is unavailable, fall back to platform data.
+        return platform.processor() or "unknown"
     return platform.processor() or "unknown"
 
 
