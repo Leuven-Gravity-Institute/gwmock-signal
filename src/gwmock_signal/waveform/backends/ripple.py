@@ -480,6 +480,18 @@ class RippleBackend(WaveformBackend):
             n_samples=n_samples,
         )
 
+    def coalescence_placement(self, n_samples: int, sampling_frequency: float) -> tuple[int, float]:
+        """Return ``(merger_index, epoch)`` for placing coalescence in a segment.
+
+        ``merger_index`` is the sample at which coalescence sits after the
+        time-domain roll (near the segment end, leaving a small ringdown pad), and
+        ``epoch`` is the time of the first sample relative to coalescence (negative),
+        so a caller places coalescence at ``epoch + tc``. Shared by the time-domain
+        backend and the batched device path so both use the same convention.
+        """
+        merger_index = round((1.0 - self._ringdown_fraction) * n_samples)
+        return merger_index, -merger_index / sampling_frequency
+
     def _to_time_domain(self, fd: FrequencyDomainPolarizations) -> tuple[np.ndarray, np.ndarray, float]:
         """Inverse-FFT frequency-domain polarizations and place coalescence in the segment.
 
@@ -495,8 +507,7 @@ class RippleBackend(WaveformBackend):
         # With tc=0 coalescence lands at sample 0 and the inspiral wraps to the tail.
         # Roll it forward so coalescence sits near the segment end, leaving the
         # inspiral contiguous before it and a small ringdown pad after.
-        merger_index = round((1.0 - self._ringdown_fraction) * fd.n_samples)
+        merger_index, epoch = self.coalescence_placement(fd.n_samples, fd.sampling_frequency)
         hp_t = np.roll(hp_t, merger_index)
         hc_t = np.roll(hc_t, merger_index)
-        epoch = -merger_index * dt
         return hp_t, hc_t, epoch
