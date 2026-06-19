@@ -241,6 +241,8 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     start_time: float,
     end_time: float,
     backend: RippleBackend | None = None,
+    n_chirp_mass_bins: int = 1,
+    chunk_size: int | None = None,
     interpolate_if_offset: bool = True,
 ) -> list[DetectorStrainStack]:
     """Generate a catalogue on device and assemble it into fixed-duration segments.
@@ -253,6 +255,15 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     (:func:`simulate_cbc_batch` then :func:`assemble_segments`) so you can supply a
     background per segment.
 
+    Two independent memory controls (composable):
+
+    - ``chunk_size`` bounds the *peak* generation memory by processing at most that
+      many events per batched call. All chunks of a bin share that bin's grid, so
+      chunking is **output-identical** to processing the whole bin at once.
+    - ``n_chirp_mass_bins`` bounds the *buffer length* by generating heavier events
+      on shorter grids. Because each bin uses a different frequency resolution,
+      binning is **not** bit-identical to a single grid (see below).
+
     Args:
         approximant: A supported ripple approximant name.
         detector_names: Detector codes (e.g. ``"H1"``, ``"L1"``).
@@ -264,7 +275,17 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         start_time: GPS start of the first segment.
         end_time: GPS time the tiling must cover up to; the final segment is the
             first one whose span reaches or passes ``end_time``.
-        backend: Optional configured :class:`RippleBackend`.
+        backend: Optional configured :class:`RippleBackend`. If it pins a
+            ``segment_duration`` that grid is used for every bin (binning then
+            saves no buffer memory but the run stays output-identical).
+        n_chirp_mass_bins: Number of chirp-mass groups generated separately, each on
+            its own worst-case grid (lightest first), injected on top of the
+            earlier bins. ``1`` (default) uses a single grid sized for the
+            lowest-mass event. Binned output agrees with a single-grid run only at
+            the per-event grid discretization level (a fraction of a percent in
+            overlap) — the resolution the per-event path uses.
+        chunk_size: If set, generate at most this many events per batched call
+            (within each bin). Output-identical to ``None``; only bounds peak memory.
         interpolate_if_offset: Forwarded to :func:`assemble_segments`.
 
     Returns:
@@ -275,24 +296,77 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         raise ValueError("segment_duration must be > 0")
     if end_time <= start_time:
         raise ValueError("end_time must be greater than start_time")
+    if n_chirp_mass_bins < 1:
+        raise ValueError("n_chirp_mass_bins must be >= 1")
+    if chunk_size is not None and chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
 
+    backend = backend or RippleBackend()
     n_segments = int(np.ceil((end_time - start_time) / segment_duration))
     segment_start_times = start_time + np.arange(n_segments) * segment_duration
 
-    batch = simulate_cbc_batch(
-        approximant,
-        detector_names,
-        sampling_frequency=sampling_frequency,
-        minimum_frequency=minimum_frequency,
-        parameters=parameters,
-        backend=backend,
-    )
-    return assemble_segments(
-        batch,
-        segment_duration=segment_duration,
-        segment_start_times=segment_start_times,
-        interpolate_if_offset=interpolate_if_offset,
-    )
+    segments: list[DetectorStrainStack] | None = None
+    for bin_indices in _chirp_mass_bins(parameters, n_chirp_mass_bins):
+        # Pin the grid to this bin's worst case so every chunk of the bin shares it
+        # (chunking stays output-identical). A user-pinned backend is left as-is.
+        bin_backend = _bin_backend(backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
+        for chunk_indices in _count_chunks(bin_indices, chunk_size):
+            chunk_parameters = {key: np.asarray(values)[chunk_indices] for key, values in parameters.items()}
+            batch = simulate_cbc_batch(
+                approximant,
+                detector_names,
+                sampling_frequency=sampling_frequency,
+                minimum_frequency=minimum_frequency,
+                parameters=chunk_parameters,
+                backend=bin_backend,
+            )
+            # Chain groups: inject each on top of the segments built from earlier ones.
+            backgrounds = [stack.to_dict() for stack in segments] if segments is not None else None
+            segments = assemble_segments(
+                batch,
+                segment_duration=segment_duration,
+                segment_start_times=segment_start_times,
+                backgrounds=backgrounds,
+                interpolate_if_offset=interpolate_if_offset,
+            )
+    return segments if segments is not None else []
+
+
+def _chirp_mass(parameters: Mapping[str, object]) -> np.ndarray:
+    """Return the (detector-frame) chirp mass for every event in ``parameters``."""
+    mass1 = np.asarray(_required(parameters, "detector_frame_mass_1"), dtype=float)
+    mass2 = np.asarray(_required(parameters, "detector_frame_mass_2"), dtype=float)
+    return (mass1 * mass2) ** 0.6 / (mass1 + mass2) ** 0.2
+
+
+def _chirp_mass_bins(parameters: Mapping[str, object], n_bins: int) -> list[np.ndarray]:
+    """Split event indices into ``n_bins`` contiguous chirp-mass groups (lightest first).
+
+    Empty bins (when ``n_bins`` exceeds the event count) are dropped.
+    """
+    order = np.argsort(_chirp_mass(parameters))
+    return [group for group in np.array_split(order, n_bins) if group.size > 0]
+
+
+def _count_chunks(indices: np.ndarray, chunk_size: int | None) -> list[np.ndarray]:
+    """Split ``indices`` into consecutive chunks of at most ``chunk_size`` (or one chunk)."""
+    if chunk_size is None:
+        return [indices]
+    return [indices[start : start + chunk_size] for start in range(0, len(indices), chunk_size)]
+
+
+def _bin_backend(
+    backend: RippleBackend,
+    parameters: Mapping[str, object],
+    bin_indices: np.ndarray,
+    minimum_frequency: float,
+    sampling_frequency: float,
+) -> RippleBackend:
+    """Return a backend pinned to the bin's worst-case grid (or ``backend`` if already pinned)."""
+    if backend.segment_duration is not None:
+        return backend
+    lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
+    return backend.with_segment_duration(backend.segment_duration_for(lightest, minimum_frequency, sampling_frequency))
 
 
 def _required(parameters: Mapping[str, object], name: str) -> object:

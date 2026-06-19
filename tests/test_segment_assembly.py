@@ -118,3 +118,35 @@ def test_simulate_cbc_catalogue_rejects_empty_span() -> None:
             start_time=10.0,
             end_time=10.0,
         )
+
+
+def test_simulate_cbc_catalogue_rejects_invalid_bin_count() -> None:
+    """n_chirp_mass_bins must be >= 1 (validated before any generation)."""
+    with pytest.raises(ValueError, match="n_chirp_mass_bins must be >= 1"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            ["H1"],
+            sampling_frequency=2048.0,
+            minimum_frequency=20.0,
+            parameters={},
+            segment_duration=4.0,
+            start_time=0.0,
+            end_time=16.0,
+            n_chirp_mass_bins=0,
+        )
+
+
+def test_simulate_cbc_catalogue_rejects_nonpositive_chunk_size() -> None:
+    """chunk_size, when given, must be >= 1 (validated before any generation)."""
+    with pytest.raises(ValueError, match="chunk_size must be >= 1"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            ["H1"],
+            sampling_frequency=2048.0,
+            minimum_frequency=20.0,
+            parameters={},
+            segment_duration=4.0,
+            start_time=0.0,
+            end_time=16.0,
+            chunk_size=0,
+        )

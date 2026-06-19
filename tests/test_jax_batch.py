@@ -150,3 +150,89 @@ def test_simulate_cbc_catalogue_tiles_span_and_places_signals() -> None:
     assert np.all(np.asarray(segments[5]["H1"].value) == 0.0)  # [144, 160): no signal
     assert np.any(np.asarray(segments[2]["H1"].value) != 0.0)  # [96, 112): event 0 coalescence (100)
     assert np.any(np.asarray(segments[3]["H1"].value) != 0.0)  # [112, 128): event 1 inspiral toward 130
+
+
+_WIDE_MASS_CATALOGUE = {
+    "detector_frame_mass_1": np.array([45.0, 30.0, 8.0, 1.6]),
+    "detector_frame_mass_2": np.array([40.0, 25.0, 6.0, 1.4]),
+    "luminosity_distance": np.array([400.0, 500.0, 300.0, 100.0]),
+    "spin_1z": np.array([0.3, -0.1, 0.2, 0.0]),
+    "spin_2z": np.array([-0.2, 0.1, 0.0, 0.0]),
+    "inclination": np.array([0.9, 0.6, 1.0, 0.7]),
+    "coa_phase": np.array([0.3, 1.0, 0.5, 0.0]),
+    "right_ascension": np.array([1.375, 0.5, 2.0, 3.0]),
+    "declination": np.array([-1.211, 0.3, 0.5, -0.2]),
+    "polarization_angle": np.array([2.659, 0.0, 1.0, 0.5]),
+    "coa_time": np.array([200.0, 260.0, 320.0, 380.0]),
+}
+
+
+@pytest.mark.integration
+def test_simulate_cbc_catalogue_binning_agrees_with_single_grid() -> None:
+    """Chirp-mass binning agrees with a single grid up to per-event discretization."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    common = {
+        "sampling_frequency": 2048.0,
+        "minimum_frequency": 30.0,
+        "parameters": _WIDE_MASS_CATALOGUE,
+        "segment_duration": 64.0,
+        "start_time": 0.0,
+        "end_time": 512.0,
+    }
+    unbinned = simulate_cbc_catalogue("IMRPhenomD", _DETECTORS, n_chirp_mass_bins=1, **common)
+    binned = simulate_cbc_catalogue("IMRPhenomD", _DETECTORS, n_chirp_mass_bins=3, **common)
+
+    assert len(binned) == len(unbinned)
+    for single, split in zip(unbinned, binned, strict=True):
+        assert single["H1"].t0.value == split["H1"].t0.value
+    for detector in _DETECTORS:
+        a = np.concatenate([s[detector].value for s in unbinned])
+        b = np.concatenate([s[detector].value for s in binned])
+        overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
+        assert overlap > 0.99, f"{detector} binned/unbinned overlap {overlap:.4f}"
+
+
+def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
+    """Asking for more bins than events drops the empty bins and still runs."""
+    catalogue = {key: value[:2] for key, value in _WIDE_MASS_CATALOGUE.items()}
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    segments = simulate_cbc_catalogue(
+        "IMRPhenomD",
+        _DETECTORS,
+        sampling_frequency=2048.0,
+        minimum_frequency=30.0,
+        parameters=catalogue,
+        segment_duration=64.0,
+        start_time=0.0,
+        end_time=512.0,
+        n_chirp_mass_bins=5,  # > 2 events
+        backend=RippleBackend(segment_duration=8.0),
+    )
+    assert len(segments) == 8
+
+
+@pytest.mark.integration
+def test_simulate_cbc_catalogue_chunking_is_output_identical() -> None:
+    """Count-chunking yields exactly the same segments as one batch (same grid)."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    common = {
+        "sampling_frequency": 2048.0,
+        "minimum_frequency": 30.0,
+        "parameters": _WIDE_MASS_CATALOGUE,
+        "segment_duration": 64.0,
+        "start_time": 0.0,
+        "end_time": 512.0,
+    }
+    whole = simulate_cbc_catalogue("IMRPhenomD", _DETECTORS, chunk_size=None, **common)
+    chunked = simulate_cbc_catalogue("IMRPhenomD", _DETECTORS, chunk_size=2, **common)
+
+    assert len(chunked) == len(whole)
+    for single, split in zip(whole, chunked, strict=True):
+        for detector in _DETECTORS:
+            a, b = single[detector].value, split[detector].value
+            peak = max(np.max(np.abs(a)), np.max(np.abs(b)))
+            if peak > 0.0:
+                assert np.max(np.abs(a - b)) < 1e-9 * peak
