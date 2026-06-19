@@ -34,14 +34,25 @@ uv run python benchmarks/plot_consistency.py \
 
 ## Results
 
-!!! note "Populated per release"
+Run on **gwmock-signal 0.9.0**. The ripple and LAL backends agree to a
+**worst-case match of 0.9992** across all approximants (`IMRPhenomXHM`); every
+median match is ≥ 0.9996. `TaylorF2` is anchored against LAL's frequency-domain
+TaylorF2 in the test suite (no time-domain LAL implementation).
 
-    The figure and table below are generated from a run on a **released** version
-    (annotated with that version) and refreshed per release. In development the
-    backends agree to a worst-case match better than 0.999 across all approximants.
-
-<!-- The release benchmark run adds the figure and table here, e.g.:
 ![ripple vs LAL match](figures/consistency_matches.svg)
 
-{% include "dev/figures/consistency_table.md" %}
--->
+| Approximant              | f_min [Hz] | worst match | median match |
+| ------------------------ | ---------: | ----------: | -----------: |
+| `IMRPhenomD`             |         20 |     0.99946 |      0.99975 |
+| `IMRPhenomD_NRTidalv2`   |         40 |     0.99995 |      0.99997 |
+| `IMRPhenomHM`            |         20 |     0.99925 |      0.99970 |
+| `IMRPhenomPv2`           |         20 |     0.99969 |      0.99975 |
+| `IMRPhenomXAS`           |         20 |     0.99944 |      0.99974 |
+| `IMRPhenomXAS_NRTidalv3` |         40 |     0.99990 |      0.99996 |
+| `IMRPhenomXHM`           |         20 |     0.99918 |      0.99958 |
+| `IMRPhenomXP`            |         20 |     0.99972 |      0.99975 |
+| `IMRPhenomXPHM`          |         20 |     0.99945 |      0.99956 |
+
+The residual ~1e-3 gap is dominated by the device path's on-device sidereal-time
+model (default leap seconds, `dut1 = 0`); see
+[Batched GPU simulation](../user_guide/gpu-batched-simulation.md).
