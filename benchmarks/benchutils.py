@@ -75,7 +75,13 @@ def _gpu_models() -> list[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    # A GPU-capable node with no GPU allocated still has nvidia-smi: it exits
+    # non-zero and prints "No devices were found", which must not be read as a model.
+    if completed.returncode != 0:
+        return []
+    return [
+        line.strip() for line in completed.stdout.splitlines() if line.strip() and "No devices were found" not in line
+    ]
 
 
 def allocated_cpu_cores() -> int:
