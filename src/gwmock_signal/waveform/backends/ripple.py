@@ -146,6 +146,29 @@ class RippleBackend(WaveformBackend):
         """Return the ripple approximants supported by this backend."""
         return list(_SUPPORTED_APPROXIMANTS)
 
+    @property
+    def segment_duration(self) -> float | None:
+        """The fixed analysis-segment length in seconds, or ``None`` if auto-sized."""
+        return self._segment_duration
+
+    def with_segment_duration(self, segment_duration: float) -> RippleBackend:
+        """Return a copy of this backend pinned to a fixed ``segment_duration``.
+
+        Same ``f_ref`` and ``ringdown_fraction``; useful for forcing one shared grid
+        across several batched calls (e.g. count-chunked catalogue generation).
+        """
+        return RippleBackend(
+            f_ref=self._f_ref,
+            ringdown_fraction=self._ringdown_fraction,
+            segment_duration=segment_duration,
+        )
+
+    def segment_duration_for(
+        self, chirp_mass_solar: float, minimum_frequency: float, sampling_frequency: float
+    ) -> float:
+        """Worst-case segment duration (seconds) the batch path uses for this chirp mass."""
+        return self._segment_samples(chirp_mass_solar, minimum_frequency, sampling_frequency) / sampling_frequency
+
     def generate_td_waveform(
         self,
         approximant: str,
