@@ -76,9 +76,10 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("docs/dev/figures"))
     args = parser.parse_args()
 
-    records = load_results(args.results_dir)
+    # The results dir may also hold consistency records; keep only performance ones.
+    records = [r for r in load_results(args.results_dir) if "wall_seconds_cold" in r.get("metrics", {})]
     if not records:
-        raise SystemExit(f"No benchmark records found in {args.results_dir}")
+        raise SystemExit(f"No performance records found in {args.results_dir}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     versions = sorted({record["provenance"]["gwmock_signal_version"] for record in records})
