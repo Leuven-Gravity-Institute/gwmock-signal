@@ -496,3 +496,98 @@ def test_generate_fd_polarizations_matches_lal_fd() -> None:
     in_band = freqs[:n_bins] >= _F_MIN
     match = _fd_match(np.asarray(fd.plus)[:n_bins], lal_fd[:n_bins], in_band)
     assert match > 0.99, f"FD match {match:.4f} below threshold"
+
+
+_BATCH_EVENTS = [
+    {
+        "detector_frame_mass_1": 40.0,
+        "detector_frame_mass_2": 31.0,
+        "luminosity_distance": 400.0,
+        "spin_1z": 0.5,
+        "spin_2z": -0.2,
+        "inclination": 0.9,
+        "coa_phase": 0.3,
+    },
+    {
+        "detector_frame_mass_1": 36.0,
+        "detector_frame_mass_2": 29.0,
+        "luminosity_distance": 410.0,
+        "spin_1z": 0.0,
+        "spin_2z": 0.0,
+        "inclination": 0.4,
+        "coa_phase": 0.0,
+    },
+    {
+        "detector_frame_mass_1": 55.0,
+        "detector_frame_mass_2": 48.0,
+        "luminosity_distance": 800.0,
+        "spin_1z": 0.2,
+        "spin_2z": 0.1,
+        "inclination": 1.2,
+        "coa_phase": 1.0,
+    },
+]
+
+
+def _as_struct_of_arrays(events: list[dict]) -> dict:
+    return {key: np.array([event[key] for event in events]) for key in events[0]}
+
+
+def test_generate_fd_polarizations_batch_matches_per_event() -> None:
+    """Each row of the batched FD evaluation equals the per-event call on the same grid."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    backend = RippleBackend(segment_duration=8.0)  # fixed grid so both paths share n_samples
+    batch = backend.generate_fd_polarizations_batch(
+        "IMRPhenomD",
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=_as_struct_of_arrays(_BATCH_EVENTS),
+    )
+    assert batch.plus.shape == (len(_BATCH_EVENTS), batch.n_samples // 2 + 1)
+    for i, event in enumerate(_BATCH_EVENTS):
+        single = backend.generate_fd_polarizations(
+            "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, **event
+        )
+        for batched_pol, single_pol in ((batch.plus[i], single.plus), (batch.cross[i], single.cross)):
+            diff = np.max(np.abs(np.asarray(batched_pol) - np.asarray(single_pol)))
+            assert diff < 1e-9 * np.max(np.abs(np.asarray(single_pol)))
+
+
+def test_generate_fd_polarizations_batch_sizes_worst_case() -> None:
+    """Without a fixed segment_duration the batch grid matches the longest (lightest) event."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    backend = RippleBackend()
+    batch = backend.generate_fd_polarizations_batch(
+        "IMRPhenomD",
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=_as_struct_of_arrays(_BATCH_EVENTS),
+    )
+    # The lightest pair (36 + 29) has the longest chirp time and sets the segment length.
+    lightest = min(_BATCH_EVENTS, key=lambda e: e["detector_frame_mass_1"] + e["detector_frame_mass_2"])
+    single = backend.generate_fd_polarizations(
+        "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, **lightest
+    )
+    assert batch.n_samples == single.n_samples
+
+
+def test_generate_fd_polarizations_batch_rejects_in_plane_spin_for_aligned() -> None:
+    """An aligned-spin model rejects any nonzero in-plane spin in the batch."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    params = _as_struct_of_arrays(_BATCH_EVENTS)
+    params["spin_1x"] = np.array([0.0, 0.3, 0.0])  # one event has in-plane spin
+    with pytest.raises(ValueError, match="spin_1x must be zero"):
+        RippleBackend().generate_fd_polarizations_batch(
+            "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, parameters=params
+        )
+
+
+def test_generate_fd_polarizations_batch_rejects_length_mismatch() -> None:
+    """Mismatched parameter array lengths raise ValueError."""
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    params = _as_struct_of_arrays(_BATCH_EVENTS)
+    params["spin_2z"] = np.array([0.0, 0.0])  # wrong length
+    with pytest.raises(ValueError, match="expected"):
+        RippleBackend().generate_fd_polarizations_batch(
+            "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, parameters=params
+        )

@@ -28,6 +28,7 @@ precessing models (``IMRPhenomPv2``, ``IMRPhenomXP``, ``IMRPhenomXPHM``).
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -193,6 +194,150 @@ class RippleBackend(WaveformBackend):
         """
         resolved = self._resolve_parameters(approximant, sampling_frequency, minimum_frequency, **params)
         return self._evaluate_fd(approximant, resolved, sampling_frequency, minimum_frequency)
+
+    def generate_fd_polarizations_batch(
+        self,
+        approximant: str,
+        *,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        parameters: Mapping[str, object],
+    ) -> FrequencyDomainPolarizations:
+        """Generate ripple FD polarizations for a batch of events on one shared grid.
+
+        Evaluates ripple under ``jax.vmap`` over the catalogue, so all events share a
+        single frequency grid. Because ``vmap`` needs a fixed shape, the grid is sized
+        (worst case) for the longest inspiral in the batch — the smallest chirp mass,
+        via the same post-Newtonian estimate as the per-event path — unless a fixed
+        ``segment_duration`` was set on the backend. This is the on-device entry point
+        for catalogue-scale (GPU) generation.
+
+        Args:
+            approximant: A supported ripple approximant name.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz; bins below it are zeroed.
+            parameters: Mapping of **canonical** gwmock-pop parameter names (no aliases)
+                to 1-D arrays of equal length ``n_events`` (e.g. ``detector_frame_mass_1``,
+                ``spin_1z``, ``inclination``). Omitted optional parameters default to zero.
+
+        Returns:
+            A :class:`FrequencyDomainPolarizations` whose ``plus`` and ``cross`` are
+            ``(n_events, n_samples // 2 + 1)`` JAX arrays (coalescence at ``t = 0``).
+        """
+        ripple_params, n_samples = self._resolve_batch(approximant, sampling_frequency, minimum_frequency, parameters)
+        jnp = self._jnp
+        delta_f = sampling_frequency / n_samples
+        freqs = jnp.arange(n_samples // 2 + 1) * delta_f
+        in_band = freqs >= minimum_frequency
+        f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
+        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref)
+
+        def _one(event: dict) -> tuple:
+            polarizations = waveform(freqs, event)
+            return (
+                jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0)),
+                jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0)),
+            )
+
+        plus, cross = self._jax.vmap(_one)(ripple_params)
+        return FrequencyDomainPolarizations(
+            frequencies=freqs,
+            plus=plus,
+            cross=cross,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+        )
+
+    def _resolve_batch(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        parameters: Mapping[str, object],
+    ) -> tuple[dict, int]:
+        """Validate a batch of canonical parameters and build ripple-native arrays.
+
+        Returns ``(ripple_params, n_samples)`` where ``ripple_params`` is a dict of
+        equal-length JAX arrays ready for ``vmap`` and ``n_samples`` is the shared,
+        worst-case segment length.
+        """
+        if approximant not in _SUPPORTED_APPROXIMANTS:
+            raise ValueError(
+                f"RippleBackend does not support approximant {approximant!r}. "
+                f"Available: {list(_SUPPORTED_APPROXIMANTS)}."
+            )
+        if sampling_frequency <= 0:
+            raise ValueError("sampling_frequency must be > 0")
+        if minimum_frequency <= 0:
+            raise ValueError("minimum_frequency must be > 0")
+
+        jnp = self._jnp
+        mass1 = self._batch_array(parameters, "detector_frame_mass_1")
+        n_events = mass1.shape[0]
+        mass2 = self._batch_array(parameters, "detector_frame_mass_2", n_events)
+        distance = self._batch_array(parameters, "luminosity_distance", n_events)
+        inclination = self._batch_array(parameters, "inclination", n_events, default=0.0)
+        coa_phase = self._batch_array(parameters, "coa_phase", n_events, default=0.0)
+        spins = {
+            name: self._batch_array(parameters, name, n_events, default=0.0)
+            for name in ("spin_1x", "spin_1y", "spin_1z", "spin_2x", "spin_2y", "spin_2z")
+        }
+        lambda_1 = self._batch_array(parameters, "lambda_1", n_events, default=0.0)
+        lambda_2 = self._batch_array(parameters, "lambda_2", n_events, default=0.0)
+
+        is_precessing = approximant in _PRECESSING_MODELS
+        if not is_precessing:
+            for name in ("spin_1x", "spin_1y", "spin_2x", "spin_2y"):
+                if bool(jnp.any(spins[name] != 0.0)):
+                    raise ValueError(f"{approximant} is an aligned-spin model; {name} must be zero for all events.")
+        is_tidal = approximant in _TIDAL_MODELS
+        if not is_tidal and (bool(jnp.any(lambda_1 != 0.0)) or bool(jnp.any(lambda_2 != 0.0))):
+            raise ValueError(f"{approximant} does not support tidal parameters; use an NRTidal approximant.")
+        if bool(jnp.any(lambda_1 < 0.0)) or bool(jnp.any(lambda_2 < 0.0)):
+            raise ValueError("lambda_1 and lambda_2 must be >= 0")
+
+        chirp_mass, eta = self._jax.vmap(self._conversions.ms_to_Mc_eta)(jnp.stack([mass1, mass2], axis=-1))
+        n_samples = self._segment_samples(float(jnp.min(chirp_mass)), minimum_frequency, sampling_frequency)
+
+        ripple_params = {
+            "M_c": chirp_mass,
+            "eta": eta,
+            "s1_z": spins["spin_1z"],
+            "s2_z": spins["spin_2z"],
+            "d_L": distance,
+            "phase_c": coa_phase,
+            "iota": inclination,
+        }
+        if is_precessing:
+            ripple_params["s1_x"] = spins["spin_1x"]
+            ripple_params["s1_y"] = spins["spin_1y"]
+            ripple_params["s2_x"] = spins["spin_2x"]
+            ripple_params["s2_y"] = spins["spin_2y"]
+        if is_tidal:
+            ripple_params["lambda_1"] = lambda_1
+            ripple_params["lambda_2"] = lambda_2
+        return ripple_params, n_samples
+
+    def _batch_array(
+        self,
+        parameters: Mapping[str, object],
+        name: str,
+        n_events: int | None = None,
+        *,
+        default: float | None = None,
+    ) -> Array:
+        """Return one parameter as a 1-D float64 JAX array, validating its length."""
+        jnp = self._jnp
+        if name not in parameters:
+            if default is None:
+                raise ValueError(f"Missing required batch parameter: {name!r}")
+            return jnp.full(n_events, default, dtype=jnp.float64)
+        values = jnp.asarray(parameters[name], dtype=jnp.float64)
+        if values.ndim != 1:
+            raise ValueError(f"Batch parameter {name!r} must be 1-D; got shape {values.shape}.")
+        if n_events is not None and values.shape[0] != n_events:
+            raise ValueError(f"Batch parameter {name!r} has length {values.shape[0]}, expected {n_events}.")
+        return values
 
     def _resolve_parameters(
         self,
