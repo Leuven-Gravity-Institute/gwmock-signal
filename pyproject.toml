@@ -128,10 +128,6 @@ convention = "google"
 # ARG001: allow unused function arguments (common in fixtures)
 # PLC0415: allow import statements not at the top level
 # PLR2004: allow magic values in the unit tests
-# Benchmark scripts: lazy/optional-dependency imports and the nvidia-smi probe.
-"benchmarks/*" = ["S603", "S607", "PLC0415"]
-# S603/S607: querying nvidia-smi for the GPU model in provenance
-# PLC0415: lazy imports keep optional deps (jax/pycbc) out of module import
 
 [[tool.uv.index]]
 name = "testpypi"

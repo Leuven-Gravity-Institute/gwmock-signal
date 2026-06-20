@@ -24,8 +24,10 @@ remains the default; this page covers the batched device path.
 !!! tip "See also"
 
     The speed of this batched/GPU path against the per-event CPU baseline is
-    quantified in [Performance](../dev/performance.md), and the ripple backend's
-    agreement with the LAL baseline in [Consistency](../dev/consistency.md).
+    quantified on the gwmock-benchmark site
+    ([Performance](https://leuven-gravity-institute.github.io/gwmock-benchmark/signal/performance/)),
+    and the ripple backend's agreement with the LAL baseline in
+    [Consistency](https://leuven-gravity-institute.github.io/gwmock-benchmark/signal/consistency/).
 
 ## Two independent durations
 
