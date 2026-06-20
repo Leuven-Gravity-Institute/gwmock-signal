@@ -591,3 +591,54 @@ def test_generate_fd_polarizations_batch_rejects_length_mismatch() -> None:
         RippleBackend().generate_fd_polarizations_batch(
             "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, parameters=params
         )
+
+
+# Frequency-domain <-> time-domain consistency: the Fourier transform of the
+# conditioned TD waveform (injected at tc) must reproduce the FD waveform, so
+# simulated data stays consistent with frequency-domain inference. LAL's
+# ChooseTDWaveform re-pins the epoch to the amplitude peak and does NOT satisfy
+# this; gwmock-signal places coalescence at the FD phase reference and must.
+_ROUNDTRIP_CASES = [
+    ("IMRPhenomD", {"spin_1z": 0.5, "spin_2z": -0.2}, 20.0),
+    ("IMRPhenomHM", {"spin_1z": 0.5, "spin_2z": -0.2}, 20.0),
+    ("IMRPhenomXAS", {"spin_1z": 0.5, "spin_2z": -0.2}, 20.0),
+    ("IMRPhenomXHM", {"spin_1z": 0.5, "spin_2z": -0.2}, 20.0),
+    (
+        "IMRPhenomD_NRTidalv2",
+        {"detector_frame_mass_1": 1.6, "detector_frame_mass_2": 1.4, "lambda_1": 400.0, "lambda_2": 500.0},
+        40.0,
+    ),
+    ("IMRPhenomPv2", {"spin_1x": 0.3, "spin_1y": 0.1, "spin_1z": 0.2, "spin_2x": -0.1, "spin_2y": 0.2}, 20.0),
+    ("IMRPhenomXP", {"spin_1x": 0.3, "spin_1y": 0.1, "spin_1z": 0.2, "spin_2x": -0.1, "spin_2y": 0.2}, 20.0),
+]
+
+
+@pytest.mark.parametrize(
+    ("approximant", "extra", "f_min"), _ROUNDTRIP_CASES, ids=[case[0] for case in _ROUNDTRIP_CASES]
+)
+def test_ripple_fd_td_roundtrip(approximant: str, extra: dict, f_min: float) -> None:
+    """FFT of the conditioned TD waveform reproduces the FD waveform to machine precision.
+
+    Guards the coalescence-placement convention: a signal injected at ``tc`` must
+    Fourier-transform back to the frequency-domain template (``FFT(TD) == FD``), so
+    simulated data is consistent with frequency-domain inference.
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+    backend = RippleBackend()
+    params = {**_BBH_PARAMS, **extra}
+    common = {"sampling_frequency": _FS, "minimum_frequency": f_min}
+    fd = backend.generate_fd_polarizations(approximant, **common, **params)
+    td = backend.generate_td_waveform(approximant, tc=_TC, **common, **params)
+
+    freqs = np.asarray(fd.frequencies)
+    in_band = freqs >= f_min
+    for polarization in ("plus", "cross"):
+        template = np.asarray(getattr(fd, polarization))[in_band]
+        series = td[polarization]
+        epoch = float(series.t0.value) - _TC
+        # FFT the TD samples and undo the epoch shift; this must recover the FD waveform.
+        recon = (np.exp(-2j * np.pi * freqs * epoch) * np.fft.rfft(series.value, n=fd.n_samples) / _FS)[in_band]
+        overlap = np.real(np.sum(recon * np.conj(template))) / np.sqrt(
+            np.sum(np.abs(recon) ** 2) * np.sum(np.abs(template) ** 2)
+        )
+        assert 1.0 - overlap < 1e-6, f"{approximant} {polarization}: FFT(TD) vs FD overlap {overlap:.8f}"
