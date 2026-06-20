@@ -50,9 +50,14 @@ _SINGLE_METRICS = (
 
 
 def _bar_label(record: dict) -> str:
-    """Return a compact axis label: ``label`` plus the device it ran on."""
+    """Return a compact axis label: ``label`` plus the device it ran on.
+
+    A GPU run is labelled by its GPU; a CPU run (``n_gpus == 0``) always by its CPU,
+    regardless of any GPU that merely happens to be present on the node.
+    """
     provenance = record["provenance"]
-    device = (provenance["gpu_models"] or [provenance["cpu_model"]])[0]
+    gpu_models = provenance.get("gpu_models") or []
+    device = gpu_models[0] if provenance.get("n_gpus") and gpu_models else provenance["cpu_model"]
     return f"{record['label']}\n{device}"
 
 
@@ -71,9 +76,10 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("docs/dev/figures"))
     args = parser.parse_args()
 
-    records = load_results(args.results_dir)
+    # The results dir may also hold consistency records; keep only performance ones.
+    records = [r for r in load_results(args.results_dir) if "wall_seconds_cold" in r.get("metrics", {})]
     if not records:
-        raise SystemExit(f"No benchmark records found in {args.results_dir}")
+        raise SystemExit(f"No performance records found in {args.results_dir}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     versions = sorted({record["provenance"]["gwmock_signal_version"] for record in records})
