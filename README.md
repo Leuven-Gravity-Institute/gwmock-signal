@@ -156,7 +156,10 @@ gwmock-signal inject cbc --params examples/gw150914_like.json --network H1L1V1 -
   site — see
   [Performance](https://leuven-gravity-institute.github.io/gwmock-benchmark/signal/performance/)
   and
-  [Consistency](https://leuven-gravity-institute.github.io/gwmock-benchmark/signal/consistency/)
+  [Consistency](https://leuven-gravity-institute.github.io/gwmock-benchmark/signal/consistency/).
+  The underlying records are also published as a static JSON
+  [Data API](https://leuven-gravity-institute.github.io/gwmock-benchmark/data-api/)
+  (`.../data/v1/records.json`) for programmatic retrieval
 
 ### Public source-type backend lookup
 
