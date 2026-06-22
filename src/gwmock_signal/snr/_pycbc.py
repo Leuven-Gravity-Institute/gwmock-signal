@@ -34,9 +34,9 @@ def optimal_snr(
 
     Computes sqrt(<h|h>_PSD) via pycbc.filter.sigma. The strain is zero-padded
     in the time domain so that the FFT frequency resolution reaches target_delta_f
-    (default: min(natural_delta_f, 1/32 Hz)) before calling sigma. This ensures
-    pycbc's floor-truncated cutoff bin is at most ~0.03 Hz below f_low, reducing
-    the over-estimate for short (high-mass) CBC from ~0.3% to < 0.02%.
+    (default: min(natural_delta_f, 1/128 Hz)) before calling sigma. This ensures
+    pycbc's floor-truncated cutoff bin is below f_low, reducing
+    the over-estimate for short (high-mass) CBC.
     Padding only ever refines resolution: if the natural grid is already finer
     than target_delta_f the strain is used as-is. The supplied PSD is
     interpolated onto the padded grid via pycbc.psd.interpolate.
@@ -46,7 +46,7 @@ def optimal_snr(
         psd: Noise PSD as a pycbc FrequencySeries.
         low_frequency_cutoff: Lower frequency bound in Hz.
         target_delta_f: Target frequency resolution in Hz. Default: min of the
-            natural grid spacing and 1/32 Hz (never coarsens the grid).
+            natural grid spacing and 1/128 Hz (never coarsens the grid).
 
     Returns:
         Optimal SNR as a non-negative float.
@@ -65,7 +65,7 @@ def optimal_snr(
     natural_delta_f = 1.0 / float(td.duration)
 
     if target_delta_f is None:
-        target_delta_f = min(natural_delta_f, 1.0 / 32.0)
+        target_delta_f = min(natural_delta_f, 1.0 / 128.0)
 
     if natural_delta_f > target_delta_f:
         n_padded = round(float(td.sample_rate) / target_delta_f)
@@ -100,10 +100,9 @@ def matched_filter_snr(
     Computes the SNR magnitude ``|<template|data>_PSD| / sigma`` via
     ``pycbc.filter.matched_filter``. Both template and data are zero-padded in
     the time domain so that the FFT frequency resolution reaches target_delta_f
-    (default: min(natural_delta_f_template, 1/32 Hz)) before the matched filter
+    (default: min(natural_delta_f_template, 1/128 Hz)) before the matched filter
     is applied. This corrects the same floor-truncated cutoff-bin bias fixed for
-    optimal_snr in ISS-007: pycbc's kmin = int(f_low / delta_f) floor causes the
-    internal sigma normalization to include power below f_low on coarse grids.
+    optimal_snr.
     The PSD is interpolated to the padded grid via pycbc.psd.interpolate. The
     returned SNR time series is trimmed to len(data) samples.
 
@@ -117,7 +116,7 @@ def matched_filter_snr(
         psd: Noise PSD as a ``pycbc.types.FrequencySeries``.
         low_frequency_cutoff: Lower frequency bound in Hz.
         target_delta_f: Target frequency resolution in Hz. Default: min of the
-            template's natural grid spacing and 1/32 Hz (never coarsens).
+            template's natural grid spacing and 1/128 Hz (never coarsens).
 
     Returns:
         SNR magnitude as a gwpy ``TimeSeries`` with len(data) samples.
@@ -139,7 +138,7 @@ def matched_filter_snr(
     natural_delta_f = 1.0 / float(td_template.duration)
 
     if target_delta_f is None:
-        target_delta_f = min(natural_delta_f, 1.0 / 32.0)
+        target_delta_f = min(natural_delta_f, 1.0 / 128.0)
 
     if natural_delta_f > target_delta_f:
         n_padded = round(float(td_template.sample_rate) / target_delta_f)
@@ -158,7 +157,7 @@ def matched_filter_snr(
 
     htilde = td_template.to_frequencyseries()
     psd_interp = pycbc_psd_mod.interpolate(psd, htilde.delta_f, length=len(htilde))
-    # Replace zero PSD values with inf: same pattern as optimal_snr (ISS-007).
+    # Replace zero PSD values with inf: same pattern as optimal_snr.
     # pycbc.psd.interpolate fills out-of-range bins with the boundary value (0),
     # which causes division-by-zero inside matched_filter's sigma normalization.
     psd_data = np.asarray(psd_interp).copy()

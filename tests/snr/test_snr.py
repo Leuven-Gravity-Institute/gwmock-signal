@@ -92,10 +92,10 @@ class TestOptimalSNR:
         mock_htilde = MagicMock()
         mock_psd_interp = MagicMock()
 
-        # duration=64.0 → natural_delta_f=1/64 ≤ 1/32 → no padding, htilde comes
+        # duration=128.0 → natural_delta_f=1/128 ≤ 1/128 → no padding, htilde comes
         # directly from td.to_frequencyseries() so the mock chain stays simple.
         mock_td = MagicMock()
-        mock_td.duration = 64.0
+        mock_td.duration = 128.0
         mock_td.to_frequencyseries.return_value = mock_htilde
 
         mock_strain = MagicMock()
@@ -224,9 +224,9 @@ class TestMatchedFilterSNR:
         mock_snr_result = MagicMock()
         mock_snr_trimmed = MagicMock()
 
-        # duration=64.0 → natural_delta_f=1/64 ≤ 1/32 → no padding path.
+        # duration=128.0 → natural_delta_f=1/128 ≤ 1/128 → no padding path.
         mock_td_template = MagicMock()
-        mock_td_template.duration = 64.0
+        mock_td_template.duration = 128.0
         mock_td_template.to_frequencyseries.return_value = mock_htilde
 
         mock_td_data = MagicMock()
@@ -281,7 +281,7 @@ class TestMatchedFilterSNR:
         mock_padded = MagicMock()
         mock_padded.to_frequencyseries.return_value = mock_htilde
 
-        # template duration=2.0 → natural_delta_f=0.5 > target=1/32 → padding fires.
+        # template duration=2.0 → natural_delta_f=0.5 > target=1/128 → padding fires.
         # len(td_data)=0 → n_target = n_padded > n_data → data branch also runs.
         mock_td_template = MagicMock()
         mock_td_template.duration = 2.0
@@ -341,11 +341,11 @@ class TestOptimalSNRPadding:
         assert abs(snr_coarse / snr_fine - 1.0) < 5e-4
 
     def test_optimal_snr_no_padding_for_already_fine_grid(self) -> None:
-        """Long signals with natural delta_f <= 1/32 Hz are not padded."""
+        """Long signals with natural delta_f <= 1/128 Hz are not padded."""
         pytest.importorskip("pycbc")
         from pycbc.types import FrequencySeries
 
-        fs, duration = 512.0, 60.0
+        fs, duration = 512.0, 128.0
         n = int(fs * duration)
         strain = TimeSeries(
             np.sin(2 * np.pi * 50.0 * np.arange(n) / fs),
@@ -441,11 +441,11 @@ class TestMatchedFilterSNRPadding:
         assert len(result) == len(data)
 
     def test_matched_filter_snr_no_padding_for_already_fine_grid(self) -> None:
-        """Long signals with natural delta_f <= 1/32 Hz are not padded."""
+        """Long signals with natural delta_f <= 1/128 Hz are not padded."""
         pytest.importorskip("pycbc")
         from pycbc.types import FrequencySeries
 
-        fs, duration = 512.0, 60.0
+        fs, duration = 512.0, 128.0
         n = int(fs * duration)
         strain = TimeSeries(
             np.sin(2 * np.pi * 50.0 * np.arange(n) / fs),
