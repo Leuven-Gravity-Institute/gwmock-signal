@@ -34,9 +34,9 @@ def optimal_snr(
 
     Computes sqrt(<h|h>_PSD) via pycbc.filter.sigma. The strain is zero-padded
     in the time domain so that the FFT frequency resolution reaches target_delta_f
-    (default: min(natural_delta_f, 1/32 Hz)) before calling sigma. This ensures
+    (default: min(natural_delta_f, 1/128 Hz)) before calling sigma. This ensures
     pycbc's floor-truncated cutoff bin is at most ~0.03 Hz below f_low, reducing
-    the over-estimate for short (high-mass) CBC from ~0.3% to < 0.02%.
+    the over-estimate for short (high-mass) CBC.
     Padding only ever refines resolution: if the natural grid is already finer
     than target_delta_f the strain is used as-is. The supplied PSD is
     interpolated onto the padded grid via pycbc.psd.interpolate.
@@ -46,7 +46,7 @@ def optimal_snr(
         psd: Noise PSD as a pycbc FrequencySeries.
         low_frequency_cutoff: Lower frequency bound in Hz.
         target_delta_f: Target frequency resolution in Hz. Default: min of the
-            natural grid spacing and 1/32 Hz (never coarsens the grid).
+            natural grid spacing and 1/128 Hz (never coarsens the grid).
 
     Returns:
         Optimal SNR as a non-negative float.
@@ -65,7 +65,7 @@ def optimal_snr(
     natural_delta_f = 1.0 / float(td.duration)
 
     if target_delta_f is None:
-        target_delta_f = min(natural_delta_f, 1.0 / 32.0)
+        target_delta_f = min(natural_delta_f, 1.0 / 128.0)
 
     if natural_delta_f > target_delta_f:
         n_padded = round(float(td.sample_rate) / target_delta_f)

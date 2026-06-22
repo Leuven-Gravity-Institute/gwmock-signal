@@ -92,10 +92,10 @@ class TestOptimalSNR:
         mock_htilde = MagicMock()
         mock_psd_interp = MagicMock()
 
-        # duration=64.0 → natural_delta_f=1/64 ≤ 1/32 → no padding, htilde comes
+        # duration=128.0 → natural_delta_f=1/128 ≤ 1/128 → no padding, htilde comes
         # directly from td.to_frequencyseries() so the mock chain stays simple.
         mock_td = MagicMock()
-        mock_td.duration = 64.0
+        mock_td.duration = 128.0
         mock_td.to_frequencyseries.return_value = mock_htilde
 
         mock_strain = MagicMock()
