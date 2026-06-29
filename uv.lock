@@ -745,7 +745,7 @@ requires-dist = [
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.11.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.2.0" },
-    { name = "typer", specifier = ">=0.26.7" },
+    { name = "typer", specifier = ">=0.26.8" },
 ]
 provides-extras = ["jax", "pycbc", "sgwb"]
 
