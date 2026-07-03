@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pycbc = ["pycbc>=2.11.0"]
-sgwb = ["gwmock-noise>=0.5.3"]
+sgwb = ["gwmock-noise>=0.6.0"]
 jax = ["ripplegw>=0.2.1"]
 
 [tool.uv]
