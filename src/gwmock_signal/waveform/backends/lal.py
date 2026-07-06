@@ -11,30 +11,149 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""LALSimulation-backed time-domain waveform generation."""
+"""LALSimulation-backed waveform generation, conditioned to the time domain.
+
+The waveform is evaluated in the *frequency domain* -- ``SimInspiralChooseFDWaveform``
+for FD-native approximants, ``SimInspiralFD`` (which conditions a time-domain
+approximant and transforms it) otherwise -- so that coalescence sits at the
+frequency-domain phase reference. This is the same convention used by the ripple
+backend and by ``bilby``: the same source lands at the same sample in either
+backend and ``FFT(TD) == FD`` holds, which frequency-domain inference on the
+injected data relies on.
+
+It deliberately does *not* use ``SimInspiralChooseTDWaveform``, whose returned
+epoch is re-pinned to the (2,2) amplitude peak -- a mass-dependent ~12 M offset
+from the phase reference that would place ``tc`` at a physically different point
+than the ripple backend does. See ``bilby.gw.source`` for the reference
+implementation of the ``dt = 1/deltaF + epoch`` conditioning correction.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import lal
 import lalsimulation
+import numpy as np
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 MSUN = lal.MSUN_SI
 MPC = lal.PC_SI * 1e6
 
 
+@dataclass(frozen=True)
+class _ResolvedParameters:
+    """Validated, backend-native CBC parameters for the LAL FD generators."""
+
+    mass1: float
+    mass2: float
+    distance: float
+    spin_1x: float
+    spin_1y: float
+    spin_1z: float
+    spin_2x: float
+    spin_2y: float
+    spin_2z: float
+    inclination: float
+    coa_phase: float
+    lambda_1: float
+    lambda_2: float
+
+
+def _to_onesided(data: object, n_freq: int) -> np.ndarray:
+    """Coerce a LAL frequency-series buffer to a one-sided array of length ``n_freq``.
+
+    LAL may return fewer bins (zero-padded here) or, when it internally rounds the
+    segment up to a power of two, more (truncated here) -- mirroring bilby's length
+    reconciliation against its own frequency grid.
+    """
+    out = np.zeros(n_freq, dtype=complex)
+    arr = np.asarray(data)
+    k = min(len(arr), n_freq)
+    out[:k] = arr[:k]
+    return out
+
+
 class LALSimulationBackend(WaveformBackend):
-    """Time-domain waveform backend implemented with LALSimulation."""
+    """Time-domain waveform backend implemented with LALSimulation.
+
+    Args:
+        f_ref: Reference frequency in Hz. Defaults to ``minimum_frequency`` of each
+            call when ``None``.
+        ringdown_fraction: Fraction of the analysis segment reserved after
+            coalescence. Must be in ``(0, 1)``.
+        segment_duration: Optional fixed analysis-segment length in seconds. When
+            ``None`` (default) the length is estimated from the post-Newtonian chirp
+            time so the full inspiral fits without wraparound.
+    """
+
+    def __init__(
+        self,
+        *,
+        f_ref: float | None = None,
+        ringdown_fraction: float = conditioning.DEFAULT_RINGDOWN_FRACTION,
+        segment_duration: float | None = None,
+    ) -> None:
+        """Validate the placement configuration shared with the ripple backend."""
+        if not 0.0 < ringdown_fraction < 1.0:
+            raise ValueError("ringdown_fraction must be in (0, 1)")
+        if segment_duration is not None and segment_duration <= 0:
+            raise ValueError("segment_duration must be > 0")
+        self._f_ref = f_ref
+        self._ringdown_fraction = ringdown_fraction
+        self._segment_duration = segment_duration
 
     def available_approximants(self) -> list[str]:
-        """Return all implemented LAL time-domain approximants."""
+        """Return every LAL approximant this backend can generate.
+
+        ``generate_td_waveform`` produces FD-native approximants via
+        ``SimInspiralChooseFDWaveform`` and time-domain approximants via
+        ``SimInspiralFD``, so the advertised set is the union of both. Iterating
+        over approximant indices yields each name once, in a stable order.
+        """
         return [
             lalsimulation.GetStringFromApproximant(i)
             for i in range(lalsimulation.NumApproximants)
             if lalsimulation.SimInspiralImplementedTDApproximants(i)
+            or lalsimulation.SimInspiralImplementedFDApproximants(i)
         ]
+
+    @staticmethod
+    def _resolve_parameters(
+        sampling_frequency: float, minimum_frequency: float, **params: object
+    ) -> _ResolvedParameters:
+        """Validate inputs and translate canonical parameters to backend-native ones."""
+        remaining = dict(params)
+        resolved = _ResolvedParameters(
+            mass1=float(_pop_alias(remaining, "detector_frame_mass_1", "mass1")),
+            mass2=float(_pop_alias(remaining, "detector_frame_mass_2", "mass2")),
+            distance=float(_pop_alias(remaining, "luminosity_distance", "distance")),
+            spin_1x=float(_pop_alias(remaining, "spin_1x", "spin1x", default=0.0)),
+            spin_1y=float(_pop_alias(remaining, "spin_1y", "spin1y", default=0.0)),
+            spin_1z=float(_pop_alias(remaining, "spin_1z", "spin1z", default=0.0)),
+            spin_2x=float(_pop_alias(remaining, "spin_2x", "spin2x", default=0.0)),
+            spin_2y=float(_pop_alias(remaining, "spin_2y", "spin2y", default=0.0)),
+            spin_2z=float(_pop_alias(remaining, "spin_2z", "spin2z", default=0.0)),
+            inclination=float(_pop_alias(remaining, "inclination", default=0.0)),
+            coa_phase=float(_pop_alias(remaining, "coa_phase", default=0.0)),
+            lambda_1=float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0)),
+            lambda_2=float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0)),
+        )
+        if remaining:
+            extras = ", ".join(sorted(remaining))
+            raise ValueError(f"Unsupported LAL waveform parameters: {extras}")
+        if sampling_frequency <= 0:
+            raise ValueError("sampling_frequency must be > 0")
+        if minimum_frequency <= 0:
+            raise ValueError("minimum_frequency must be > 0")
+        if resolved.lambda_1 < 0:
+            raise ValueError("lambda_1 must be >= 0")
+        if resolved.lambda_2 < 0:
+            raise ValueError("lambda_2 must be >= 0")
+        return resolved
 
     def generate_td_waveform(
         self,
@@ -44,59 +163,76 @@ class LALSimulationBackend(WaveformBackend):
         minimum_frequency: float,
         **params: object,
     ) -> dict[str, TimeSeries]:
-        """Generate plus/cross polarizations with ``SimInspiralChooseTDWaveform``."""
-        remaining = dict(params)
-        mass1 = float(_pop_alias(remaining, "detector_frame_mass_1", "mass1"))
-        mass2 = float(_pop_alias(remaining, "detector_frame_mass_2", "mass2"))
-        distance = float(_pop_alias(remaining, "luminosity_distance", "distance"))
-        spin_1x = float(_pop_alias(remaining, "spin_1x", "spin1x", default=0.0))
-        spin_1y = float(_pop_alias(remaining, "spin_1y", "spin1y", default=0.0))
-        spin_1z = float(_pop_alias(remaining, "spin_1z", "spin1z", default=0.0))
-        spin_2x = float(_pop_alias(remaining, "spin_2x", "spin2x", default=0.0))
-        spin_2y = float(_pop_alias(remaining, "spin_2y", "spin2y", default=0.0))
-        spin_2z = float(_pop_alias(remaining, "spin_2z", "spin2z", default=0.0))
-        inclination = float(_pop_alias(remaining, "inclination", default=0.0))
-        coa_phase = float(_pop_alias(remaining, "coa_phase", default=0.0))
-        lambda_1 = float(_pop_alias(remaining, "lambda_1", "tidal_1", default=0.0))
-        lambda_2 = float(_pop_alias(remaining, "lambda_2", "tidal_2", default=0.0))
-        if remaining:
-            extras = ", ".join(sorted(remaining))
-            raise ValueError(f"Unsupported LAL waveform parameters: {extras}")
-        if sampling_frequency <= 0:
-            raise ValueError("sampling_frequency must be > 0")
-        if lambda_1 < 0:
-            raise ValueError("lambda_1 must be >= 0")
-        if lambda_2 < 0:
-            raise ValueError("lambda_2 must be >= 0")
+        """Generate plus/cross polarizations, conditioned from frequency to time domain."""
+        p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
+
+        chirp_mass = (p.mass1 * p.mass2) ** 0.6 / (p.mass1 + p.mass2) ** 0.2
+        n_samples = conditioning.segment_sample_count(
+            chirp_mass,
+            minimum_frequency,
+            sampling_frequency,
+            ringdown_fraction=self._ringdown_fraction,
+            segment_duration=self._segment_duration,
+        )
+        delta_f = sampling_frequency / n_samples
+        f_max = sampling_frequency / 2.0
+        f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
 
         approx_enum = lalsimulation.GetApproximantFromString(approximant)
         lal_params = lal.CreateDict()
-        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, lambda_1)
-        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, lambda_2)
-        hp, hc = lalsimulation.SimInspiralChooseTDWaveform(
-            mass1 * MSUN,
-            mass2 * MSUN,
-            spin_1x,
-            spin_1y,
-            spin_1z,
-            spin_2x,
-            spin_2y,
-            spin_2z,
-            distance * MPC,
-            inclination,
-            coa_phase,
-            0.0,
-            0.0,
-            0.0,
-            1.0 / sampling_frequency,
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, p.lambda_1)
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, p.lambda_2)
+
+        wf_args = (
+            p.mass1 * MSUN,
+            p.mass2 * MSUN,
+            p.spin_1x,
+            p.spin_1y,
+            p.spin_1z,
+            p.spin_2x,
+            p.spin_2y,
+            p.spin_2z,
+            p.distance * MPC,
+            p.inclination,
+            p.coa_phase,
+            0.0,  # longitude of ascending nodes
+            0.0,  # eccentricity
+            0.0,  # mean periastron anomaly
+            delta_f,
             minimum_frequency,
-            minimum_frequency,
+            f_max,
+            f_ref,
             lal_params,
             approx_enum,
         )
-        t0 = float(hp.epoch) + tc
-        dt = hp.deltaT
+        # Follow bilby: FD-native approximants come back already referenced to the FD
+        # phase; a TD approximant routed through SimInspiralFD carries an epoch from
+        # the internal time-domain conditioning, undone by a dt = T + epoch shift.
+        if lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
+            hp, hc = lalsimulation.SimInspiralChooseFDWaveform(*wf_args)
+            epoch_shift = 0.0
+        else:
+            hp, hc = lalsimulation.SimInspiralFD(*wf_args)
+            epoch_shift = 1.0 / hp.deltaF + (hp.epoch.gpsSeconds + hp.epoch.gpsNanoSeconds * 1e-9)
+
+        n_freq = n_samples // 2 + 1
+        freqs = np.arange(n_freq) * delta_f
+        hp_f = _to_onesided(hp.data.data, n_freq)
+        hc_f = _to_onesided(hc.data.data, n_freq)
+        if epoch_shift:
+            time_shift = np.exp(-2j * np.pi * freqs * epoch_shift)
+            hp_f = hp_f * time_shift
+            hc_f = hc_f * time_shift
+        in_band = freqs >= minimum_frequency
+        hp_f = np.nan_to_num(np.where(in_band, hp_f, 0.0))
+        hc_f = np.nan_to_num(np.where(in_band, hc_f, 0.0))
+
+        hp_t, hc_t, epoch = conditioning.condition_fd_to_td(
+            hp_f, hc_f, n_samples, sampling_frequency, self._ringdown_fraction
+        )
+        dt = 1.0 / sampling_frequency
+        t0 = epoch + tc
         return {
-            "plus": TimeSeries(hp.data.data, t0=t0, dt=dt),
-            "cross": TimeSeries(hc.data.data, t0=t0, dt=dt),
+            "plus": TimeSeries(hp_t, t0=t0, dt=dt),
+            "cross": TimeSeries(hc_t, t0=t0, dt=dt),
         }

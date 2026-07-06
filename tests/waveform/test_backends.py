@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
@@ -265,3 +266,120 @@ assert LALSimulationBackend.__name__ == "LALSimulationBackend"
         timeout=30,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+# --- Coalescence-time convention -------------------------------------------------
+# The LAL backend evaluates the waveform in the frequency domain (bilby's approach)
+# so coalescence sits at the FD phase reference, matching the ripple backend. These
+# tests pin that convention: they fail if the backend regresses to
+# SimInspiralChooseTDWaveform, whose epoch is re-pinned to the amplitude peak.
+
+_TC = 1_126_259_462.4
+_FS = 2048.0
+_F_MIN = 20.0
+_CONVENTION_SOURCE: dict[str, float] = {
+    "detector_frame_mass_1": 36.0,
+    "detector_frame_mass_2": 29.0,
+    "luminosity_distance": 410.0,
+    "spin_1z": 0.4,
+    "spin_2z": -0.3,
+    "inclination": 0.5,
+    "coa_phase": 1.2,
+}
+
+
+def test_lal_fd_td_roundtrip() -> None:
+    """FFT of the conditioned TD waveform reproduces LAL's FD waveform to machine precision.
+
+    Guards the coalescence-placement convention: the LAL backend must place
+    coalescence at the FD phase reference (like the ripple backend and bilby), so a
+    signal injected at ``tc`` Fourier-transforms back to the frequency-domain
+    template. ``SimInspiralChooseTDWaveform`` (amplitude-peak epoch) would fail this.
+    """
+    import lal
+    import lalsimulation
+
+    from gwmock_signal.waveform.backends import conditioning
+
+    td = LALSimulationBackend().generate_td_waveform(
+        "IMRPhenomD", tc=_TC, sampling_frequency=_FS, minimum_frequency=_F_MIN, **_CONVENTION_SOURCE
+    )["plus"]
+
+    # Reconstruct LAL's FD template on the same grid the backend used.
+    m1, m2 = _CONVENTION_SOURCE["detector_frame_mass_1"], _CONVENTION_SOURCE["detector_frame_mass_2"]
+    chirp_mass = (m1 * m2) ** 0.6 / (m1 + m2) ** 0.2
+    n_samples = conditioning.segment_sample_count(chirp_mass, _F_MIN, _FS)
+    delta_f = _FS / n_samples
+    hp_fd, _ = lalsimulation.SimInspiralChooseFDWaveform(
+        m1 * lal.MSUN_SI,
+        m2 * lal.MSUN_SI,
+        0.0,
+        0.0,
+        _CONVENTION_SOURCE["spin_1z"],
+        0.0,
+        0.0,
+        _CONVENTION_SOURCE["spin_2z"],
+        _CONVENTION_SOURCE["luminosity_distance"] * lal.PC_SI * 1e6,
+        _CONVENTION_SOURCE["inclination"],
+        _CONVENTION_SOURCE["coa_phase"],
+        0.0,
+        0.0,
+        0.0,
+        delta_f,
+        _F_MIN,
+        _FS / 2,
+        _F_MIN,
+        lal.CreateDict(),
+        lalsimulation.GetApproximantFromString("IMRPhenomD"),
+    )
+    template = np.asarray(hp_fd.data.data)
+    freqs = np.arange(len(template)) * delta_f
+    in_band = freqs >= _F_MIN
+
+    epoch = float(td.t0.value) - _TC
+    # FFT the TD samples and undo the epoch shift; this must recover the FD template.
+    recon = np.exp(-2j * np.pi * freqs * epoch) * np.fft.rfft(td.value, n=n_samples) / _FS
+    a, b = recon[in_band], template[in_band]
+    overlap = np.real(np.sum(a * np.conj(b))) / np.sqrt(np.sum(np.abs(a) ** 2) * np.sum(np.abs(b) ** 2))
+    assert 1.0 - overlap < 1e-6, f"FFT(TD) vs FD overlap {overlap:.8f}"
+
+
+def test_lal_coalescence_at_fd_phase_reference_not_amplitude_peak() -> None:
+    """LAL places coalescence at the FD phase reference, so the |h| peak precedes tc.
+
+    Regression guard against reverting to ``SimInspiralChooseTDWaveform``, which
+    would pin the amplitude peak onto ``tc`` (peak offset ~0) and trip this test.
+    """
+    hp = LALSimulationBackend().generate_td_waveform(
+        "IMRPhenomD", tc=_TC, sampling_frequency=_FS, minimum_frequency=_F_MIN, **_CONVENTION_SOURCE
+    )["plus"]
+    peak_offset = float(hp.times.value[int(np.argmax(np.abs(hp.value)))]) - _TC
+    assert peak_offset < -2.0e-3, (
+        f"LAL peak offset {peak_offset * 1e3:+.3f} ms should be well before tc; "
+        "coalescence must sit at the FD phase reference, not the amplitude peak"
+    )
+
+
+def test_lal_and_ripple_agree_on_coalescence() -> None:
+    """LAL and ripple place the same source at the same sample (one shared tc convention).
+
+    Both backends reference coalescence to the FD phase reference and share the same
+    segment sizing, so the amplitude peaks coincide to within a sample -- the
+    mass-dependent ~12 M offset from the old ChooseTDWaveform epoch is gone.
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+
+    from gwmock_signal.waveform.backends import RippleBackend
+
+    common = {"tc": _TC, "sampling_frequency": _FS, "minimum_frequency": _F_MIN, **_CONVENTION_SOURCE}
+    lal_hp = LALSimulationBackend().generate_td_waveform("IMRPhenomD", **common)["plus"]
+    rip_hp = RippleBackend().generate_td_waveform("IMRPhenomD", **common)["plus"]
+
+    # Same auto-sized grid (MTSUN and segment sizing are shared).
+    assert lal_hp.value.size == rip_hp.value.size
+    lal_peak = float(lal_hp.times.value[int(np.argmax(np.abs(lal_hp.value)))])
+    rip_peak = float(rip_hp.times.value[int(np.argmax(np.abs(rip_hp.value)))])
+    assert abs(lal_peak - rip_peak) < 1.5 / _FS, (
+        f"LAL and ripple coalescence disagree by {(lal_peak - rip_peak) * 1e3:.3f} ms "
+        "(> 1 sample); the two backends must share the FD-phase-reference convention"
+    )
