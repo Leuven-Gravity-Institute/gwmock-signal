@@ -107,11 +107,18 @@ class LALSimulationBackend(WaveformBackend):
         self._segment_duration = segment_duration
 
     def available_approximants(self) -> list[str]:
-        """Return all implemented LAL time-domain approximants."""
+        """Return every LAL approximant this backend can generate.
+
+        ``generate_td_waveform`` produces FD-native approximants via
+        ``SimInspiralChooseFDWaveform`` and time-domain approximants via
+        ``SimInspiralFD``, so the advertised set is the union of both. Iterating
+        over approximant indices yields each name once, in a stable order.
+        """
         return [
             lalsimulation.GetStringFromApproximant(i)
             for i in range(lalsimulation.NumApproximants)
             if lalsimulation.SimInspiralImplementedTDApproximants(i)
+            or lalsimulation.SimInspiralImplementedFDApproximants(i)
         ]
 
     @staticmethod
