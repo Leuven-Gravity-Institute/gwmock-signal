@@ -642,3 +642,41 @@ def test_ripple_fd_td_roundtrip(approximant: str, extra: dict, f_min: float) -> 
             np.sum(np.abs(recon) ** 2) * np.sum(np.abs(template) ** 2)
         )
         assert 1.0 - overlap < 1e-6, f"{approximant} {polarization}: FFT(TD) vs FD overlap {overlap:.8f}"
+
+
+def test_ripple_coalescence_sits_at_fd_phase_reference_not_amplitude_peak() -> None:
+    """Pin the deliberate coalescence convention: ``tc`` is the FD phase reference.
+
+    This is the flip side of :func:`test_ripple_fd_td_roundtrip`. gwmock-signal
+    places coalescence at ripple's frequency-domain phase reference (so that
+    ``FFT(TD) == FD`` for frequency-domain inference), which is **not** the (2,2)
+    amplitude peak: for a heavy BBH the peak lands earlier than ``tc`` by a
+    mass-scaled merger/ringdown offset (~12 M).
+
+    Regression guard: a future edit that "aligns" ripple to the amplitude peak
+    (e.g. rolling by the peak index in ``_to_time_domain``) would silently break
+    the FD/TD roundtrip guarantee. That edit moves the ripple peak onto ``tc`` and
+    trips this test. Do not "fix" this peak offset; it is intentional, and the LAL
+    backend deliberately uses the same convention (see
+    ``test_lal_and_ripple_agree_on_coalescence`` in ``test_backends.py``).
+    """
+    pytest.importorskip("ripplegw", reason="ripplegw not installed")
+
+    hp = RippleBackend().generate_td_waveform(
+        "IMRPhenomD",
+        tc=_TC,
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        # A heavy BBH keeps the peak-vs-phase-reference offset many samples wide.
+        detector_frame_mass_1=36.0,
+        detector_frame_mass_2=29.0,
+        luminosity_distance=410.0,
+        inclination=0.4,
+    )["plus"]
+
+    peak_offset = float(hp.times.value[int(np.argmax(np.abs(hp.value)))]) - _TC
+    # The peak sits well before tc; coalescence is the FD phase reference, not the peak.
+    assert peak_offset < -2.0e-3, (
+        f"ripple peak offset {peak_offset * 1e3:+.3f} ms should be well before tc; "
+        "coalescence must stay at the FD phase reference, not the amplitude peak"
+    )
