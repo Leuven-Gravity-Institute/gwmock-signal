@@ -141,7 +141,12 @@ CLI:
 
 ```bash
 gwmock-signal inject cbc --params examples/gw150914_like.json --network H1L1V1 --backend lal
+
+# Same injection with the JAX/ripple backend (install with gwmock-signal[jax])
+gwmock-signal inject cbc --params examples/gw150914_like.json --network H1L1V1 --backend ripple
 ```
+
+Ready-to-run parameter files live in [`examples/`](examples/).
 
 ## Documentation
 
