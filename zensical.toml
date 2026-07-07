@@ -46,6 +46,7 @@ Copyright &copy; 2026 Leuven Gravity Institute
 # Read more: https://zensical.org/docs/setup/navigation/
 nav = [
   { "Get Started" = "index.md" },
+  { "Statement of need" = "statement-of-need.md" },
   { "Installation" = "user_guide/installation.md" },
   { "User Guide" = [
     { "Overview" = "user_guide/index.md" },
