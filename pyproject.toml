@@ -20,19 +20,23 @@ classifiers = [
 requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [
-  "typer>=0.26.8",
-  "gwpy>=4.0.1",
-  "lalsuite>=7.26.15",
-  "pyyaml>=6.0.3",
+  "typer>=0.16.0",  # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
+  "gwpy>=4.0.0",
+  "lalsuite>=7.23",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-pycbc = ["pycbc>=2.11.0"]
-sgwb = ["gwmock-noise>=0.6.2"]
+pycbc = ["pycbc>=2.5.0"]
+sgwb = ["gwmock-noise>=0.7.0"]
 jax = ["ripplegw>=0.2.1"]
 
-[tool.uv]
-conflicts = [[{ extra = "pycbc" }, { extra = "sgwb" }]]
+[tool.dependency-support-policy]
+policy = "spec0"
+groups = ["project", "optional"]
+exclude = ["gwmock-noise"]       # ecosystem sibling: Renovate keeps it at latest
+lock = "minimal"
+
 
 [dependency-groups]
 dev = [

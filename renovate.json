@@ -17,6 +17,16 @@
     "packageRules": [
         {
             "matchManagers": ["pep621"],
+            "matchDepTypes": [
+                "project.dependencies",
+                "project.optional-dependencies"
+            ],
+            "matchPackageNames": ["!gwmock-noise"],
+            "description": "Runtime lower bounds are owned by the dependency-support-policy (SPEC 0) workflow; gwmock-noise stays Renovate-bumped to latest.",
+            "enabled": false
+        },
+        {
+            "matchManagers": ["pep621"],
             "matchUpdateTypes": ["patch", "minor"],
             "groupName": "runtime minor & patch",
             "minimumReleaseAge": "3 days",
