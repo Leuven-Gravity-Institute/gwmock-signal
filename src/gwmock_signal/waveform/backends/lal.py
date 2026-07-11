@@ -45,6 +45,16 @@ MPC = lal.PC_SI * 1e6
 
 
 @dataclass(frozen=True)
+class _FrequencyGrid:
+    """Frequency-domain evaluation grid shared by the FD generators."""
+
+    delta_f: float
+    minimum_frequency: float
+    f_max: float
+    f_ref: float
+
+
+@dataclass(frozen=True)
 class _ResolvedParameters:
     """Validated, backend-native CBC parameters for the LAL FD generators."""
 
@@ -155,6 +165,55 @@ class LALSimulationBackend(WaveformBackend):
             raise ValueError("lambda_2 must be >= 0")
         return resolved
 
+    def _evaluate_fd(
+        self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Evaluate the one-sided FD polarizations plus the epoch correction.
+
+        Returns the raw plus/cross frequency-series buffers and the time shift
+        (in seconds) that re-references them to the frequency-domain phase
+        convention. Subclasses may override this to source the same quantities
+        from a different generator while sharing the segment sizing and
+        conditioning performed by :meth:`generate_td_waveform`.
+        """
+        approx_enum = lalsimulation.GetApproximantFromString(approximant)
+        lal_params = lal.CreateDict()
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, p.lambda_1)
+        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, p.lambda_2)
+
+        wf_args = (
+            p.mass1 * MSUN,
+            p.mass2 * MSUN,
+            p.spin_1x,
+            p.spin_1y,
+            p.spin_1z,
+            p.spin_2x,
+            p.spin_2y,
+            p.spin_2z,
+            p.distance * MPC,
+            p.inclination,
+            p.coa_phase,
+            0.0,  # longitude of ascending nodes
+            0.0,  # eccentricity
+            0.0,  # mean periastron anomaly
+            grid.delta_f,
+            grid.minimum_frequency,
+            grid.f_max,
+            grid.f_ref,
+            lal_params,
+            approx_enum,
+        )
+        # Follow bilby: FD-native approximants come back already referenced to the FD
+        # phase; a TD approximant routed through SimInspiralFD carries an epoch from
+        # the internal time-domain conditioning, undone by a dt = T + epoch shift.
+        if lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
+            hp, hc = lalsimulation.SimInspiralChooseFDWaveform(*wf_args)
+            epoch_shift = 0.0
+        else:
+            hp, hc = lalsimulation.SimInspiralFD(*wf_args)
+            epoch_shift = 1.0 / hp.deltaF + (hp.epoch.gpsSeconds + hp.epoch.gpsNanoSeconds * 1e-9)
+        return np.asarray(hp.data.data), np.asarray(hc.data.data), epoch_shift
+
     def generate_td_waveform(
         self,
         approximant: str,
@@ -178,47 +237,13 @@ class LALSimulationBackend(WaveformBackend):
         f_max = sampling_frequency / 2.0
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
 
-        approx_enum = lalsimulation.GetApproximantFromString(approximant)
-        lal_params = lal.CreateDict()
-        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, p.lambda_1)
-        lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, p.lambda_2)
-
-        wf_args = (
-            p.mass1 * MSUN,
-            p.mass2 * MSUN,
-            p.spin_1x,
-            p.spin_1y,
-            p.spin_1z,
-            p.spin_2x,
-            p.spin_2y,
-            p.spin_2z,
-            p.distance * MPC,
-            p.inclination,
-            p.coa_phase,
-            0.0,  # longitude of ascending nodes
-            0.0,  # eccentricity
-            0.0,  # mean periastron anomaly
-            delta_f,
-            minimum_frequency,
-            f_max,
-            f_ref,
-            lal_params,
-            approx_enum,
-        )
-        # Follow bilby: FD-native approximants come back already referenced to the FD
-        # phase; a TD approximant routed through SimInspiralFD carries an epoch from
-        # the internal time-domain conditioning, undone by a dt = T + epoch shift.
-        if lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
-            hp, hc = lalsimulation.SimInspiralChooseFDWaveform(*wf_args)
-            epoch_shift = 0.0
-        else:
-            hp, hc = lalsimulation.SimInspiralFD(*wf_args)
-            epoch_shift = 1.0 / hp.deltaF + (hp.epoch.gpsSeconds + hp.epoch.gpsNanoSeconds * 1e-9)
+        grid = _FrequencyGrid(delta_f=delta_f, minimum_frequency=minimum_frequency, f_max=f_max, f_ref=f_ref)
+        hp_raw, hc_raw, epoch_shift = self._evaluate_fd(approximant, p, grid)
 
         n_freq = n_samples // 2 + 1
         freqs = np.arange(n_freq) * delta_f
-        hp_f = _to_onesided(hp.data.data, n_freq)
-        hc_f = _to_onesided(hc.data.data, n_freq)
+        hp_f = _to_onesided(hp_raw, n_freq)
+        hc_f = _to_onesided(hc_raw, n_freq)
         if epoch_shift:
             time_shift = np.exp(-2j * np.pi * freqs * epoch_shift)
             hp_f = hp_f * time_shift
