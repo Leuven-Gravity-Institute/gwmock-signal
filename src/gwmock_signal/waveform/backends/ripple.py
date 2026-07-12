@@ -31,7 +31,8 @@ ripple's options surface is thin and pre-1.0: only ``no_taper`` (the NRTidal
 variants) is forwarded. ``f_ref`` is owned by the backend, and
 ``use_lambda_tildes`` is refused because it would switch ripple to a
 ``lambda_tilde``/``delta_lambda_tilde`` parameterisation this backend does not
-feed. The batch path does not accept ``waveform_arguments`` yet. See
+feed. The batch path takes the same options as a batch-wide keyword argument
+(the preset is built once, so they are constructor-level, not per-event). See
 ``_ALLOWED_WAVEFORM_ARGUMENTS`` / ``_RESERVED_WAVEFORM_ARGUMENTS``.
 """
 
@@ -258,6 +259,7 @@ class RippleBackend(WaveformBackend):
         sampling_frequency: float,
         minimum_frequency: float,
         parameters: Mapping[str, object],
+        waveform_arguments: Mapping[str, object] | None = None,
     ) -> FrequencyDomainPolarizations:
         """Generate ripple FD polarizations for a batch of events on one shared grid.
 
@@ -275,18 +277,25 @@ class RippleBackend(WaveformBackend):
             parameters: Mapping of **canonical** gwmock-pop parameter names (no aliases)
                 to 1-D arrays of equal length ``n_events`` (e.g. ``detector_frame_mass_1``,
                 ``spin_1z``, ``inclination``). Omitted optional parameters default to zero.
+            waveform_arguments: Optional extra ripple constructor options applied to the
+                whole batch (the preset is built once). Same whitelist as the per-event
+                path — e.g. ``{"no_taper": True}`` for the NRTidal variants. These are
+                constructor-level, not per-event, so they take scalars, not arrays.
 
         Returns:
             A :class:`FrequencyDomainPolarizations` whose ``plus`` and ``cross`` are
             ``(n_events, n_samples // 2 + 1)`` JAX arrays (coalescence at ``t = 0``).
         """
+        resolved_arguments = self._resolve_waveform_arguments(
+            approximant, {} if waveform_arguments is None else dict(waveform_arguments)
+        )
         ripple_params, n_samples = self._resolve_batch(approximant, sampling_frequency, minimum_frequency, parameters)
         jnp = self._jnp
         delta_f = sampling_frequency / n_samples
         freqs = jnp.arange(n_samples // 2 + 1) * delta_f
         in_band = freqs >= minimum_frequency
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
-        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref)
+        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref, **resolved_arguments)
 
         def _one(event: dict) -> tuple:
             polarizations = waveform(freqs, event)
@@ -329,7 +338,10 @@ class RippleBackend(WaveformBackend):
         if minimum_frequency <= 0:
             raise ValueError("minimum_frequency must be > 0")
         if "waveform_arguments" in parameters:
-            raise ValueError("waveform_arguments is not supported in the batch path yet; use the per-event path")
+            raise ValueError(
+                "Pass waveform_arguments as its own keyword argument to "
+                "generate_fd_polarizations_batch, not inside parameters"
+            )
 
         jnp = self._jnp
         mass1 = self._batch_array(parameters, "detector_frame_mass_1")
