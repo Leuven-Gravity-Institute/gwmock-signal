@@ -26,7 +26,7 @@ from gwpy.timeseries import TimeSeries, TimeSeriesDict
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
-from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend, RippleBackend
+from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
 
 inject_app = typer.Typer(
     name="inject",
@@ -82,7 +82,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915
         str,
         typer.Option(
             "--backend",
-            help="Waveform backend: 'lal' (default), 'pycbc', or 'ripple' (JAX; currently IMRPhenomD only).",
+            help="Waveform backend: 'lal' (default), 'gwsignal', 'pycbc', or 'ripple' (JAX; currently IMRPhenomD only).",
         ),
     ] = "lal",
     seed: Annotated[
@@ -171,11 +171,14 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915
     backend_name = backend.strip().lower()
     backend_factories = {
         "lal": LALSimulationBackend,
+        "gwsignal": GWSignalBackend,
         "pycbc": PyCBCBackend,
         "ripple": RippleBackend,
     }
     if backend_name not in backend_factories:
-        raise typer.BadParameter("--backend must be one of 'lal', 'pycbc', or 'ripple'", param_hint="--backend")
+        raise typer.BadParameter(
+            "--backend must be one of 'lal', 'gwsignal', 'pycbc', or 'ripple'", param_hint="--backend"
+        )
     try:
         waveform_backend = backend_factories[backend_name]()
     except ImportError as exc:

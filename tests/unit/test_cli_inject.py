@@ -266,6 +266,30 @@ def test_inject_cbc_explicit_lal_backend_accepted(params_file: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+def test_inject_cbc_gwsignal_backend_accepted(params_file: Path) -> None:
+    """--backend gwsignal is accepted and the command succeeds."""
+    result = runner.invoke(
+        app,
+        [
+            "inject",
+            "cbc",
+            "--params",
+            str(params_file),
+            "--network",
+            "H1L1",
+            "--duration",
+            _DURATION,
+            "--sample-rate",
+            _SAMPLE_RATE,
+            "--f-min",
+            _F_MIN,
+            "--backend",
+            "gwsignal",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def test_inject_cbc_pycbc_backend_surfaces_install_hint(params_file: Path) -> None:
     """--backend pycbc surfaces the optional-extra install hint on ImportError."""
     with patch(

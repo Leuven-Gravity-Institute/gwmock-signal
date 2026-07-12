@@ -1,8 +1,8 @@
 ---
 title: Waveforms and backends
 description:
-    Waveform backends (LAL vs PyCBC), WaveformFactory registry, supported
-    approximant names, and GWpy time-domain examples.
+    Waveform backends (LAL, gwsignal, PyCBC, ripple), WaveformFactory registry,
+    supported approximant names, and GWpy time-domain examples.
 ---
 
 # Waveforms and backends
@@ -36,11 +36,25 @@ Waveform generation is split into three layers:
    `generate_td_waveform(approximant, tc, sampling_frequency, minimum_frequency, **params)`.
 
 2. **Concrete backends**
-    - **`LALSimulationBackend`** (default) — uses **LALSimulation**
-      (`SimInspiralChooseTDWaveform`). Shipped with the core dependency
-      **`lalsuite`**; no optional extra is required. Parameter handling is
-      **strict**: only documented mass, spin, distance, inclination, and
-      coalescence-phase aliases are accepted; unknown keys raise `ValueError`.
+    - **`LALSimulationBackend`** (default) — uses **LALSimulation**, evaluating
+      in the frequency domain (`SimInspiralChooseFDWaveform`, or `SimInspiralFD`
+      for time-domain-native approximants) and conditioning to the time domain
+      so coalescence sits at the frequency-domain phase reference. Shipped with
+      the core dependency **`lalsuite`**; no optional extra is required.
+      Parameter handling is **strict**: only documented mass, spin, distance,
+      inclination, and coalescence-phase aliases are accepted; unknown keys
+      raise `ValueError`.
+
+    - **`GWSignalBackend`** — routes **frequency-domain-native** approximants
+      through the LVK's forward-looking
+      [`lalsimulation.gwsignal`](https://docs.ligo.org/waveforms/reviews/newwaveforminterface/)
+      interface, sharing the LAL backend's segment sizing, phase-reference
+      handling, and FD-to-time conditioning; outputs are **bit-identical** to
+      `LALSimulationBackend`. Time-domain-native approximants fall back to the
+      LAL path (gwsignal's frequency-domain output discards the conditioning
+      epoch those approximants need). Ships with the core **`lalsuite`**
+      dependency; no optional extra is required. External Python models (e.g.
+      SEOBNRv5 via `pyseobnr`) are not exposed yet.
 
     - **`PyCBCBackend`** (optional) — delegates to PyCBC’s time-domain waveform
       path via the internal `pycbc_waveform_wrapper`. Requires installing
@@ -68,7 +82,7 @@ Waveform generation is split into three layers:
 [`CBCSimulator`](../api/simulator/) and [`inject_cbc_signal`](../api/pipeline/)
 accept an optional `waveform_backend` and build a `WaveformFactory(backend=…)`
 internally. The CLI `inject cbc` exposes **`--backend lal`** (default),
-**`--backend pycbc`**, or **`--backend ripple`**.
+**`--backend gwsignal`**, **`--backend pycbc`**, or **`--backend ripple`**.
 
 ## Supported waveform model names
 
