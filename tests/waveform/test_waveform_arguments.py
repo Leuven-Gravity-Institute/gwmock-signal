@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import importlib
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -123,13 +125,40 @@ def test_gwsignal_backend_arguments_change_the_waveform() -> None:
 #
 # ``_resolve_waveform_arguments`` is a staticmethod, so its input validation is
 # exercised without importing PyCBC. The pass-through / locking behaviour of
-# ``generate_td_waveform`` needs an instance (which imports PyCBC) and mocks the
-# wrapper to capture the forwarded kwargs.
+# ``generate_td_waveform`` is driven with PyCBC's import faked and the wrapper
+# mocked, so it runs (and is coverage-counted) even where PyCBC is not
+# installed -- no CI job installs the [pycbc] extra.
 
 
 def _fake_result() -> dict[str, TimeSeries]:
     ts = TimeSeries(np.zeros(10), t0=0.0, dt=1.0 / 4096)
     return {"plus": ts, "cross": ts}
+
+
+@contextmanager
+def _pycbc_backend(mock_wrapper: MagicMock):
+    """Yield a PyCBCBackend with PyCBC's import faked and the wrapper mocked.
+
+    ``PyCBCBackend.__init__`` imports ``pycbc.waveform`` and
+    ``generate_td_waveform`` imports the local ``pycbc_wrapper`` module; both go
+    through this module's ``importlib.import_module``. Faking only the former
+    lets the method run without a real PyCBC install while the wrapper is
+    patched to capture the forwarded kwargs.
+    """
+    real_import = importlib.import_module
+
+    def fake_import(name: str):
+        if name == "pycbc.waveform":
+            fake = MagicMock()
+            fake.td_approximants.return_value = ["IMRPhenomD", "IMRPhenomXHM"]
+            return fake
+        return real_import(name)
+
+    with (
+        patch("gwmock_signal.waveform.backends.pycbc.importlib.import_module", side_effect=fake_import),
+        patch("gwmock_signal.waveform.pycbc_wrapper.pycbc_waveform_wrapper", mock_wrapper),
+    ):
+        yield PyCBCBackend()
 
 
 def test_pycbc_non_dict_arguments_raise() -> None:
@@ -159,12 +188,9 @@ def test_pycbc_non_reserved_arguments_pass_validation() -> None:
 
 def test_pycbc_arguments_forwarded_to_get_td_waveform() -> None:
     """Extras are merged into the kwargs passed to the PyCBC wrapper."""
-    pytest.importorskip("pycbc", reason="pycbc not installed")
-    with patch(
-        "gwmock_signal.waveform.pycbc_wrapper.pycbc_waveform_wrapper",
-        return_value=_fake_result(),
-    ) as mock_wrapper:
-        PyCBCBackend().generate_td_waveform(
+    mock_wrapper = MagicMock(return_value=_fake_result())
+    with _pycbc_backend(mock_wrapper) as backend:
+        backend.generate_td_waveform(
             "IMRPhenomXHM",
             tc=0.0,
             sampling_frequency=4096.0,
@@ -177,17 +203,16 @@ def test_pycbc_arguments_forwarded_to_get_td_waveform() -> None:
     kw = mock_wrapper.call_args.kwargs
     assert kw["mode_array"] == [[2, 2]]
     assert kw["f_ref"] == 30.0
+    assert kw["mass1"] == 40.0
+    assert kw["lambda1"] == 0.0
     assert "waveform_arguments" not in kw
 
 
 def test_pycbc_empty_arguments_are_a_no_op() -> None:
     """An empty mapping forwards no extra kwargs."""
-    pytest.importorskip("pycbc", reason="pycbc not installed")
-    with patch(
-        "gwmock_signal.waveform.pycbc_wrapper.pycbc_waveform_wrapper",
-        return_value=_fake_result(),
-    ) as mock_wrapper:
-        PyCBCBackend().generate_td_waveform(
+    mock_wrapper = MagicMock(return_value=_fake_result())
+    with _pycbc_backend(mock_wrapper) as backend:
+        backend.generate_td_waveform(
             "IMRPhenomD",
             tc=0.0,
             sampling_frequency=4096.0,
@@ -199,13 +224,17 @@ def test_pycbc_empty_arguments_are_a_no_op() -> None:
         )
     kw = mock_wrapper.call_args.kwargs
     assert "waveform_arguments" not in kw
+    assert "mode_array" not in kw
 
 
 def test_pycbc_unsupported_top_level_parameter_raises() -> None:
     """Extras must go through waveform_arguments, not as flat top-level kwargs."""
-    pytest.importorskip("pycbc", reason="pycbc not installed")
-    with pytest.raises(ValueError, match="Unsupported PyCBC waveform parameters: f_ref"):
-        PyCBCBackend().generate_td_waveform(
+    mock_wrapper = MagicMock(return_value=_fake_result())
+    with (
+        _pycbc_backend(mock_wrapper) as backend,
+        pytest.raises(ValueError, match="Unsupported PyCBC waveform parameters: f_ref"),
+    ):
+        backend.generate_td_waveform(
             "IMRPhenomD",
             tc=0.0,
             sampling_frequency=4096.0,
@@ -215,3 +244,4 @@ def test_pycbc_unsupported_top_level_parameter_raises() -> None:
             luminosity_distance=410.0,
             f_ref=30.0,
         )
+    mock_wrapper.assert_not_called()
