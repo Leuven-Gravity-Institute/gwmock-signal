@@ -84,10 +84,33 @@ def test_non_dict_arguments_raise() -> None:
         )
 
 
-def test_gwsignal_backend_falls_back_and_matches_lal() -> None:
-    """Until gwsignal translation lands, extras route through the LAL path bit-identically."""
+@pytest.mark.parametrize(
+    ("approximant", "arguments"),
+    [
+        ("IMRPhenomXHM", {"ModeArray": [(2, 2), (2, -2)]}),
+        ("IMRPhenomXHM", {"PhenomXHMThresholdMband": 0.0}),
+        ("IMRPhenomXPHM", {"PhenomXPrecVersion": 102}),
+    ],
+)
+def test_gwsignal_backend_applies_arguments_via_lal_path(approximant: str, arguments: dict) -> None:
+    """Extras route through the LAL path bit-identically.
+
+    gwsignal's public dictionary cannot carry them faithfully; see the
+    backend docstring.
+    """
     pytest.importorskip("lalsimulation.gwsignal", reason="lalsimulation.gwsignal not available")
-    arguments = {"ModeArray": [(2, 2), (2, -2)]}
-    gws = GWSignalBackend().generate_td_waveform("IMRPhenomXHM", waveform_arguments=arguments, **CANONICAL_PARAMS)
-    lal = LALSimulationBackend().generate_td_waveform("IMRPhenomXHM", waveform_arguments=arguments, **CANONICAL_PARAMS)
+    gws = GWSignalBackend().generate_td_waveform(approximant, waveform_arguments=arguments, **CANONICAL_PARAMS)
+    lal = LALSimulationBackend().generate_td_waveform(approximant, waveform_arguments=arguments, **CANONICAL_PARAMS)
     np.testing.assert_array_equal(gws["plus"].value, lal["plus"].value)
+    np.testing.assert_array_equal(gws["cross"].value, lal["cross"].value)
+
+
+def test_gwsignal_backend_arguments_change_the_waveform() -> None:
+    """The options actually take effect through the gwsignal backend entry point."""
+    pytest.importorskip("lalsimulation.gwsignal", reason="lalsimulation.gwsignal not available")
+    backend = GWSignalBackend()
+    full = backend.generate_td_waveform("IMRPhenomXHM", **CANONICAL_PARAMS)
+    dominant = backend.generate_td_waveform(
+        "IMRPhenomXHM", waveform_arguments={"ModeArray": [(2, 2), (2, -2)]}, **CANONICAL_PARAMS
+    )
+    assert not np.array_equal(full["plus"].value, dominant["plus"].value)
