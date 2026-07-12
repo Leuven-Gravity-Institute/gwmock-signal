@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
+from gwpy.timeseries import TimeSeries
 
-from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend
+from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend
 
 CANONICAL_PARAMS = {
     "tc": 1_126_259_462.4,
@@ -114,3 +117,101 @@ def test_gwsignal_backend_arguments_change_the_waveform() -> None:
         "IMRPhenomXHM", waveform_arguments={"ModeArray": [(2, 2), (2, -2)]}, **CANONICAL_PARAMS
     )
     assert not np.array_equal(full["plus"].value, dominant["plus"].value)
+
+
+# --- PyCBC backend --------------------------------------------------------
+#
+# ``_resolve_waveform_arguments`` is a staticmethod, so its input validation is
+# exercised without importing PyCBC. The pass-through / locking behaviour of
+# ``generate_td_waveform`` needs an instance (which imports PyCBC) and mocks the
+# wrapper to capture the forwarded kwargs.
+
+
+def _fake_result() -> dict[str, TimeSeries]:
+    ts = TimeSeries(np.zeros(10), t0=0.0, dt=1.0 / 4096)
+    return {"plus": ts, "cross": ts}
+
+
+def test_pycbc_non_dict_arguments_raise() -> None:
+    """waveform_arguments must be a mapping with string keys."""
+    with pytest.raises(ValueError, match="dict with string keys"):
+        PyCBCBackend._resolve_waveform_arguments([("mode_array", [[2, 2]])])
+
+
+def test_pycbc_non_string_keys_raise() -> None:
+    """Non-string keys are rejected."""
+    with pytest.raises(ValueError, match="dict with string keys"):
+        PyCBCBackend._resolve_waveform_arguments({1: "x"})
+
+
+@pytest.mark.parametrize("reserved", ["mass1", "spin1z", "lambda1", "approximant", "delta_t", "f_lower"])
+def test_pycbc_reserved_arguments_raise(reserved: str) -> None:
+    """Keys the backend derives or manages itself cannot be overridden via extras."""
+    with pytest.raises(ValueError, match="not waveform_arguments"):
+        PyCBCBackend._resolve_waveform_arguments({reserved: 0.0})
+
+
+def test_pycbc_non_reserved_arguments_pass_validation() -> None:
+    """Approximant-specific options survive validation unchanged."""
+    args = {"mode_array": [[2, 2], [3, 3]], "f_ref": 30.0}
+    assert PyCBCBackend._resolve_waveform_arguments(args) == args
+
+
+def test_pycbc_arguments_forwarded_to_get_td_waveform() -> None:
+    """Extras are merged into the kwargs passed to the PyCBC wrapper."""
+    pytest.importorskip("pycbc", reason="pycbc not installed")
+    with patch(
+        "gwmock_signal.waveform.pycbc_wrapper.pycbc_waveform_wrapper",
+        return_value=_fake_result(),
+    ) as mock_wrapper:
+        PyCBCBackend().generate_td_waveform(
+            "IMRPhenomXHM",
+            tc=0.0,
+            sampling_frequency=4096.0,
+            minimum_frequency=20.0,
+            detector_frame_mass_1=40.0,
+            detector_frame_mass_2=30.0,
+            luminosity_distance=410.0,
+            waveform_arguments={"mode_array": [[2, 2]], "f_ref": 30.0},
+        )
+    kw = mock_wrapper.call_args.kwargs
+    assert kw["mode_array"] == [[2, 2]]
+    assert kw["f_ref"] == 30.0
+    assert "waveform_arguments" not in kw
+
+
+def test_pycbc_empty_arguments_are_a_no_op() -> None:
+    """An empty mapping forwards no extra kwargs."""
+    pytest.importorskip("pycbc", reason="pycbc not installed")
+    with patch(
+        "gwmock_signal.waveform.pycbc_wrapper.pycbc_waveform_wrapper",
+        return_value=_fake_result(),
+    ) as mock_wrapper:
+        PyCBCBackend().generate_td_waveform(
+            "IMRPhenomD",
+            tc=0.0,
+            sampling_frequency=4096.0,
+            minimum_frequency=20.0,
+            detector_frame_mass_1=40.0,
+            detector_frame_mass_2=30.0,
+            luminosity_distance=410.0,
+            waveform_arguments={},
+        )
+    kw = mock_wrapper.call_args.kwargs
+    assert "waveform_arguments" not in kw
+
+
+def test_pycbc_unsupported_top_level_parameter_raises() -> None:
+    """Extras must go through waveform_arguments, not as flat top-level kwargs."""
+    pytest.importorskip("pycbc", reason="pycbc not installed")
+    with pytest.raises(ValueError, match="Unsupported PyCBC waveform parameters: f_ref"):
+        PyCBCBackend().generate_td_waveform(
+            "IMRPhenomD",
+            tc=0.0,
+            sampling_frequency=4096.0,
+            minimum_frequency=20.0,
+            detector_frame_mass_1=40.0,
+            detector_frame_mass_2=30.0,
+            luminosity_distance=410.0,
+            f_ref=30.0,
+        )
