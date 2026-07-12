@@ -111,6 +111,12 @@ python -c "import gwmock_signal; print(gwmock_signal.__version__)"
 
 - `lal` (default): ships with the core install via `lalsuite` and supports the
   built-in CBC pipeline without installing `pycbc`.
+- `gwsignal`: also ships with the core install — routes frequency-domain-native
+  approximants through the LVK's forward-looking
+  [`lalsimulation.gwsignal`](https://docs.ligo.org/waveforms/reviews/newwaveforminterface/)
+  interface (`GWSignalBackend`) while sharing the LAL backend's conditioning, so
+  outputs are bit-identical to `lal`; time-domain-native approximants fall back
+  to the LAL path.
 - `pycbc` (optional): install with `pip install 'gwmock-signal[pycbc]'` to use
   `PyCBCBackend`.
 - `ripple` (optional): install with `pip install 'gwmock-signal[jax]'` to use
