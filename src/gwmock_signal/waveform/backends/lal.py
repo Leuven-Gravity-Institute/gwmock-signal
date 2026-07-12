@@ -71,6 +71,7 @@ class _ResolvedParameters:
     coa_phase: float
     lambda_1: float
     lambda_2: float
+    waveform_arguments: dict[str, object]
 
 
 def _to_onesided(data: object, n_freq: int) -> np.ndarray:
@@ -85,6 +86,29 @@ def _to_onesided(data: object, n_freq: int) -> np.ndarray:
     k = min(len(arr), n_freq)
     out[:k] = arr[:k]
     return out
+
+
+def _apply_waveform_arguments(lal_params: object, waveform_arguments: dict[str, object]) -> None:
+    """Insert extra waveform options into a LAL dictionary.
+
+    Keys use LALSimulation's ``SimInspiralWaveformParamsInsert<Key>`` naming
+    (e.g. ``PhenomXPrecVersion``, ``dQuadMon1``). ``ModeArray`` is
+    special-cased and takes an iterable of ``(l, m)`` pairs. Value types must
+    match the LAL setter (int, float, or str); mismatches raise from SWIG.
+    """
+    for key, value in waveform_arguments.items():
+        if key == "ModeArray":
+            mode_array = lalsimulation.SimInspiralCreateModeArray()
+            for ell, m in value:  # type: ignore[attr-defined]
+                lalsimulation.SimInspiralModeArrayActivateMode(mode_array, int(ell), int(m))
+            lalsimulation.SimInspiralWaveformParamsInsertModeArray(lal_params, mode_array)
+            continue
+        setter = getattr(lalsimulation, f"SimInspiralWaveformParamsInsert{key}", None)
+        if setter is None:
+            raise ValueError(
+                f"Unknown waveform argument {key!r}: no lalsimulation.SimInspiralWaveformParamsInsert{key}"
+            )
+        setter(lal_params, value)
 
 
 class LALSimulationBackend(WaveformBackend):
@@ -132,12 +156,28 @@ class LALSimulationBackend(WaveformBackend):
         ]
 
     @staticmethod
+    def _resolve_waveform_arguments(value: object) -> dict[str, object]:
+        """Validate the optional extra-argument mapping for the LAL dictionary."""
+        if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+            raise ValueError("waveform_arguments must be a dict with string keys")
+        for reserved in ("TidalLambda1", "TidalLambda2"):
+            if reserved in value:
+                raise ValueError(
+                    f"Pass tidal deformabilities as lambda_1/lambda_2, not waveform_arguments[{reserved!r}]"
+                )
+        return dict(value)
+
+    @staticmethod
     def _resolve_parameters(
         sampling_frequency: float, minimum_frequency: float, **params: object
     ) -> _ResolvedParameters:
         """Validate inputs and translate canonical parameters to backend-native ones."""
         remaining = dict(params)
+        waveform_arguments = LALSimulationBackend._resolve_waveform_arguments(
+            _pop_alias(remaining, "waveform_arguments", default={})
+        )
         resolved = _ResolvedParameters(
+            waveform_arguments=waveform_arguments,
             mass1=float(_pop_alias(remaining, "detector_frame_mass_1", "mass1")),
             mass2=float(_pop_alias(remaining, "detector_frame_mass_2", "mass2")),
             distance=float(_pop_alias(remaining, "luminosity_distance", "distance")),
@@ -180,6 +220,7 @@ class LALSimulationBackend(WaveformBackend):
         lal_params = lal.CreateDict()
         lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, p.lambda_1)
         lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, p.lambda_2)
+        _apply_waveform_arguments(lal_params, p.waveform_arguments)
 
         wf_args = (
             p.mass1 * MSUN,

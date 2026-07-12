@@ -75,6 +75,11 @@ class GWSignalBackend(LALSimulationBackend):
             # gwsignal's FD path discards the conditioning epoch needed to
             # re-reference TD-native approximants; the parent keeps it.
             return super()._evaluate_fd(approximant, p, grid)
+        if p.waveform_arguments:
+            # Extra LAL-dictionary options are not translated to gwsignal's
+            # parameter dictionary yet; the parent path applies them and is
+            # bit-identical for these approximants anyway.
+            return super()._evaluate_fd(approximant, p, grid)
 
         # Deferred: importing astropy and gwsignal is not free, and the LAL
         # fallback above must work even if they were somehow unavailable.
