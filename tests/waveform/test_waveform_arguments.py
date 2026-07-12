@@ -10,7 +10,11 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
-from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend
+from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
+from gwmock_signal.waveform.backends.ripple import (
+    _ALLOWED_WAVEFORM_ARGUMENTS,
+    _RESERVED_WAVEFORM_ARGUMENTS,
+)
 
 CANONICAL_PARAMS = {
     "tc": 1_126_259_462.4,
@@ -245,3 +249,145 @@ def test_pycbc_unsupported_top_level_parameter_raises() -> None:
             f_ref=30.0,
         )
     mock_wrapper.assert_not_called()
+
+
+# --- ripple backend -------------------------------------------------------
+#
+# ripple options are *constructor* kwargs of the preset, so waveform_arguments is
+# a narrow whitelist. ``_resolve_waveform_arguments`` is a staticmethod, so the
+# validation runs without JAX/ripple; behaviour and the interface-hardening
+# checks need the real ripple install (the test-jax CI job).
+
+# sampling_frequency is deliberately high (Nyquist 2048 Hz): the NRTidal taper
+# no_taper toggles acts near the ~kHz merger/contact frequency, so at a lower
+# Nyquist it would be truncated and the option would look like a no-op. The
+# higher minimum_frequency keeps the analysis segment (and test runtime) small.
+_RIPPLE_BNS_PARAMS = {
+    "tc": 1_126_259_462.4,
+    "sampling_frequency": 4096.0,
+    "minimum_frequency": 40.0,
+    "detector_frame_mass_1": 1.5,
+    "detector_frame_mass_2": 1.4,
+    "luminosity_distance": 100.0,
+    "lambda_1": 1500.0,
+    "lambda_2": 1500.0,
+}
+
+
+def test_ripple_non_dict_arguments_raise() -> None:
+    """waveform_arguments must be a mapping with string keys."""
+    with pytest.raises(ValueError, match="dict with string keys"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", [("no_taper", True)])
+
+
+def test_ripple_non_string_keys_raise() -> None:
+    """Non-string keys are rejected."""
+    with pytest.raises(ValueError, match="dict with string keys"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", {1: True})
+
+
+def test_ripple_allowed_option_passes_validation() -> None:
+    """A whitelisted option for the approximant survives validation unchanged."""
+    args = {"no_taper": True}
+    assert RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", args) == args
+
+
+def test_ripple_f_ref_is_reserved() -> None:
+    """f_ref is backend-owned and cannot be set via waveform_arguments."""
+    with pytest.raises(ValueError, match="f_ref is configured on the backend"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", {"f_ref": 30.0})
+
+
+def test_ripple_use_lambda_tildes_is_reserved() -> None:
+    """use_lambda_tildes conflicts with the canonical lambda_1/lambda_2 mapping."""
+    with pytest.raises(ValueError, match="use_lambda_tildes is not supported"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", {"use_lambda_tildes": True})
+
+
+def test_ripple_unknown_option_raises() -> None:
+    """A key ripple's preset does not accept fails early, not as an opaque TypeError."""
+    with pytest.raises(ValueError, match="does not accept waveform_arguments: not_a_thing"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD_NRTidalv2", {"not_a_thing": 1})
+
+
+def test_ripple_option_rejected_for_wrong_approximant() -> None:
+    """no_taper is only valid for NRTidal models; other approximants reject it."""
+    with pytest.raises(ValueError, match=r"does not accept waveform_arguments: no_taper.*Allowed.*\(none\)"):
+        RippleBackend._resolve_waveform_arguments("IMRPhenomD", {"no_taper": True})
+
+
+def test_ripple_no_taper_changes_the_waveform() -> None:
+    """The whitelisted no_taper option actually takes effect through the backend."""
+    pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    backend = RippleBackend()
+    default = backend.generate_td_waveform("IMRPhenomD_NRTidalv2", **_RIPPLE_BNS_PARAMS)
+    no_taper = backend.generate_td_waveform(
+        "IMRPhenomD_NRTidalv2", waveform_arguments={"no_taper": True}, **_RIPPLE_BNS_PARAMS
+    )
+    assert default["plus"].value.shape == no_taper["plus"].value.shape
+    assert not np.array_equal(default["plus"].value, no_taper["plus"].value)
+
+
+def test_ripple_empty_arguments_are_a_no_op() -> None:
+    """An empty mapping produces the same waveform as omitting it."""
+    pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    backend = RippleBackend()
+    without = backend.generate_td_waveform("IMRPhenomD_NRTidalv2", **_RIPPLE_BNS_PARAMS)
+    with_empty = backend.generate_td_waveform("IMRPhenomD_NRTidalv2", waveform_arguments={}, **_RIPPLE_BNS_PARAMS)
+    np.testing.assert_array_equal(without["plus"].value, with_empty["plus"].value)
+
+
+def test_ripple_batch_path_rejects_waveform_arguments() -> None:
+    """The batch path does not support waveform_arguments yet and says so."""
+    pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    backend = RippleBackend()
+    with pytest.raises(ValueError, match="not supported in the batch path"):
+        backend.generate_fd_polarizations_batch(
+            "IMRPhenomD_NRTidalv2",
+            sampling_frequency=2048.0,
+            minimum_frequency=20.0,
+            parameters={
+                "detector_frame_mass_1": np.array([1.5]),
+                "detector_frame_mass_2": np.array([1.4]),
+                "luminosity_distance": np.array([100.0]),
+                "lambda_1": np.array([400.0]),
+                "lambda_2": np.array([300.0]),
+                "waveform_arguments": {"no_taper": True},
+            },
+        )
+
+
+# Interface-hardening: assert this backend's whitelist/reserve assumptions match
+# ripple's real constructor signatures. ripple is pre-1.0; if a version bump adds,
+# renames, or removes one of these options, these tests fail in the bump PR rather
+# than letting waveform_arguments route to the wrong place silently.
+
+
+def test_ripple_whitelisted_options_exist_in_constructors() -> None:
+    """Every whitelisted option is a real keyword of that approximant's preset."""
+    ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    import inspect
+
+    for approximant, options in _ALLOWED_WAVEFORM_ARGUMENTS.items():
+        signature = inspect.signature(ripplegw.waveform_preset[approximant].__init__)
+        for option in options:
+            assert option in signature.parameters, f"{approximant} preset no longer accepts {option!r}"
+
+
+def test_ripple_reserved_use_lambda_tildes_still_exists() -> None:
+    """use_lambda_tildes is still a ripple option (so reserving it stays meaningful)."""
+    ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    import inspect
+
+    assert "use_lambda_tildes" in _RESERVED_WAVEFORM_ARGUMENTS
+    signature = inspect.signature(ripplegw.waveform_preset["IMRPhenomD_NRTidalv2"].__init__)
+    assert "use_lambda_tildes" in signature.parameters
+
+
+def test_ripple_no_taper_absent_from_non_nrtidal_constructor() -> None:
+    """no_taper is genuinely NRTidal-only, justifying the per-approximant whitelist."""
+    ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+    import inspect
+
+    signature = inspect.signature(ripplegw.waveform_preset["IMRPhenomD"].__init__)
+    assert "no_taper" not in signature.parameters

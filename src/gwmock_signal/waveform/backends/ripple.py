@@ -23,6 +23,16 @@ Supported: aligned-spin point-particle models (``IMRPhenomD``, ``IMRPhenomHM``,
 ``IMRPhenomXAS``, ``IMRPhenomXHM``), the tidal-capable ``TaylorF2`` and NRTidal
 variants (``IMRPhenomD_NRTidalv2``, ``IMRPhenomXAS_NRTidalv3``), and the
 precessing models (``IMRPhenomPv2``, ``IMRPhenomXP``, ``IMRPhenomXPHM``).
+
+Extra ripple options travel through the ``waveform_arguments`` mapping, as with
+the other backends, but here they are *constructor* kwargs of the ripple preset
+rather than call-time options. The whitelist is intentionally narrow because
+ripple's options surface is thin and pre-1.0: only ``no_taper`` (the NRTidal
+variants) is forwarded. ``f_ref`` is owned by the backend, and
+``use_lambda_tildes`` is refused because it would switch ripple to a
+``lambda_tilde``/``delta_lambda_tilde`` parameterisation this backend does not
+feed. The batch path does not accept ``waveform_arguments`` yet. See
+``_ALLOWED_WAVEFORM_ARGUMENTS`` / ``_RESERVED_WAVEFORM_ARGUMENTS``.
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 from gwpy.timeseries import TimeSeries
@@ -41,6 +51,28 @@ if TYPE_CHECKING:
     from jax import Array
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
+
+#: Extra ripple *constructor* options this backend forwards, keyed by approximant.
+#: ripple options are constructor-time (``waveform_preset[name](f_ref=..., **extras)``),
+#: not call-time. ripple is pre-1.0, so this whitelist is deliberately narrow and is
+#: hardened by ``test_waveform_arguments`` against ripple's real constructor signatures,
+#: which will trip CI on a version bump that adds, renames, or removes an option.
+_ALLOWED_WAVEFORM_ARGUMENTS: Final[dict[str, frozenset[str]]] = {
+    "IMRPhenomD_NRTidalv2": frozenset({"no_taper"}),
+    "IMRPhenomXAS_NRTidalv3": frozenset({"no_taper"}),
+}
+
+#: ripple constructor options this backend refuses through ``waveform_arguments``,
+#: with the reason. ``f_ref`` is owned by the backend; ``use_lambda_tildes`` would
+#: switch ripple to expect ``lambda_tilde``/``delta_lambda_tilde`` while this backend
+#: always supplies ``lambda_1``/``lambda_2``, so it cannot be honoured here.
+_RESERVED_WAVEFORM_ARGUMENTS: Final[dict[str, str]] = {
+    "f_ref": "f_ref is configured on the backend, not through waveform_arguments",
+    "use_lambda_tildes": (
+        "use_lambda_tildes is not supported: this backend supplies lambda_1/lambda_2, "
+        "not lambda_tilde/delta_lambda_tilde"
+    ),
+}
 
 #: Aligned-spin, point-particle (non-tidal) models.
 #: Each takes ripple params ``M_c, eta, s1_z, s2_z, d_L, phase_c, iota``.
@@ -99,6 +131,7 @@ class _ResolvedParameters:
     is_tidal: bool
     is_precessing: bool
     f_ref: float
+    waveform_arguments: dict[str, object]
 
 
 class RippleBackend(WaveformBackend):
@@ -295,6 +328,8 @@ class RippleBackend(WaveformBackend):
             raise ValueError("sampling_frequency must be > 0")
         if minimum_frequency <= 0:
             raise ValueError("minimum_frequency must be > 0")
+        if "waveform_arguments" in parameters:
+            raise ValueError("waveform_arguments is not supported in the batch path yet; use the per-event path")
 
         jnp = self._jnp
         mass1 = self._batch_array(parameters, "detector_frame_mass_1")
@@ -364,6 +399,32 @@ class RippleBackend(WaveformBackend):
             raise ValueError(f"Batch parameter {name!r} has length {values.shape[0]}, expected {n_events}.")
         return values
 
+    @staticmethod
+    def _resolve_waveform_arguments(approximant: str, value: object) -> dict[str, object]:
+        """Validate the optional extra ripple constructor options.
+
+        Only the keys whitelisted in :data:`_ALLOWED_WAVEFORM_ARGUMENTS` for this
+        approximant are accepted; backend-owned or contract-breaking keys
+        (:data:`_RESERVED_WAVEFORM_ARGUMENTS`) are rejected with a specific reason,
+        and any other key fails early rather than reaching ripple as an opaque
+        ``TypeError``.
+        """
+        if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+            raise ValueError("waveform_arguments must be a dict with string keys")
+        for key in value:
+            if key in _RESERVED_WAVEFORM_ARGUMENTS:
+                raise ValueError(_RESERVED_WAVEFORM_ARGUMENTS[key])
+        allowed = _ALLOWED_WAVEFORM_ARGUMENTS.get(approximant, frozenset())
+        unknown = sorted(key for key in value if key not in allowed)
+        if unknown:
+            joined = ", ".join(unknown)
+            allowed_str = ", ".join(sorted(allowed)) if allowed else "(none)"
+            raise ValueError(
+                f"{approximant} does not accept waveform_arguments: {joined}. "
+                f"Allowed for this approximant: {allowed_str}."
+            )
+        return dict(value)
+
     def _resolve_parameters(
         self,
         approximant: str,
@@ -383,6 +444,9 @@ class RippleBackend(WaveformBackend):
             raise ValueError("minimum_frequency must be > 0")
 
         remaining = dict(params)
+        waveform_arguments = self._resolve_waveform_arguments(
+            approximant, _pop_alias(remaining, "waveform_arguments", default={})
+        )
         mass1 = float(_pop_alias(remaining, "detector_frame_mass_1", "mass1"))
         mass2 = float(_pop_alias(remaining, "detector_frame_mass_2", "mass2"))
         distance = float(_pop_alias(remaining, "luminosity_distance", "distance"))
@@ -431,6 +495,7 @@ class RippleBackend(WaveformBackend):
             is_tidal=is_tidal,
             is_precessing=is_precessing,
             f_ref=self._f_ref if self._f_ref is not None else minimum_frequency,
+            waveform_arguments=waveform_arguments,
         )
 
     def _segment_samples(self, chirp_mass_solar: float, minimum_frequency: float, sampling_frequency: float) -> int:
@@ -489,7 +554,7 @@ class RippleBackend(WaveformBackend):
         if resolved.is_tidal:
             ripple_params["lambda_1"] = resolved.lambda_1
             ripple_params["lambda_2"] = resolved.lambda_2
-        waveform = self._ripplegw.waveform_preset[approximant](f_ref=resolved.f_ref)
+        waveform = self._ripplegw.waveform_preset[approximant](f_ref=resolved.f_ref, **resolved.waveform_arguments)
         polarizations = waveform(freqs, ripple_params)
 
         # Zero out-of-band bins (including DC, where the amplitude diverges) and
