@@ -82,3 +82,14 @@ jobs:
               run:
                   uv run --frozen pytest -m integration
                   tests/waveform/test_ripple_backend.py
+
+            # Upload the JAX-backend coverage too: the ripple/JAX lines run only
+            # here (they importorskip in the default `test` job), so without this
+            # codecov marks them uncovered on the patch. Flagged separately so the
+            # two jobs' reports merge rather than overwrite.
+            - name: Upload coverage to Codecov (JAX backend)
+              if: ${{ !cancelled() }}
+              uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+              with:
+                  token: ${{ secrets.CODECOV_TOKEN }}
+                  flags: jax
