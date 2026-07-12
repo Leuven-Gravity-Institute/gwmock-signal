@@ -34,6 +34,14 @@ Two deliberate scope limits:
   routines with the same epoch loss, so their coalescence placement cannot
   currently be reconciled with this package's convention. Support requires
   conditioning their time-domain output directly.
+- Calls carrying ``waveform_arguments`` (extra LAL-dictionary options) route
+  through the parent LAL evaluation as well. gwsignal's public parameter
+  dictionary cannot carry them faithfully: keys outside its whitelist are
+  rejected, the ``extra_parameters`` escape hatch coerces every value to
+  REAL8 (breaking INT4/string options such as ``PhenomXPrecVersion``), and
+  its ``ModeArray`` handling raises ``KeyError`` in lalsimulation 6.2.1.
+  The parent path applies the options type-correctly and is bit-identical
+  for the approximants this backend serves.
 
 Masses and distances are converted with LAL's SI constants (``lal.MSUN_SI``,
 ``lal.PC_SI``) rather than astropy's, which keeps the output bit-identical
@@ -76,9 +84,10 @@ class GWSignalBackend(LALSimulationBackend):
             # re-reference TD-native approximants; the parent keeps it.
             return super()._evaluate_fd(approximant, p, grid)
         if p.waveform_arguments:
-            # Extra LAL-dictionary options are not translated to gwsignal's
-            # parameter dictionary yet; the parent path applies them and is
-            # bit-identical for these approximants anyway.
+            # gwsignal's public dictionary cannot carry extra LAL options
+            # faithfully (whitelist; REAL8-only extras; broken ModeArray) --
+            # see the module docstring. The parent path applies them
+            # type-correctly and is bit-identical for these approximants.
             return super()._evaluate_fd(approximant, p, grid)
 
         # Deferred: importing astropy and gwsignal is not free, and the LAL
