@@ -67,6 +67,15 @@ def test_tidal_arguments_are_reserved(reserved: str) -> None:
         )
 
 
+@pytest.mark.parametrize("bad_value", ["not-a-list", [(2,)], [2, 2], None])
+def test_malformed_mode_array_raises(bad_value: object) -> None:
+    """Malformed ModeArray values get a descriptive error, not a bare unpack failure."""
+    with pytest.raises(ValueError, match=r"ModeArray must be an iterable of \(l, m\) pairs"):
+        LALSimulationBackend().generate_td_waveform(
+            "IMRPhenomXHM", waveform_arguments={"ModeArray": bad_value}, **CANONICAL_PARAMS
+        )
+
+
 def test_non_dict_arguments_raise() -> None:
     """waveform_arguments must be a mapping with string keys."""
     with pytest.raises(ValueError, match="dict with string keys"):

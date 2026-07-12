@@ -99,8 +99,12 @@ def _apply_waveform_arguments(lal_params: object, waveform_arguments: dict[str, 
     for key, value in waveform_arguments.items():
         if key == "ModeArray":
             mode_array = lalsimulation.SimInspiralCreateModeArray()
-            for ell, m in value:  # type: ignore[attr-defined]
-                lalsimulation.SimInspiralModeArrayActivateMode(mode_array, int(ell), int(m))
+            try:
+                pairs = [(int(ell), int(m)) for ell, m in value]  # type: ignore[attr-defined]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"ModeArray must be an iterable of (l, m) pairs, got {value!r}") from exc
+            for ell, m in pairs:
+                lalsimulation.SimInspiralModeArrayActivateMode(mode_array, ell, m)
             lalsimulation.SimInspiralWaveformParamsInsertModeArray(lal_params, mode_array)
             continue
         setter = getattr(lalsimulation, f"SimInspiralWaveformParamsInsert{key}", None)
