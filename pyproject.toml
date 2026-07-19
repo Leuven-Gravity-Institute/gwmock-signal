@@ -40,8 +40,8 @@ lock = "minimal"
 
 [dependency-groups]
 dev = [
-  "ruff>=0.15.21",
-  "prek>=0.4.9",
+  "ruff>=0.15.22",
+  "prek>=0.4.10",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.15.1",
   "pytest>=9.1.1",
