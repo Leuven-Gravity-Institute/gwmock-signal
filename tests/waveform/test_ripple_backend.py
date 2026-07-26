@@ -222,7 +222,7 @@ def _match(a: np.ndarray, b: np.ndarray, sampling_frequency: float, f_min: float
         ("IMRPhenomD", 1.6, 1.3, 0.0, 0.0, 0.7),
     ],
 )
-def test_ripple_matches_lal(  # noqa: PLR0913
+def test_ripple_matches_lal(  # noqa: PLR0913, PLR0917
     approximant: str, mass1: float, mass2: float, chi1: float, chi2: float, iota: float
 ) -> None:
     """Ripple agrees with the LAL implementation of the same approximant (white match > 0.99).
