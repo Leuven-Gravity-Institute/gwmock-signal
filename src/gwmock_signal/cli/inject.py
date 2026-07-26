@@ -36,7 +36,7 @@ inject_app = typer.Typer(
 
 
 @inject_app.command("cbc")
-def cbc(  # noqa: PLR0912, PLR0913, PLR0915
+def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     params: Annotated[
         Path,
         typer.Option("--params", help="Path to JSON file with CBC injection parameters.", show_default=False),

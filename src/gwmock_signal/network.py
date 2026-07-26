@@ -348,7 +348,7 @@ class Network:
         data = _load_data(path)
 
         if not isinstance(data, dict):
-            raise ValueError("Network config must be a YAML/JSON mapping at the top level.")
+            raise TypeError("Network config must be a YAML/JSON mapping at the top level.")
         if "name" not in data:
             raise ValueError("Missing required field: 'name'")
         if "detectors" not in data:
