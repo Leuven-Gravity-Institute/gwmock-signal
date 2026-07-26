@@ -239,3 +239,103 @@ def test_device_projection_matches_host_pipeline() -> None:
     a, b = host.value, device
     overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
     assert overlap > 0.9999, f"zero-lag overlap {overlap:.6f} below threshold"
+
+
+def _chirp_polarizations(n_samples: int, sampling_frequency: float) -> tuple[np.ndarray, np.ndarray]:
+    """Return a tapered, band-limited chirp as (plus, cross).
+
+    A chirp rather than a pure tone so the interpolation is exercised across a range
+    of frequencies, and tapered so the projection's zero-fill at the edges does not
+    dominate the comparison.
+    """
+    t = np.arange(n_samples) / sampling_frequency
+    duration = n_samples / sampling_frequency
+    frequency = 20.0 + 80.0 * t / duration
+    phase = 2.0 * np.pi * np.cumsum(frequency) / sampling_frequency
+    envelope = np.hanning(n_samples)
+    return envelope * np.cos(phase), envelope * np.sin(phase)
+
+
+def test_rotating_projection_matches_numpy_path():
+    """The device rotating projection reproduces the NumPy earth_rotation=True path."""
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+    from gwmock_signal.projection.network import project_polarizations_to_network
+
+    sampling_frequency = 2048.0
+    n_samples = 2**16
+    start_time = 1.4e9
+    sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+
+    plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
+    reference = project_polarizations_to_network(
+        {
+            "plus": GWpyTimeSeries(plus, t0=start_time, sample_rate=sampling_frequency),
+            "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
+        },
+        ["E1"],
+        earth_rotation=True,
+        **sky,
+    )["E1"].value
+
+    response, location = reconstructed_geometry("E1")
+    device = np.asarray(
+        project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            start_time=start_time,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            **sky,
+        )
+    )
+
+    scale = np.max(np.abs(reference))
+    # Tolerance is set by the interpolation scheme, not by float precision: the NumPy
+    # path uses a global natural cubic spline and this one a local Catmull-Rom, and the
+    # two differ at the O((f/f_s)^4) error level they both carry. Measured on this
+    # signal the discrepancy scales as ~14x per doubling of the chirp's top frequency,
+    # confirming it is interpolation error rather than a difference in the projection.
+    # Both paths therefore need the strain oversampled well above its highest
+    # frequency; near Nyquist neither scheme is accurate.
+    assert np.max(np.abs(device - reference)) < 2e-4 * scale
+
+
+def test_rotating_projection_differs_from_static_for_long_signals():
+    """Earth rotation changes the answer over an hour-long segment.
+
+    Guards the reason this path exists: if the rotating and midpoint-only projections
+    agreed, wiring the rotating one into the device path would be pointless.
+    """
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+
+    sampling_frequency = 64.0
+    n_samples = 2**18  # 4096 s, the scale of a BNS inspiral in the ET band
+    start_time = 1.4e9
+    sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+
+    plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
+    response, location = reconstructed_geometry("E1")
+
+    rotating = np.asarray(
+        project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            start_time=start_time,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            **sky,
+        )
+    )
+
+    midpoint_gmst = gmst_rad(start_time + 0.5 * (n_samples - 1) / sampling_frequency)
+    f_plus, f_cross = antenna_pattern(response, midpoint_gmst, **sky)
+    static = np.asarray(f_plus) * plus + np.asarray(f_cross) * cross
+
+    mismatch = np.max(np.abs(rotating - static)) / np.max(np.abs(rotating))
+    assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"

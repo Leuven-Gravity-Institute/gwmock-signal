@@ -250,3 +250,141 @@ def project_polarizations_fd(  # noqa: PLR0913
     strain_f = f_plus * jnp.asarray(plus) + f_cross * jnp.asarray(cross)
     strain_f = strain_f * jnp.exp(-2j * jnp.pi * frequencies * time_delay)
     return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency
+
+
+def _interpolate_uniform_cubic(samples: ArrayLike, index: ArrayLike, n_samples: int) -> Array:
+    """Catmull-Rom cubic interpolation of a uniformly sampled series.
+
+    ``index`` is a fractional sample index into ``samples``. Positions outside
+    ``[0, n_samples - 1]`` return zero, matching the ``bounds_error=False,
+    fill_value=0.0`` behaviour of the SciPy interpolation used by the NumPy path.
+
+    Catmull-Rom is used rather than SciPy's natural cubic spline because the latter is
+    a global tridiagonal solve, which is sequential and therefore poorly suited to a
+    device kernel. Both are C1 cubics with O(h^4) error on smooth data; for the
+    band-limited, heavily oversampled strain here the difference is far below the
+    interpolation error itself, which ``tests/projection/test_jax_projection.py``
+    pins against the NumPy path.
+
+    Args:
+        samples: Uniformly sampled series, shape ``(n_samples,)``.
+        index: Fractional sample positions to evaluate at, any shape.
+        n_samples: Length of ``samples``.
+
+    Returns:
+        Interpolated values, the shape of ``index``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    samples = jnp.asarray(samples, dtype=jnp.float64)
+    index = jnp.asarray(index, dtype=jnp.float64)
+
+    base = jnp.floor(index)
+    frac = index - base
+    base_int = base.astype(jnp.int32)
+
+    def _at(offset: int) -> Array:
+        # Clamp the gather so out-of-range reads stay in bounds; the values they
+        # produce are discarded by the mask below.
+        return samples[jnp.clip(base_int + offset, 0, n_samples - 1)]
+
+    p_prev, p0, p1, p_next = _at(-1), _at(0), _at(1), _at(2)
+    interpolated = 0.5 * (
+        2.0 * p0
+        + (p1 - p_prev) * frac
+        + (2.0 * p_prev - 5.0 * p0 + 4.0 * p1 - p_next) * frac**2
+        + (p_next - 3.0 * p1 + 3.0 * p0 - p_prev) * frac**3
+    )
+    in_range = (index >= 0.0) & (index <= n_samples - 1)
+    return jnp.where(in_range, interpolated, 0.0)
+
+
+def project_polarizations_td_rotating(  # noqa: PLR0913
+    plus: ArrayLike,
+    cross: ArrayLike,
+    *,
+    response: ArrayLike,
+    location: ArrayLike,
+    start_time: float,
+    sampling_frequency: float,
+    n_samples: int,
+    right_ascension: float,
+    declination: float,
+    polarization_angle: float,
+    tai_minus_utc: float = _DEFAULT_TAI_MINUS_UTC,
+    dut1: float = 0.0,
+) -> Array:
+    """Project time-domain polarizations with a time-dependent antenna pattern.
+
+    The on-device counterpart of the ``earth_rotation=True`` branch of
+    :func:`gwmock_signal.projection.network.project_polarizations_to_network`, and the
+    algorithm is deliberately identical to it, step for step: the geocenter delay and
+    the antenna-pattern factors are evaluated **per sample**, the polarizations are
+    resampled at the delayed times, and the two are combined as
+    ``F+(t) h+(t - tau(t)) + Fx(t) hx(t - tau(t))``.
+
+    This matters for long signals. Earth turns 15 degrees per hour, so over the
+    2048 s (10 Hz) to 16384 s (5 Hz) segments a binary-neutron-star inspiral occupies
+    in the Einstein Telescope band, the detector sweeps tens of degrees. Evaluating the
+    response once at the segment midpoint — all the frequency-domain path can do,
+    since a time-varying response is not a frequency-domain multiply — is not a small
+    approximation there, it is the wrong answer.
+
+    !!! warning "Oversample the strain"
+
+        Resampling at the delayed times is a cubic interpolation, so its error grows
+        steeply as the signal approaches Nyquist and is worst at the merger, where the
+        waveform peaks. Against the NumPy path the largest sample-wise difference falls
+        roughly 8x per doubling of the sample rate. This is a property of the algorithm,
+        not of this implementation — ``project_polarizations_to_network`` carries the
+        same error — but it means the sample rate should be chosen well above the
+        signal's highest frequency, not merely above it.
+
+    !!! note "Delay convention follows the NumPy path"
+
+        The delay applied to the strain uses the sidereal time at ``t``, while the
+        antenna pattern is evaluated at ``t + tau(t)``. That asymmetry is inherited
+        from ``project_polarizations_to_network`` so the two paths agree; it is a
+        sub-sample effect (``|tau| <= 21 ms``) on a quantity that varies on an hourly
+        timescale.
+
+    Args:
+        plus: Time-domain plus polarization, shape ``(n_samples,)``.
+        cross: Time-domain cross polarization, shape ``(n_samples,)``.
+        response: 3x3 detector response tensor.
+        location: Earth-fixed detector position in metres (3-vector).
+        start_time: GPS time of the first sample.
+        sampling_frequency: Sample rate in Hz.
+        n_samples: Number of samples.
+        right_ascension: Source right ascension in radians.
+        declination: Source declination in radians.
+        polarization_angle: Polarization angle psi in radians.
+        tai_minus_utc: Leap-second offset passed through to :func:`gmst_rad`.
+        dut1: UT1 - UTC passed through to :func:`gmst_rad`.
+
+    Returns:
+        The time-domain detector strain, shape ``(n_samples,)``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    dt = 1.0 / sampling_frequency
+    times = start_time + jnp.arange(n_samples, dtype=jnp.float64) * dt
+
+    gmst = gmst_rad(times, tai_minus_utc=tai_minus_utc, dut1=dut1)
+    time_delays = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
+
+    gmst_antenna = gmst_rad(times + time_delays, tai_minus_utc=tai_minus_utc, dut1=dut1)
+    f_plus, f_cross = antenna_pattern(
+        response,
+        gmst_antenna,
+        right_ascension=right_ascension,
+        declination=declination,
+        polarization_angle=polarization_angle,
+    )
+
+    # Fractional sample index of t - tau(t) on the uniform input grid.
+    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency
+    plus_shifted = _interpolate_uniform_cubic(plus, index, n_samples)
+    cross_shifted = _interpolate_uniform_cubic(cross, index, n_samples)
+
+    return f_plus * plus_shifted + f_cross * cross_shifted
