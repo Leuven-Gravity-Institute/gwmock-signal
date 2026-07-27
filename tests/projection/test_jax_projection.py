@@ -305,7 +305,8 @@ def test_rotating_projection_matches_numpy_path() -> None:
     # impossible; the sky position is fixed, but assert the premise rather than assume it.
     assert scale > 0.0
     # Tolerance is set by the interpolation scheme, not by float precision: the NumPy
-    # path uses a global natural cubic spline and this one a local Catmull-Rom, and the
+    # path uses a global not-a-knot cubic spline (SciPy's interp1d(kind="cubic")) and
+    # this one a local Catmull-Rom, and the
     # two differ at the O((f/f_s)^4) error level they both carry. Measured on this
     # signal the discrepancy scales as ~14x per doubling of the chirp's top frequency,
     # confirming it is interpolation error rather than a difference in the projection.
@@ -320,7 +321,10 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
     Guards the reason this path exists: if the rotating and midpoint-only projections
     agreed, wiring the rotating one into the device path would be pointless.
     """
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+    from gwmock_signal.projection.network import project_polarizations_to_network
 
     sampling_frequency = 64.0
     n_samples = 2**18  # 4096 s, the scale of a BNS inspiral in the ET band
@@ -343,9 +347,19 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
         )
     )
 
-    midpoint_gmst = gmst_rad(start_time + 0.5 * (n_samples - 1) / sampling_frequency)
-    f_plus, f_cross = antenna_pattern(response, midpoint_gmst, **sky)
-    static = np.asarray(f_plus) * plus + np.asarray(f_cross) * cross
+    # Compare against the genuine earth_rotation=False projection rather than an
+    # antenna-pattern-only expression: the static path still applies the midpoint
+    # geocenter delay, and omitting it would let a |tau| <= 21 ms timing difference
+    # masquerade as the Earth-rotation effect this test exists to detect.
+    static = project_polarizations_to_network(
+        {
+            "plus": GWpyTimeSeries(plus, t0=start_time, sample_rate=sampling_frequency),
+            "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
+        },
+        ["E1"],
+        earth_rotation=False,
+        **sky,
+    )["E1"].value
 
     mismatch = np.max(np.abs(rotating - static)) / np.max(np.abs(rotating))
     assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"

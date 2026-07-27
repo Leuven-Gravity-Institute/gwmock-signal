@@ -259,9 +259,9 @@ def _interpolate_uniform_cubic(samples: ArrayLike, index: ArrayLike, n_samples: 
     ``[0, n_samples - 1]`` return zero, matching the ``bounds_error=False,
     fill_value=0.0`` behaviour of the SciPy interpolation used by the NumPy path.
 
-    Catmull-Rom is used rather than SciPy's natural cubic spline because the latter is
-    a global tridiagonal solve, which is sequential and therefore poorly suited to a
-    device kernel. Both are C1 cubics with O(h^4) error on smooth data; for the
+    Catmull-Rom is used rather than the cubic spline SciPy's ``interp1d(kind="cubic")``
+    builds (not-a-knot boundary conditions) because that is a global tridiagonal solve,
+    which is sequential and therefore poorly suited to a device kernel. Both are C1 cubics with O(h^4) error on smooth data; for the
     band-limited, heavily oversampled strain here the difference is far below the
     interpolation error itself, which ``tests/projection/test_jax_projection.py``
     pins against the NumPy path.
@@ -321,7 +321,8 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     algorithm is deliberately identical to it, step for step: the geocenter delay and
     the antenna-pattern factors are evaluated **per sample**, the polarizations are
     resampled at the delayed times, and the two are combined as
-    ``F+(t) h+(t - tau(t)) + Fx(t) hx(t - tau(t))``.
+    ``F+(t + tau(t)) h+(t - tau(t)) + Fx(t + tau(t)) hx(t - tau(t))`` -- see the note
+    below on why the two arguments differ in sign.
 
     This matters for long signals. Earth turns 15 degrees per hour, so over the
     2048 s (10 Hz) to 16384 s (5 Hz) segments a binary-neutron-star inspiral occupies
