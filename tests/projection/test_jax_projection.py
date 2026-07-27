@@ -247,16 +247,23 @@ def _chirp_polarizations(n_samples: int, sampling_frequency: float) -> tuple[np.
     A chirp rather than a pure tone so the interpolation is exercised across a range
     of frequencies, and tapered so the projection's zero-fill at the edges does not
     dominate the comparison.
+
+    The sweep is a fixed fraction of the sample rate (f_s/100 to f_s/20) rather than a
+    fixed frequency band, so the signal stays band-limited and well oversampled at every
+    rate these tests use. A hard-coded band would alias at the low sample rate the
+    long-signal test needs to reach a multi-thousand-second duration cheaply.
     """
     t = np.arange(n_samples) / sampling_frequency
     duration = n_samples / sampling_frequency
-    frequency = 20.0 + 80.0 * t / duration
+    f_start = sampling_frequency / 100.0
+    f_end = sampling_frequency / 20.0
+    frequency = f_start + (f_end - f_start) * t / duration
     phase = 2.0 * np.pi * np.cumsum(frequency) / sampling_frequency
     envelope = np.hanning(n_samples)
     return envelope * np.cos(phase), envelope * np.sin(phase)
 
 
-def test_rotating_projection_matches_numpy_path():
+def test_rotating_projection_matches_numpy_path() -> None:
     """The device rotating projection reproduces the NumPy earth_rotation=True path."""
     from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
@@ -294,6 +301,9 @@ def test_rotating_projection_matches_numpy_path():
     )
 
     scale = np.max(np.abs(reference))
+    # The tolerances below are relative, so a null response would make them vacuous or
+    # impossible; the sky position is fixed, but assert the premise rather than assume it.
+    assert scale > 0.0
     # Tolerance is set by the interpolation scheme, not by float precision: the NumPy
     # path uses a global natural cubic spline and this one a local Catmull-Rom, and the
     # two differ at the O((f/f_s)^4) error level they both carry. Measured on this
@@ -304,7 +314,7 @@ def test_rotating_projection_matches_numpy_path():
     assert np.max(np.abs(device - reference)) < 2e-4 * scale
 
 
-def test_rotating_projection_differs_from_static_for_long_signals():
+def test_rotating_projection_differs_from_static_for_long_signals() -> None:
     """Earth rotation changes the answer over an hour-long segment.
 
     Guards the reason this path exists: if the rotating and midpoint-only projections

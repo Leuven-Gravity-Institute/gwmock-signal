@@ -307,6 +307,9 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
         for index, name in enumerate(detectors):
             expected = reference[name].value
             scale = np.max(np.abs(expected))
+            # Relative tolerances are meaningless at an antenna null; the sky positions
+            # are fixed, but assert the premise rather than assume it.
+            assert scale > 0.0
             difference = np.abs(device[event, index] - expected)
             # Two tolerances because the disagreement is not uniform. Both paths
             # resample with a cubic and differ within its error, which is concentrated

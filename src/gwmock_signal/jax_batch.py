@@ -43,7 +43,7 @@ from gwmock_signal.projection.jax_projection import (
     project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
-from gwmock_signal.waveform.backends.ripple import RippleBackend
+from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
 if TYPE_CHECKING:
     from jax import Array
@@ -199,7 +199,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
 
 def _project_rotating(  # noqa: PLR0913
-    fd: object,
+    fd: FrequencyDomainPolarizations,
     detector_names: Sequence[str],
     *,
     n_samples: int,
@@ -242,35 +242,50 @@ def _project_rotating(  # noqa: PLR0913
     plus_td = jax.vmap(_to_time_domain)(fd.plus)
     cross_td = jax.vmap(_to_time_domain)(fd.cross)
 
+    def _one(  # noqa: PLR0913, PLR0917 - vmapped over six per-event arrays plus static geometry
+        plus: Array,
+        cross: Array,
+        start: Array,
+        ra: Array,
+        dec: Array,
+        psi: Array,
+        response: Array,
+        location: Array,
+    ) -> Array:
+        return project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            start_time=start,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            right_ascension=ra,
+            declination=dec,
+            polarization_angle=psi,
+        )
+
+    # Defined and jitted once, outside the detector loop. Building the jitted callable
+    # inside the loop would hand XLA a fresh closure per detector and pay a full
+    # compilation for each one, which at IMRPhenomXPHM scale is minutes per detector.
+    # The geometry is passed as unmapped arguments so one compiled kernel serves the
+    # whole network, mirroring the static path above.
+    project_batch = jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, None, None)))
+
     per_detector = []
     for name in detector_names:
         response, location = reconstructed_geometry(name)
-
-        def _one(  # noqa: PLR0913, PLR0917 - vmapped over six per-event arrays
-            plus: Array,
-            cross: Array,
-            start: Array,
-            ra: Array,
-            dec: Array,
-            psi: Array,
-            response: Array = response,
-            location: Array = location,
-        ) -> Array:
-            return project_polarizations_td_rotating(
-                plus,
-                cross,
-                response=response,
-                location=location,
-                start_time=start,
-                sampling_frequency=sampling_frequency,
-                n_samples=n_samples,
-                right_ascension=ra,
-                declination=dec,
-                polarization_angle=psi,
-            )
-
         per_detector.append(
-            jax.jit(jax.vmap(_one))(plus_td, cross_td, segment_start, right_ascension, declination, polarization_angle)
+            project_batch(
+                plus_td,
+                cross_td,
+                segment_start,
+                right_ascension,
+                declination,
+                polarization_angle,
+                jnp.asarray(response, dtype=jnp.float64),
+                jnp.asarray(location, dtype=jnp.float64),
+            )
         )
 
     return jnp.stack(per_detector, axis=1)
