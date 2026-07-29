@@ -239,3 +239,130 @@ def test_device_projection_matches_host_pipeline() -> None:
     a, b = host.value, device
     overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
     assert overlap > 0.9999, f"zero-lag overlap {overlap:.6f} below threshold"
+
+
+def _chirp_polarizations(n_samples: int, sampling_frequency: float) -> tuple[np.ndarray, np.ndarray]:
+    """Return a tapered, band-limited chirp as (plus, cross).
+
+    A chirp rather than a pure tone so the interpolation is exercised across a range
+    of frequencies, and tapered so the projection's zero-fill at the edges does not
+    dominate the comparison.
+
+    The sweep is a fixed fraction of the sample rate (f_s/100 to f_s/20) rather than a
+    fixed frequency band, so the signal stays band-limited and well oversampled at every
+    rate these tests use. A hard-coded band would alias at the low sample rate the
+    long-signal test needs to reach a multi-thousand-second duration cheaply.
+    """
+    t = np.arange(n_samples) / sampling_frequency
+    duration = n_samples / sampling_frequency
+    f_start = sampling_frequency / 100.0
+    f_end = sampling_frequency / 20.0
+    frequency = f_start + (f_end - f_start) * t / duration
+    phase = 2.0 * np.pi * np.cumsum(frequency) / sampling_frequency
+    envelope = np.hanning(n_samples)
+    return envelope * np.cos(phase), envelope * np.sin(phase)
+
+
+def test_rotating_projection_matches_numpy_path() -> None:
+    """The device rotating projection reproduces the NumPy earth_rotation=True path."""
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+
+    sampling_frequency = 2048.0
+    n_samples = 2**16
+    start_time = 1.4e9
+    sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+
+    plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
+    reference = project_polarizations_to_network(
+        {
+            "plus": GWpyTimeSeries(plus, t0=start_time, sample_rate=sampling_frequency),
+            "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
+        },
+        ["E1"],
+        earth_rotation=True,
+        **sky,
+    )["E1"].value
+
+    response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
+    device = np.asarray(
+        project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            gmst_start=float(anchors[0]),
+            gmst_rate=rate,
+            **sky,
+        )
+    )
+
+    scale = np.max(np.abs(reference))
+    # The tolerance below is relative, so a null response would make it vacuous or
+    # impossible; the sky position is fixed, but assert the premise rather than assume it.
+    assert scale > 0.0
+    # Round-off. Both paths resample with the same Kaiser-windowed sinc kernel and take
+    # sidereal time from Astropy -- the device path via a host-computed anchor and rate,
+    # which is linear to 6e-14 rad over these spans. Earlier revisions sat at 1e-3 (cubic
+    # interpolation) and then 3.9e-5 (two different sidereal implementations); a tolerance
+    # loose enough to pass those would no longer detect either regression.
+    assert np.max(np.abs(device - reference)) < 1e-10 * scale
+
+
+def test_rotating_projection_differs_from_static_for_long_signals() -> None:
+    """Earth rotation changes the answer over an hour-long segment.
+
+    Guards the reason this path exists: if the rotating and midpoint-only projections
+    agreed, wiring the rotating one into the device path would be pointless.
+    """
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+
+    sampling_frequency = 64.0
+    n_samples = 2**18  # 4096 s, the scale of a BNS inspiral in the ET band
+    start_time = 1.4e9
+    sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+
+    plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
+    response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
+
+    rotating = np.asarray(
+        project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            gmst_start=float(anchors[0]),
+            gmst_rate=rate,
+            **sky,
+        )
+    )
+
+    # Compare against the genuine earth_rotation=False projection rather than an
+    # antenna-pattern-only expression: the static path still applies the midpoint
+    # geocenter delay, and omitting it would let a |tau| <= 21 ms timing difference
+    # masquerade as the Earth-rotation effect this test exists to detect.
+    static = project_polarizations_to_network(
+        {
+            "plus": GWpyTimeSeries(plus, t0=start_time, sample_rate=sampling_frequency),
+            "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
+        },
+        ["E1"],
+        earth_rotation=False,
+        **sky,
+    )["E1"].value
+
+    mismatch = np.max(np.abs(rotating - static)) / np.max(np.abs(rotating))
+    assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"

@@ -39,6 +39,12 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from gwmock_signal.projection.resampling import (
+    DEFAULT_KAISER_BETA,
+    DEFAULT_SINC_TAPS,
+    validate_kernel,
+)
+
 if TYPE_CHECKING:
     from jax import Array
     from jax.typing import ArrayLike
@@ -250,3 +256,174 @@ def project_polarizations_fd(  # noqa: PLR0913
     strain_f = f_plus * jnp.asarray(plus) + f_cross * jnp.asarray(cross)
     strain_f = strain_f * jnp.exp(-2j * jnp.pi * frequencies * time_delay)
     return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency
+
+
+def _interpolate_uniform_sinc(
+    samples: ArrayLike,
+    index: ArrayLike,
+    n_samples: int,
+    *,
+    taps: int = DEFAULT_SINC_TAPS,
+    beta: float = DEFAULT_KAISER_BETA,
+) -> Array:
+    """Kaiser-windowed sinc resampling of a uniformly sampled series.
+
+    The device counterpart of
+    :func:`gwmock_signal.projection.resampling.resample_uniform_sinc`; both must use the
+    same kernel or the two projection paths disagree by more than either one's own error,
+    so the tap count and window parameter are imported from that module rather than
+    restated here.
+
+    For a band-limited uniformly sampled signal the sinc series is the exact interpolant,
+    so accuracy is set by the tap count and can be refined until it stops mattering. A
+    cubic cannot be refined at all. Positions outside ``[0, n_samples - 1]`` return zero.
+
+    The taps are accumulated in a ``fori_loop`` rather than gathered into one
+    ``(taps, ...)`` array: at Einstein Telescope BNS segment lengths a 127-tap gather
+    would need over a hundred arrays of ``n_samples`` live at once, and device memory —
+    not arithmetic — is the binding constraint on this path.
+
+    Args:
+        samples: Uniformly sampled series, shape ``(n_samples,)``.
+        index: Fractional sample positions to evaluate at, any shape.
+        n_samples: Length of ``samples``.
+        taps: Number of kernel taps; odd.
+        beta: Kaiser window shape parameter.
+
+    Returns:
+        Interpolated values, the shape of ``index``.
+    """
+    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+    import jax.numpy as jnp  # noqa: PLC0415
+    from jax.scipy.special import i0  # noqa: PLC0415
+
+    taps, beta = validate_kernel(taps, beta)
+    samples = jnp.asarray(samples, dtype=jnp.float64)
+    index = jnp.asarray(index, dtype=jnp.float64)
+    half = (taps - 1) // 2
+    denominator = half + 1.0
+    normalisation = i0(jnp.asarray(beta, dtype=jnp.float64))
+
+    base = jnp.floor(index)
+    frac = index - base
+    base_int = base.astype(jnp.int32)
+
+    def _accumulate(step: Array, carry: tuple[Array, Array]) -> tuple[Array, Array]:
+        total, weight_sum = carry
+        offset = step - half
+        x = frac - offset
+        window = i0(beta * jnp.sqrt(jnp.maximum(0.0, 1.0 - (x / denominator) ** 2))) / normalisation
+        weight = jnp.sinc(x) * window
+        gathered = samples[jnp.clip(base_int + offset, 0, n_samples - 1)]
+        return total + weight * gathered, weight_sum + weight
+
+    zeros = jnp.zeros_like(index)
+    total, weight_sum = jax.lax.fori_loop(0, taps, _accumulate, (zeros, zeros))
+
+    # Normalised to unit DC gain, matching the NumPy implementation.
+    interpolated = jnp.where(weight_sum != 0.0, total / weight_sum, 0.0)
+    in_range = (index >= 0.0) & (index <= n_samples - 1)
+    return jnp.where(in_range, interpolated, 0.0)
+
+
+def project_polarizations_td_rotating(  # noqa: PLR0913
+    plus: ArrayLike,
+    cross: ArrayLike,
+    *,
+    response: ArrayLike,
+    location: ArrayLike,
+    sampling_frequency: float,
+    n_samples: int,
+    right_ascension: float,
+    declination: float,
+    polarization_angle: float,
+    gmst_start: float,
+    gmst_rate: float,
+    sinc_taps: int = DEFAULT_SINC_TAPS,
+    kaiser_beta: float = DEFAULT_KAISER_BETA,
+) -> Array:
+    """Project time-domain polarizations with a time-dependent antenna pattern.
+
+    The on-device counterpart of the ``earth_rotation=True`` branch of
+    :func:`gwmock_signal.projection.network.project_polarizations_to_network`, and the
+    algorithm is deliberately identical to it, step for step: the geocenter delay and
+    the antenna-pattern factors are evaluated **per sample**, the polarizations are
+    resampled at the delayed times, and the two are combined as
+    ``F+(t) h+(t - tau(t)) + Fx(t) hx(t - tau(t))``.
+
+    This matters for long signals. Earth turns 15 degrees per hour, so over the
+    2048 s (10 Hz) to 16384 s (5 Hz) segments a binary-neutron-star inspiral occupies
+    in the Einstein Telescope band, the detector sweeps tens of degrees. Evaluating the
+    response once at the segment midpoint — all the frequency-domain path can do,
+    since a time-varying response is not a frequency-domain multiply — is not a small
+    approximation there, it is the wrong answer.
+
+    !!! warning "Oversample the strain"
+
+        Resampling at the delayed times is a cubic interpolation, so its error grows
+        steeply as the signal approaches Nyquist and is worst at the merger, where the
+        waveform peaks. Against the NumPy path the largest sample-wise difference falls
+        roughly 8x per doubling of the sample rate. This is a property of the algorithm,
+        not of this implementation — ``project_polarizations_to_network`` carries the
+        same error — but it means the sample rate should be chosen well above the
+        signal's highest frequency, not merely above it.
+
+    !!! note "Time coordinate"
+
+        The output series is labelled in the same time coordinate as the input, and the
+        detector strain at sample ``t`` is ``F(t) h_geo(t - tau(t))``: the antenna pattern
+        is evaluated at ``t``, and the polarizations are resampled at ``t - tau(t)``.
+        Taking ``t_geo = t - tau(t)`` is the first Newton step of the exact relation
+        ``t = t_geo + tau(t_geo)``; the residual is of order ``tau * dtau/dt`` (about
+        3e-8 s, i.e. 6e-5 samples at 2048 Hz), so no iteration is performed.
+
+    Args:
+        plus: Time-domain plus polarization, shape ``(n_samples,)``.
+        cross: Time-domain cross polarization, shape ``(n_samples,)``.
+        response: 3x3 detector response tensor.
+        location: Earth-fixed detector position in metres (3-vector).
+        sampling_frequency: Sample rate in Hz.
+        n_samples: Number of samples.
+        right_ascension: Source right ascension in radians.
+        declination: Source declination in radians.
+        polarization_angle: Polarization angle psi in radians.
+        gmst_start: Greenwich Mean Sidereal Time in radians at the first sample, computed on
+            the host by :func:`~gwmock_signal.projection.sidereal.gmst_anchor_and_rate`.
+            Supplied rather than computed here so that Astropy remains the only
+            implementation of the sidereal model; see that module for why a linear model
+            is exact at these segment lengths.
+        gmst_rate: dGMST/dt in radians per second.
+        sinc_taps: Taps in the resampling kernel. More taps cost arithmetic and buy
+            accuracy; the default is set by measured convergence.
+        kaiser_beta: Kaiser window shape parameter for the resampling kernel.
+
+    Returns:
+        The time-domain detector strain, shape ``(n_samples,)``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    dt = 1.0 / sampling_frequency
+    sample_offsets = jnp.arange(n_samples, dtype=jnp.float64) * dt
+
+    # GMST from the host-supplied anchor and rate. Deliberately left unwrapped: only its
+    # sine and cosine are used, and wrapping would put a discontinuity mid-segment.
+    gmst = gmst_start + gmst_rate * sample_offsets
+    time_delays = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
+
+    # Antenna pattern at the detector-time sample, i.e. the time coordinate the output
+    # series is labelled with. Evaluating it at t + tau would mix the detector and
+    # geocenter time coordinates.
+    f_plus, f_cross = antenna_pattern(
+        response,
+        gmst,
+        right_ascension=right_ascension,
+        declination=declination,
+        polarization_angle=polarization_angle,
+    )
+
+    # Fractional sample index of t - tau(t) on the uniform input grid.
+    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency
+    plus_shifted = _interpolate_uniform_sinc(plus, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
+    cross_shifted = _interpolate_uniform_sinc(cross, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
+
+    return f_plus * plus_shifted + f_cross * cross_shifted

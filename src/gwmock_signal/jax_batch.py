@@ -38,11 +38,12 @@ from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
-    gmst_rad,
     project_polarizations_fd,
+    project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
-from gwmock_signal.waveform.backends.ripple import RippleBackend
+from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
+from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
 if TYPE_CHECKING:
     from jax import Array
@@ -76,15 +77,17 @@ def simulate_cbc_batch(  # noqa: PLR0913
     minimum_frequency: float,
     parameters: Mapping[str, object],
     backend: RippleBackend | None = None,
+    earth_rotation: bool = True,
 ) -> BatchedDetectorStrain:
     """Simulate a catalogue of CBC signals on device, one strain per event and detector.
 
     Evaluates ripple frequency-domain waveforms for the whole catalogue under
     ``jax.vmap`` (a single grid sized worst-case for the longest inspiral), then
-    projects each event onto each detector with the JAX antenna pattern and
-    geocenter delay and inverse-FFTs to strain. The antenna pattern and delay are
-    evaluated once per event at the **segment midpoint** (``earth_rotation=False``),
-    matching :func:`gwmock_signal.projection.network.project_polarizations_to_network`.
+    projects each event onto each detector with the JAX antenna pattern and geocenter
+    delay and inverse-FFTs to strain. The antenna pattern and delay are evaluated per
+    sample by default and once per event at the **segment midpoint** when
+    ``earth_rotation=False``, matching the two branches of
+    :func:`gwmock_signal.projection.network.project_polarizations_to_network`.
 
     Args:
         approximant: A supported ripple approximant name.
@@ -98,6 +101,15 @@ def simulate_cbc_batch(  # noqa: PLR0913
             ``coa_time``.
         backend: Optional configured :class:`RippleBackend` (e.g. with a fixed
             ``segment_duration`` or ``f_ref``). Defaults to ``RippleBackend()``.
+        earth_rotation: If ``True`` (default, matching
+            :func:`~gwmock_signal.projection.network.project_polarizations_to_network`),
+            evaluate the antenna pattern and geocenter delay per sample and resample the
+            polarizations at the delayed times. If ``False``, evaluate both once at the
+            segment midpoint and apply the delay as an exact frequency-domain phase
+            shift, which is cheaper but only valid for signals short compared with an
+            hour. A binary neutron star in the Einstein Telescope band occupies 2048 s
+            at 10 Hz and 16384 s at 5 Hz, over which the detector sweeps tens of
+            degrees, so ``False`` is not appropriate for that population.
 
     Returns:
         A :class:`BatchedDetectorStrain` with the ``(n_events, n_detectors,
@@ -122,9 +134,31 @@ def simulate_cbc_batch(  # noqa: PLR0913
     polarization_angle = jnp.asarray(_required(parameters, "polarization_angle"), dtype=jnp.float64)
     coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
 
+    if earth_rotation:
+        strain = _project_rotating(
+            fd,
+            detector_names,
+            n_samples=n_samples,
+            sampling_frequency=sampling_frequency,
+            merger_index=merger_index,
+            segment_start_gps=coa_time + epoch,
+            right_ascension=right_ascension,
+            declination=declination,
+            polarization_angle=polarization_angle,
+        )
+        return BatchedDetectorStrain(
+            strain=strain,
+            detector_names=tuple(detector_names),
+            coa_time=coa_time,
+            epoch=epoch,
+            sampling_frequency=sampling_frequency,
+        )
+
     # earth_rotation=False reference time: the midpoint of each event's placed segment.
     midpoint_offset = epoch + 0.5 * (n_samples - 1) * dt
-    gmst = gmst_rad(jnp.asarray(coa_time, dtype=jnp.float64) + midpoint_offset)
+    # Astropy is the single implementation of the sidereal model for both branches and
+    # both projection paths; see gwmock_signal.projection.sidereal.
+    gmst = jnp.asarray(gmst_rad_astropy(coa_time + midpoint_offset), dtype=jnp.float64)
 
     def _project_event(plus: Array, cross: Array, f_plus: Array, f_cross: Array, time_delay: Array) -> Array:
         strain = project_polarizations_fd(
@@ -164,6 +198,106 @@ def simulate_cbc_batch(  # noqa: PLR0913
         epoch=epoch,
         sampling_frequency=sampling_frequency,
     )
+
+
+def _project_rotating(  # noqa: PLR0913
+    fd: FrequencyDomainPolarizations,
+    detector_names: Sequence[str],
+    *,
+    n_samples: int,
+    sampling_frequency: float,
+    merger_index: int,
+    segment_start_gps: np.ndarray,
+    right_ascension: Array,
+    declination: Array,
+    polarization_angle: Array,
+) -> Array:
+    """Project a batch with a time-dependent antenna pattern, on device.
+
+    A time-varying response is not a frequency-domain multiply, so unlike the static
+    path this one inverse-FFTs the polarizations first, places coalescence in the
+    segment, and then applies the per-sample response in the time domain via
+    :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating`.
+
+    Args:
+        fd: Frequency-domain polarizations from the ripple backend.
+        detector_names: LAL detector prefixes.
+        n_samples: Samples per event segment.
+        sampling_frequency: Sample rate in Hz.
+        merger_index: Sample index coalescence is rolled to.
+        segment_start_gps: GPS time of each event segment's first sample, shape
+            ``(n_events,)``. Used on the host to anchor sidereal time per event.
+        right_ascension: Per-event right ascension in radians.
+        declination: Per-event declination in radians.
+        polarization_angle: Per-event polarization angle in radians.
+
+    Returns:
+        Strain of shape ``(n_events, n_detectors, n_samples)``.
+    """
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    def _to_time_domain(spectrum: Array) -> Array:
+        # Same scaling and placement as the static path, so the two differ only in how
+        # the detector response is applied.
+        return jnp.roll(jnp.fft.irfft(spectrum, n=n_samples) * sampling_frequency, merger_index)
+
+    plus_td = jax.vmap(_to_time_domain)(fd.plus)
+    cross_td = jax.vmap(_to_time_domain)(fd.cross)
+
+    # One Astropy evaluation per event on the host, plus one shared rate: the kernel then
+    # needs only a multiply-add for sidereal time, and no second sidereal implementation.
+    gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
+    gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
+
+    def _one(  # noqa: PLR0913, PLR0917 - vmapped per-event arrays plus static geometry
+        plus: Array,
+        cross: Array,
+        ra: Array,
+        dec: Array,
+        psi: Array,
+        gmst_start: Array,
+        response: Array,
+        location: Array,
+    ) -> Array:
+        return project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            right_ascension=ra,
+            declination=dec,
+            polarization_angle=psi,
+            gmst_start=gmst_start,
+            gmst_rate=gmst_rate,
+        )
+
+    # Defined and jitted once, outside the detector loop. Building the jitted callable
+    # inside the loop would hand XLA a fresh closure per detector and pay a full
+    # compilation for each one, which at IMRPhenomXPHM scale is minutes per detector.
+    # The geometry is passed as unmapped arguments so one compiled kernel serves the
+    # whole network, mirroring the static path above.
+    project_batch = jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, None, None)))
+
+    per_detector = []
+    for name in detector_names:
+        response, location = reconstructed_geometry(name)
+        per_detector.append(
+            project_batch(
+                plus_td,
+                cross_td,
+                right_ascension,
+                declination,
+                polarization_angle,
+                gmst_anchors,
+                jnp.asarray(response, dtype=jnp.float64),
+                jnp.asarray(location, dtype=jnp.float64),
+            )
+        )
+
+    return jnp.stack(per_detector, axis=1)
 
 
 def assemble_segments(
