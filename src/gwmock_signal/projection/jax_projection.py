@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    SPEED_OF_LIGHT_M_S,
     edge_padding,
     validate_kernel,
 )
@@ -63,11 +64,6 @@ _TT_MINUS_TAI = 32.184
 # explicit value for other epochs. UTC = GPS - (tai_minus_utc + _GPS_MINUS_TAI).
 _DEFAULT_TAI_MINUS_UTC = 37.0
 _ARCSEC_TO_RAD = math.pi / 648000.0
-# Speed of light (exact, SI); matches astropy.constants.c.value.
-_SPEED_OF_LIGHT_M_S = 299792458.0
-# WGS84 equatorial radius, the largest geocentre distance a ground-based detector can have.
-# Used only to bound the geocenter delay when sizing edge padding.
-_EARTH_RADIUS_M = 6378137.0
 
 
 def gmst_rad(
@@ -215,7 +211,7 @@ def time_delay_from_geocenter(
             sindec * jnp.ones_like(gha),
         ]
     )
-    return -jnp.tensordot(location, propagation_direction, axes=1) / _SPEED_OF_LIGHT_M_S
+    return -jnp.tensordot(location, propagation_direction, axes=1) / SPEED_OF_LIGHT_M_S
 
 
 def project_polarizations_fd(  # noqa: PLR0913
@@ -377,10 +373,14 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         contribute zero. Without that they would clip to the first or last sample and *repeat*
         it, which distorts the edges by an amount that depends on how large the waveform is
         there -- fine for a tapered inspiral, wrong for a waveform with abrupt support, and this
-        primitive is waveform-agnostic. The padding is
-        ``ceil(|location| / c * f_s) + (taps - 1) // 2 + 2`` samples per side, covering the
-        largest possible geocenter delay, the kernel half-width, and the sub-sample alignment
-        shift.
+        primitive is waveform-agnostic. The width comes from
+        :func:`~gwmock_signal.projection.resampling.edge_padding`, which both projection paths
+        call so neither can pad differently from the other. It covers the largest geocenter
+        delay *any ground-based detector* can have -- Earth's equatorial radius over c, not this
+        detector's own distance, because ``location`` is a traced argument here and making it
+        static would cost one compiled kernel per detector -- plus the kernel half-width and the
+        sub-sample alignment shift. ``require_terrestrial_location`` enforces that assumption on
+        the host, where the geometry is still concrete.
 
     !!! warning "Oversample the strain"
 

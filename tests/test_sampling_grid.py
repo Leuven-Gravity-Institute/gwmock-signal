@@ -76,6 +76,20 @@ def test_require_on_lattice_reports_the_offender() -> None:
         grid.require_on_lattice(times, name="segment_start_times")
 
 
+def test_empty_input_is_vacuously_on_lattice() -> None:
+    """A caller with nothing to check must get an empty answer, not a reduction error.
+
+    ``lattice_tolerance_samples`` scales with the magnitude of the times involved, so it reduces
+    over the input; on an empty array that raised instead of letting the (vacuously satisfied)
+    check return empty. Chunked and filtered callers can legitimately arrive with no events.
+    """
+    grid = _grid()
+    empty = np.array([], dtype=float)
+    assert grid.lattice_tolerance_samples(empty) > 0.0
+    assert grid.is_on_lattice(empty).shape == (0,)
+    assert grid.require_on_lattice(empty, name="segment_start_times").shape == (0,)
+
+
 def test_from_segment_starts_anchors_on_the_first() -> None:
     """A contiguous tiling defines a valid grid anchored on its first segment."""
     starts = _EPOCH + np.arange(4) * 64.0

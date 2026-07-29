@@ -25,6 +25,11 @@ import pytest
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    EARTH_RADIUS_M,
+    SPEED_OF_LIGHT_M_S,
+    edge_padding,
+    require_shift_within_padding,
+    require_terrestrial_location,
     resample_uniform_sinc,
     validate_kernel,
 )
@@ -171,3 +176,74 @@ def test_defaults_are_self_consistent() -> None:
         DEFAULT_SINC_TAPS,
         DEFAULT_KAISER_BETA,
     )
+
+
+def test_padding_covers_the_largest_terrestrial_delay() -> None:
+    """The delay term must bound the light travel time to the furthest ground-based detector.
+
+    Checked against the constants rather than a hard-coded number, since the point of the bound
+    is the physics: a detector on the equator is ``R_earth / c`` = 21.3 ms from the geocentre, so
+    at any sample rate the padding must exceed that many samples.
+    """
+    sampling_frequency = 4096.0
+    delay_samples = EARTH_RADIUS_M / SPEED_OF_LIGHT_M_S * sampling_frequency
+    assert delay_samples == pytest.approx(87.2, abs=0.1)
+    padding = edge_padding(sampling_frequency, DEFAULT_SINC_TAPS, DEFAULT_KAISER_BETA)
+    assert padding > delay_samples + (DEFAULT_SINC_TAPS - 1) // 2
+
+
+@pytest.mark.parametrize("sampling_frequency", [0.0, -1.0, float("nan"), float("inf")])
+def test_padding_rejects_an_invalid_sample_rate(sampling_frequency: float) -> None:
+    """A non-positive or non-finite rate would size the padding nonsensically."""
+    with pytest.raises(ValueError, match="sampling_frequency"):
+        edge_padding(sampling_frequency)
+
+
+def test_padding_validates_the_callers_beta_not_the_default() -> None:
+    """Regression: the kernel actually passed must be the one validated.
+
+    ``edge_padding`` originally validated ``DEFAULT_KAISER_BETA`` regardless of the ``beta``
+    argument, which both rejected the valid pair below and let an invalid one reserve a buffer
+    before failing inside the interpolation.
+    """
+    assert edge_padding(63, taps=63, beta=15.0) > 0
+    with pytest.raises(ValueError, match="transition"):
+        edge_padding(4096.0, taps=63, beta=DEFAULT_KAISER_BETA)
+
+
+@pytest.mark.parametrize("shift", [0.0, 0.5, 0.999999])
+def test_valid_alignment_shifts_accepted(shift: float) -> None:
+    """``split_index`` returns a remainder in [0, 1), so the whole range must pass."""
+    require_shift_within_padding(np.array([shift]))
+
+
+@pytest.mark.parametrize("shift", [-1e-9, -0.5, 1.0, 2.5, float("nan")])
+def test_out_of_range_alignment_shifts_rejected(shift: float) -> None:
+    """A shift outside [0, 1) reads past the padding; NaN would poison every sample."""
+    with pytest.raises(ValueError, match=r"\[0, 1.0\) samples"):
+        require_shift_within_padding(np.array([shift]))
+
+
+def test_shift_error_names_the_offending_entry() -> None:
+    """Regression: the reported entry must be an *offender*, not the largest in magnitude.
+
+    Selecting by largest absolute value named the valid 0.9 here while the actual offender was
+    the -0.1 at index 0, sending the reader to inspect a correct input.
+    """
+    with pytest.raises(ValueError, match="entry 0") as raised:
+        require_shift_within_padding(np.array([-0.1, 0.9]))
+    message = str(raised.value)
+    assert "entry 0" in message
+    assert "-0.1" in message
+    assert "0.9" not in message.replace("-0.1", "")
+
+
+def test_terrestrial_location_accepts_a_real_detector() -> None:
+    """A LIGO Hanford-scale geocentre distance must pass."""
+    require_terrestrial_location(np.array([-2.16e6, -3.83e6, 4.60e6]))
+
+
+def test_non_terrestrial_location_rejected() -> None:
+    """The padding bound assumes a ground-based detector, so a distant one is an error."""
+    with pytest.raises(ValueError, match="equatorial radius"):
+        require_terrestrial_location(np.array([0.0, 0.0, 4.0e8]), name="location of LISA-like")

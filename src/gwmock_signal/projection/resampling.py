@@ -67,10 +67,13 @@ _TAPS_PER_BETA = 4.0
 
 #: WGS84 equatorial radius: the largest geocentre distance a ground-based detector can have,
 #: used only to bound the geocenter delay when sizing edge padding.
-_EARTH_RADIUS_M = 6378137.0
+EARTH_RADIUS_M = 6378137.0
 
-#: Speed of light (exact, SI).
-_SPEED_OF_LIGHT_M_S = 299792458.0
+#: Speed of light (exact, SI); matches ``astropy.constants.c.value``. Exported, and imported by
+#: the projection paths rather than restated there, because the delay a path computes and the
+#: padding sized to cover that delay must come from one value -- two copies are a latent
+#: inconsistency even when both happen to be the same exact integer today.
+SPEED_OF_LIGHT_M_S = 299792458.0
 
 
 #: Largest sub-sample alignment shift the padding is sized for. ``SamplingGrid.split_index``
@@ -81,7 +84,7 @@ MAXIMUM_ALIGNMENT_SHIFT_SAMPLES = 1.0
 
 
 def require_terrestrial_location(location: np.ndarray, *, name: str = "location") -> None:
-    """Reject a detector further from the geocentre than :data:`_EARTH_RADIUS_M`.
+    """Reject a detector further from the geocentre than :data:`EARTH_RADIUS_M`.
 
     The padding bound assumes a ground-based detector. A space-based or incorrectly specified location
     would need more padding than is allocated, and the shortfall would show up as quiet edge
@@ -95,10 +98,10 @@ def require_terrestrial_location(location: np.ndarray, *, name: str = "location"
         ValueError: If the position lies outside Earth's equatorial radius.
     """
     radius = float(np.linalg.norm(np.asarray(location, dtype=float)))
-    if radius > _EARTH_RADIUS_M:
+    if radius > EARTH_RADIUS_M:
         raise ValueError(
             f"{name} is {radius:.0f} m from the geocentre, beyond Earth's equatorial radius "
-            f"({_EARTH_RADIUS_M:.0f} m). The resampling edge padding is sized for ground-based "
+            f"({EARTH_RADIUS_M:.0f} m). The resampling edge padding is sized for ground-based "
             f"detectors; a more distant one needs a larger bound than edge_padding() allocates."
         )
 
@@ -111,16 +114,22 @@ def require_shift_within_padding(shift_samples: np.ndarray | float, *, name: str
         name: What is being checked, for the error message.
 
     Raises:
-        ValueError: If any shift is negative or at least
+        ValueError: If any shift is negative, NaN, or at least
             :data:`MAXIMUM_ALIGNMENT_SHIFT_SAMPLES`.
     """
     shifts = np.atleast_1d(np.asarray(shift_samples, dtype=float))
-    if np.any(shifts < 0.0) or np.any(shifts >= MAXIMUM_ALIGNMENT_SHIFT_SAMPLES):
-        worst = float(shifts[np.argmax(np.abs(shifts))])
+    # NaN fails both comparisons, so it is rejected explicitly rather than passing as in-range and
+    # then poisoning every interpolated sample downstream.
+    offenders = ~((shifts >= 0.0) & (shifts < MAXIMUM_ALIGNMENT_SHIFT_SAMPLES))
+    if np.any(offenders):
+        # Reported from among the *offending* entries. Taking the largest magnitude over all
+        # shifts would name a perfectly valid 0.9 while the actual offender was a -0.1, sending
+        # the reader to inspect the wrong input.
+        index = int(np.argmax(offenders))
         raise ValueError(
-            f"{name} must lie in [0, {MAXIMUM_ALIGNMENT_SHIFT_SAMPLES}) samples; got {worst}. The "
-            f"resampling edge padding is sized for that range, so a larger shift would read past "
-            f"the padded region."
+            f"{name} must lie in [0, {MAXIMUM_ALIGNMENT_SHIFT_SAMPLES}) samples, but entry {index} "
+            f"is {shifts[index]!r}. The resampling edge padding is sized for that range, so a "
+            f"larger shift would read past the padded region."
         )
 
 
@@ -158,7 +167,7 @@ def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS, beta:
     taps, _ = validate_kernel(taps, beta)
     if not np.isfinite(sampling_frequency) or sampling_frequency <= 0.0:
         raise ValueError(f"sampling_frequency must be positive and finite; got {sampling_frequency}.")
-    max_delay_seconds = _EARTH_RADIUS_M / _SPEED_OF_LIGHT_M_S
+    max_delay_seconds = EARTH_RADIUS_M / SPEED_OF_LIGHT_M_S
     return (
         math.ceil(max_delay_seconds * sampling_frequency)
         + (taps - 1) // 2

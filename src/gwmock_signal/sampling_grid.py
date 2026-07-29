@@ -100,8 +100,15 @@ class SamplingGrid:
         Scaled by the float64 resolution of the times involved, because at GPS magnitudes that
         resolution is coarser than any fixed tolerance worth writing down: near 1.4e9 one ULP
         is already ~5e-4 samples at 2048 Hz.
+
+        An empty input is answered from the epoch alone. A chunked or filtered caller can
+        legitimately arrive with nothing to check, and reducing over an empty array would raise
+        here instead of letting the (vacuously satisfied) lattice check return empty.
         """
-        magnitude = max(abs(float(self.epoch)), float(np.max(np.abs(np.asarray(gps_time, dtype=float)))))
+        times = np.asarray(gps_time, dtype=float)
+        magnitude = abs(float(self.epoch))
+        if times.size:
+            magnitude = max(magnitude, float(np.max(np.abs(times))))
         ulp_samples = float(np.spacing(magnitude)) * self.sampling_frequency
         return float(
             np.clip(_LATTICE_TOLERANCE_ULPS * ulp_samples, _MINIMUM_TOLERANCE_SAMPLES, _MAXIMUM_TOLERANCE_SAMPLES)
