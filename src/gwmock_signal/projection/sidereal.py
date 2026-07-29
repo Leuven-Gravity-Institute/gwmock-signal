@@ -50,9 +50,9 @@ from __future__ import annotations
 import numpy as np
 from astropy.time import Time
 
-#: Baseline for the finite-difference rate estimate, in seconds. Short enough that GMST
-#: does not wrap (it advances ~0.044 rad here) and long enough that Astropy's own
-#: round-off does not dominate the slope.
+#: Baseline for the finite-difference rate estimate, in seconds. Long enough that Astropy's
+#: own round-off does not dominate the slope, short enough that GMST advances only
+#: ~0.044 rad across it -- which is what makes the wrap correction below unambiguous.
 _RATE_BASELINE_SECONDS = 600.0
 
 
@@ -85,8 +85,12 @@ def gmst_rate_rad_per_second(t_gps: float) -> float:
         The rate in rad/s.
     """
     start = float(t_gps)
-    pair = gmst_rad_astropy(np.array([start, start + _RATE_BASELINE_SECONDS]))
-    # No unwrapping needed: the baseline is far shorter than a sidereal day.
+    pair = np.unwrap(gmst_rad_astropy(np.array([start, start + _RATE_BASELINE_SECONDS])))
+    # Unwrapped because gmst_rad_astropy wraps to [0, 2*pi): a short baseline does not
+    # prevent it from *straddling* the wrap, only from spanning more than one. Without
+    # this, an epoch in the last 600 s before the wrap yields a rate of about
+    # -1.04e-2 rad/s instead of +7.29e-5 -- wrong sign, 143x too large -- which would
+    # corrupt every rotating projection anchored there. That is roughly 0.7% of epochs.
     return float((pair[1] - pair[0]) / _RATE_BASELINE_SECONDS)
 
 

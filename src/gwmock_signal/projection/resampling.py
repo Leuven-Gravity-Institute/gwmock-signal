@@ -68,22 +68,31 @@ def validate_kernel(taps: int, beta: float) -> tuple[int, float]:
 
     Args:
         taps: Number of kernel taps; must be an odd integer >= 3.
-        beta: Kaiser window shape parameter; must be non-negative and small enough that
-            its transition band fits in ``taps``.
+        beta: Kaiser window shape parameter; must be finite, non-negative and small enough
+            that its transition band fits in ``taps``.
 
     Returns:
         ``(taps, beta)`` as an ``int`` and a ``float``.
 
     Raises:
-        ValueError: If ``taps`` is not an odd integer >= 3, if ``beta`` is negative, or
-            if ``beta`` is too large for ``taps``. The last case is rejected rather than
-            warned about because it fails *quietly*: the kernel still returns plausible
-            numbers, several orders of magnitude less accurate than the tap count implies.
+        ValueError: If ``taps`` is not an odd integer >= 3, if ``beta`` is not finite or is
+            negative, or if ``beta`` is too large for ``taps``. The last case is rejected
+            rather than warned about because it fails *quietly*: the kernel still returns
+            plausible numbers, several orders of magnitude less accurate than the tap count
+            implies.
     """
+    # Rejected rather than truncated: int(127.9) would silently accept a value the
+    # integer-only contract forbids, and the caller would never learn which kernel ran.
+    if isinstance(taps, float) and not taps.is_integer():
+        raise ValueError(f"taps must be an odd integer >= 3; got {taps}.")
     taps = int(taps)
     if taps < _MINIMUM_TAPS or taps % 2 == 0:
         raise ValueError(f"taps must be an odd integer >= 3; got {taps}.")
     beta = float(beta)
+    # NaN fails every comparison, so it would slip past a bare `beta < 0` check and then
+    # propagate silently through every interpolated sample.
+    if not np.isfinite(beta):
+        raise ValueError(f"Kaiser beta must be finite; got {beta}.")
     if beta < 0.0:
         raise ValueError(f"Kaiser beta must be non-negative; got {beta}.")
     minimum_taps = _TAPS_PER_BETA * beta - 1.0

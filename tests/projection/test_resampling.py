@@ -139,6 +139,20 @@ def test_even_or_tiny_tap_counts_rejected(taps: int) -> None:
         validate_kernel(taps, 4.0)
 
 
+@pytest.mark.parametrize("taps", [127.5, 126.9, 3.5])
+def test_fractional_tap_counts_rejected(taps: float) -> None:
+    """A fractional tap count must not be silently truncated to an integer."""
+    with pytest.raises(ValueError, match="odd integer"):
+        validate_kernel(taps, 4.0)
+
+
+@pytest.mark.parametrize("beta", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_beta_rejected(beta: float) -> None:
+    """NaN slips past a bare `beta < 0` check and would poison every output sample."""
+    with pytest.raises(ValueError, match="finite"):
+        validate_kernel(DEFAULT_SINC_TAPS, beta)
+
+
 def test_negative_beta_rejected() -> None:
     """A negative Kaiser beta is not a valid window."""
     with pytest.raises(ValueError, match="non-negative"):

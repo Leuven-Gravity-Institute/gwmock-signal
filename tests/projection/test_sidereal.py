@@ -47,6 +47,34 @@ def test_rate_matches_the_sidereal_day() -> None:
     assert gmst_rate_rad_per_second(_T0) == pytest.approx(expected, rel=1e-8)
 
 
+def test_rate_is_correct_at_every_epoch_including_the_wrap() -> None:
+    """The rate must not depend on where in the sidereal day the epoch falls.
+
+    Regression test for a real bug: ``gmst_rad_astropy`` wraps to ``[0, 2*pi)``, and a
+    600 s baseline that straddles the wrap gave a rate of about -1.04e-2 rad/s instead of
+    +7.29e-5 -- wrong sign and 143x too large -- corrupting the projection for roughly
+    0.7% of possible start times. It survived review because every test used a single
+    benign epoch, so this one sweeps a whole sidereal day.
+    """
+    expected = 2.0 * np.pi / 86164.0905
+    epochs = _T0 + np.linspace(0.0, 86400.0, 577)
+    rates = np.array([gmst_rate_rad_per_second(float(t)) for t in epochs])
+    assert np.allclose(rates, expected, rtol=1e-6), (
+        f"worst rate {rates[np.argmax(np.abs(rates - expected))]:.6e} vs {expected:.6e}"
+    )
+
+
+def test_rate_is_correct_when_the_baseline_straddles_the_wrap() -> None:
+    """Target the wrap directly rather than relying on a sweep happening to hit it."""
+    expected = 2.0 * np.pi / 86164.0905
+    times = _T0 + np.arange(0.0, 90000.0, 50.0)
+    gmst = gmst_rad_astropy(times)
+    just_before_wrap = float(times[int(np.argmax(np.diff(gmst) < 0))])
+    for offset in (-500.0, -300.0, -100.0, -10.0):
+        rate = gmst_rate_rad_per_second(just_before_wrap + offset)
+        assert rate == pytest.approx(expected, rel=1e-6), (offset, rate)
+
+
 def test_anchors_are_returned_per_start_time() -> None:
     """One anchor per segment, each matching a direct Astropy evaluation."""
     starts = _T0 + np.array([0.0, 300.0, 4096.0])
