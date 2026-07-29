@@ -368,6 +368,80 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
     assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"
 
 
+def test_projection_gathers_from_zero_padded_polarizations() -> None:
+    """The *production* projection must zero-pad, not clamp, at the buffer edges.
+
+    Routed through ``project_polarizations_td_rotating`` on purpose. Two earlier attempts at
+    this test could not fail:
+
+    * the first padded an array by hand and called the kernel helper directly, so it never
+      exercised the production path -- which at the time still clamped;
+    * the second compared the very first output sample against the interior, but with a
+      positive geocenter delay that sample lands *outside* the signal entirely, where both
+      treatments correctly give ~0.
+
+    The discriminating samples are those just *inside* the buffer and within a kernel
+    half-width of its start. There, clamping repeats the endpoint and reproduces a constant
+    input exactly, while zero padding cannot, because part of the kernel support is empty.
+    Measured for a DC input at 2048 Hz: clamping gives 1.000000 at every such sample, padding
+    gives 0.9256 / 0.9771 / 1.0090 / 1.0013 at 1 / 5 / 10 / 20 samples in.
+    """
+    from gwmock_signal.projection.jax_projection import (
+        project_polarizations_td_rotating,
+        time_delay_from_geocenter,
+    )
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+
+    sampling_frequency = 2048.0
+    n_samples = 8192
+    start_time = 1.4e9
+    sky = {"right_ascension": 0.4, "declination": 0.2, "polarization_angle": 0.0}
+
+    response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
+    gmst_start = float(anchors[0])
+
+    strain = np.asarray(
+        project_polarizations_td_rotating(
+            np.ones(n_samples),
+            np.zeros(n_samples),
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            gmst_start=gmst_start,
+            gmst_rate=rate,
+            # Half a sample, so the kernel taps actually spread: at a whole-sample offset the
+            # sinc weights vanish on every tap but the centre and no edge treatment is visible.
+            extra_shift_samples=0.5,
+            **sky,
+        )
+    )
+
+    # Locate a sample that is inside the signal but within a kernel half-width of its start,
+    # accounting for the geocenter delay, which shifts where the signal begins in the output.
+    delay_samples = (
+        float(
+            time_delay_from_geocenter(location, gmst_start, **{k: sky[k] for k in ("right_ascension", "declination")})
+        )
+        * sampling_frequency
+    )
+    first_inside = int(np.ceil(delay_samples)) + 1
+    edge_sample = first_inside + 4
+    assert edge_sample < edge_padding(sampling_frequency, 127)
+
+    interior = float(strain[n_samples // 2])
+    assert abs(interior) > 0.0
+    # F+ varies by ~1e-4 over the buffer, so require an order of magnitude more than that.
+    assert abs(strain[edge_sample] - interior) > 1e-3 * abs(interior), (
+        f"sample {edge_sample} is {strain[edge_sample] / interior:.6f} of the interior value; "
+        "the production path appears to clamp out-of-range taps to the endpoint"
+    )
+    # Away from the edge the two treatments must be indistinguishable.
+    assert abs(strain[n_samples // 2 - 1] - interior) < 0.1 * abs(interior)
+
+
 def test_edge_taps_read_zeros_not_repeated_endpoints() -> None:
     """Out-of-range kernel taps must read zeros, not a repeated endpoint sample.
 

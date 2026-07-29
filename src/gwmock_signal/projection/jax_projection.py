@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    edge_padding,
     validate_kernel,
 )
 
@@ -64,6 +65,9 @@ _DEFAULT_TAI_MINUS_UTC = 37.0
 _ARCSEC_TO_RAD = math.pi / 648000.0
 # Speed of light (exact, SI); matches astropy.constants.c.value.
 _SPEED_OF_LIGHT_M_S = 299792458.0
+# WGS84 equatorial radius, the largest geocentre distance a ground-based detector can have.
+# Used only to bound the geocenter delay when sizing edge padding.
+_EARTH_RADIUS_M = 6378137.0
 
 
 def gmst_rad(
@@ -438,10 +442,19 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         polarization_angle=polarization_angle,
     )
 
-    # Fractional sample index of t - tau(t) on the uniform input grid, plus any lattice
+    # Gather from a zero-padded copy so kernel taps reaching past either end read zero rather
+    # than clamping to the first or last sample and repeating it. Sized for the largest
+    # geocenter delay this detector can have (|location| / c, a sky-independent upper bound),
+    # the kernel half-width, and the sub-sample alignment shift.
+    pad = edge_padding(sampling_frequency, sinc_taps)
+    padded_plus = jnp.pad(jnp.asarray(plus, dtype=jnp.float64), (pad, pad))
+    padded_cross = jnp.pad(jnp.asarray(cross, dtype=jnp.float64), (pad, pad))
+    padded_length = n_samples + 2 * pad
+
+    # Fractional sample index of t - tau(t) on the padded input grid, plus any lattice
     # alignment the caller asked for -- one shift, one resampling.
-    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency - extra_shift_samples
-    plus_shifted = _interpolate_uniform_sinc(plus, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
-    cross_shifted = _interpolate_uniform_sinc(cross, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
+    index = pad + jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency - extra_shift_samples
+    plus_shifted = _interpolate_uniform_sinc(padded_plus, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
+    cross_shifted = _interpolate_uniform_sinc(padded_cross, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
 
     return f_plus * plus_shifted + f_cross * cross_shifted

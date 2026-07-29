@@ -653,7 +653,15 @@ def assemble_segments(
     for k, raw_start in enumerate(segment_start_times):
         seg_start = float(raw_start)
         seg_end = seg_start + segment_duration
-        overlapping = np.nonzero((signal_start < seg_end) & (signal_end > seg_start))[0]
+        if aligned:
+            # Integer lattice arithmetic, not reconstructed GPS times. Both are on one lattice
+            # by construction here, so comparing sample counts is exact and implements the
+            # half-open convention [start, start + duration) without float round-off deciding
+            # whether a signal ending exactly on a boundary belongs to the next segment.
+            offset = event_index - int(segment_index[k])
+            overlapping = np.nonzero((offset < n_segment_samples) & (offset + n_samples > 0))[0]
+        else:
+            overlapping = np.nonzero((signal_start < seg_end) & (signal_end > seg_start))[0]
         channels: dict[str, TimeSeries] = {}
         for d, name in enumerate(detectors):
             if backgrounds is not None:
@@ -818,8 +826,13 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
                 f"accept resampled superposition."
             )
         # One grid for the whole catalogue, so every chunk and every chirp-mass bin lands on the
-        # same lattice and can be superposed with integer offsets.
-        output_grid = SamplingGrid.from_segment_starts(segment_start_times, sampling_frequency)
+        # same lattice and can be superposed with integer offsets. The starts are then rebuilt
+        # *from integer sample indices* rather than kept as start_time + k * segment_duration:
+        # over a long span the repeated float multiplication accumulates representation error,
+        # so a start intended to be on the lattice can drift off it even when the spacing is a
+        # whole number of samples.
+        output_grid = SamplingGrid(epoch=float(start_time), sampling_frequency=sampling_frequency)
+        segment_start_times = output_grid.time_of(np.arange(n_segments, dtype=np.int64) * round(samples_per_segment))
 
     segments: list[DetectorStrainStack] | None = None
     for bin_indices in _chirp_mass_bins(parameters, n_chirp_mass_bins):

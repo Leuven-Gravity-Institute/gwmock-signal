@@ -41,6 +41,8 @@ The array evaluation is written twice, once per backend; the definition lives he
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 #: Fewest taps that still defines a symmetric kernel.
@@ -61,6 +63,40 @@ DEFAULT_KAISER_BETA = 32.0
 #: band no longer fits. The bound ``taps >= 4 * beta - 1`` reproduces where that
 #: transition happens across the beta values tested.
 _TAPS_PER_BETA = 4.0
+
+
+#: WGS84 equatorial radius: the largest geocentre distance a ground-based detector can have,
+#: used only to bound the geocenter delay when sizing edge padding.
+_EARTH_RADIUS_M = 6378137.0
+
+#: Speed of light (exact, SI).
+_SPEED_OF_LIGHT_M_S = 299792458.0
+
+
+def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS) -> int:
+    """Return the zero-padding, in samples, each end of a resampled series needs.
+
+    Both projection paths must pad identically or they disagree at the buffer edges by the
+    padding difference alone -- which is how the device path came to diverge from the NumPy
+    reference after only one of them was changed. The rule therefore lives here, beside the
+    kernel it belongs to, rather than in either path.
+
+    Covers the largest geocenter delay any ground-based detector can have, the kernel's
+    half-width, and one sample of sub-sample alignment shift, plus one for rounding. The delay
+    bound is Earth's equatorial radius over the speed of light rather than an individual
+    detector's distance: on the device that value is a traced argument and so unavailable when
+    the padding must be sized, and making it static per detector would cost one compiled kernel
+    per detector. The bound over-pads by at most a few samples on buffers of millions.
+
+    Args:
+        sampling_frequency: Sample rate in Hz.
+        taps: Taps in the resampling kernel.
+
+    Returns:
+        Padding in samples for each end.
+    """
+    max_delay_seconds = _EARTH_RADIUS_M / _SPEED_OF_LIGHT_M_S
+    return math.ceil(max_delay_seconds * sampling_frequency) + (int(taps) - 1) // 2 + 2
 
 
 def validate_kernel(taps: int, beta: float) -> tuple[int, float]:

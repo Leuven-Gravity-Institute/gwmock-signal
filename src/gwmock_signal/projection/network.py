@@ -26,6 +26,7 @@ from gwmock_signal.projection.geometry import get_lal_detector, reconstructed_ge
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    edge_padding,
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy
@@ -175,8 +176,10 @@ def project_polarizations_to_network(  # noqa: PLR0913
     detector registry. For ``earth_rotation=False``, the constant
     geocenter->detector delay is applied via an exact frequency-domain phase
     shift (``h(t-tau) <-> H(f)*exp(-2*pi*i*f*tau)``), which is lossless at all
-    frequencies. For ``earth_rotation=True``, cubic-spline interpolation is
-    used.
+    frequencies. For ``earth_rotation=True``, the polarizations are resampled at the
+    time-dependent delayed times with the Kaiser-windowed sinc kernel in
+    :mod:`gwmock_signal.projection.resampling`, gathered from a zero-padded copy so kernel
+    taps reaching past either end read zero rather than repeating the endpoint.
 
     Args:
         polarizations: Mapping containing ``plus`` and ``cross`` GWpy time series
@@ -273,10 +276,15 @@ def project_polarizations_to_network(  # noqa: PLR0913
             fc_vals = np.sum(x_vec * dy + y_vec * dx, axis=-1)
 
             # Resample at t - tau(t) with the shared band-limited kernel. Expressed as a
-            # fractional sample index because the input grid is uniform.
-            index = np.arange(len(time_array), dtype=float) - time_delays / dt
-            hp_shifted = resample_uniform_sinc(hp_vals, index, taps=sinc_taps, beta=kaiser_beta)
-            hc_shifted = resample_uniform_sinc(hc_vals, index, taps=sinc_taps, beta=kaiser_beta)
+            # fractional sample index because the input grid is uniform. Gathered from a
+            # zero-padded copy for the same reason as the device path -- taps reaching past
+            # either end must read zero rather than clamping to and repeating the endpoint --
+            # and with the same padding, or the two paths disagree at the edges by the
+            # difference in padding alone.
+            pad = edge_padding(float(hp.sample_rate.value), sinc_taps)
+            index = pad + np.arange(len(time_array), dtype=float) - time_delays / dt
+            hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
+            hc_shifted = resample_uniform_sinc(np.pad(hc_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
         else:
             time_delay = _time_delay_from_earth_center_lal(
                 prefix,
