@@ -311,11 +311,7 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
             # are fixed, but assert the premise rather than assume it.
             assert scale > 0.0
             difference = np.abs(device[event, index] - expected)
-            # Two tolerances because the disagreement is not uniform. Both paths
-            # resample with a cubic and differ within its error, which is concentrated
-            # at the ringdown peak where the waveform is least oversampled: the largest
-            # sample-wise difference sits within a few samples of merger and falls ~8x
-            # per doubling of the sample rate, while the RMS over the segment is two
-            # orders of magnitude smaller.
-            assert np.sqrt(np.mean(difference**2)) < 1e-4 * scale
-            assert np.max(difference) < 3e-3 * scale
+            # Round-off: one resampling kernel and one sidereal implementation across
+            # both paths. See test_jax_projection.py for the history of this tolerance.
+            assert np.sqrt(np.mean(difference**2)) < 1e-11 * scale
+            assert np.max(difference) < 1e-10 * scale

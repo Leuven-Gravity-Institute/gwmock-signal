@@ -20,11 +20,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from astropy import constants
-from astropy.time import Time
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
-from scipy.interpolate import interp1d
 
 from gwmock_signal.projection.geometry import get_lal_detector, reconstructed_geometry
+from gwmock_signal.projection.resampling import (
+    DEFAULT_KAISER_BETA,
+    DEFAULT_SINC_TAPS,
+    resample_uniform_sinc,
+)
+from gwmock_signal.projection.sidereal import gmst_rad_astropy
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -58,12 +62,12 @@ def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tupl
 
 def _gmst_accurate(t_gps: float) -> float:
     """Return Greenwich mean sidereal time in radians using Astropy."""
-    return float(Time(float(t_gps), format="gps", scale="utc", location=(0, 0)).sidereal_time("mean").rad)
+    return float(gmst_rad_astropy(float(t_gps)))
 
 
 def _gmst_accurate_array(t_gps: np.ndarray) -> np.ndarray:
     """Return GMST in radians for an array of GPS times in one vectorized call."""
-    return np.asarray(Time(t_gps, format="gps", scale="utc", location=(0, 0)).sidereal_time("mean").rad, dtype=float)
+    return gmst_rad_astropy(t_gps)
 
 
 def _time_delay_from_earth_center_lal(
@@ -154,7 +158,7 @@ def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, s
     return out
 
 
-def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
+def project_polarizations_to_network(  # noqa: PLR0913
     polarizations: Mapping[str, GWpyTimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
@@ -162,6 +166,8 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     declination: float,
     polarization_angle: float,
     earth_rotation: bool = True,
+    sinc_taps: int = DEFAULT_SINC_TAPS,
+    kaiser_beta: float = DEFAULT_KAISER_BETA,
 ) -> dict[str, GWpyTimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
@@ -184,6 +190,9 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
         earth_rotation: If ``True``, evaluate antenna patterns at time-dependent
             GPS times (recommended for longer signals). If ``False``, use a single
             reference time at the segment midpoint for patterns and delays.
+        sinc_taps: Taps in the band-limited resampling kernel used by the
+            ``earth_rotation=True`` branch. More taps cost arithmetic and buy accuracy.
+        kaiser_beta: Kaiser window shape parameter for that kernel.
 
     Returns:
             Mapping from each detector name to the projected strain as a GWpy time
@@ -202,28 +211,8 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     time_array = cast(np.ndarray, hp.times.to_value())
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
-    time_array_wrt_reference = time_array - reference_time
-
     hp_vals = hp.to_value()
     hc_vals = hc.to_value()
-
-    minimum_number_of_data_points = 4
-    interp_kind = "cubic" if len(time_array_wrt_reference) >= minimum_number_of_data_points else "linear"
-
-    hp_func = interp1d(
-        time_array_wrt_reference,
-        hp_vals,
-        kind=interp_kind,
-        bounds_error=False,
-        fill_value=0.0,
-    )
-    hc_func = interp1d(
-        time_array_wrt_reference,
-        hc_vals,
-        kind=interp_kind,
-        bounds_error=False,
-        fill_value=0.0,
-    )
 
     # Precomputed once for the exact FD phase-shift (earth_rotation=False path).
     n_samples = len(hp_vals)
@@ -251,11 +240,11 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, np.full(len(time_array), sindec)], axis=-1)
             time_delays = -np.dot(prop_dir, location) / constants.c.value
 
-            shifted_times = time_array_wrt_reference - time_delays
-
-            # Vectorized antenna pattern (same math as _antenna_pattern_lal, batched)
-            gmst_antenna = _gmst_accurate_array(time_array + time_delays)
-            gha_a = gmst_antenna - right_ascension
+            # Antenna pattern at the detector-time sample, i.e. the same time coordinate
+            # the output series is labelled with. Evaluating it at t + tau would mix the
+            # detector and geocenter time coordinates; LALSuite and the bilby-x-g
+            # frequency-domain implementation both use a single consistent coordinate.
+            gha_a = gmst_array - right_ascension
             cosgha_a = np.cos(gha_a)
             singha_a = np.sin(gha_a)
 
@@ -283,8 +272,11 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             fp_vals = np.sum(x_vec * dx - y_vec * dy, axis=-1)
             fc_vals = np.sum(x_vec * dy + y_vec * dx, axis=-1)
 
-            hp_shifted = hp_func(shifted_times)
-            hc_shifted = hc_func(shifted_times)
+            # Resample at t - tau(t) with the shared band-limited kernel. Expressed as a
+            # fractional sample index because the input grid is uniform.
+            index = np.arange(len(time_array), dtype=float) - time_delays / dt
+            hp_shifted = resample_uniform_sinc(hp_vals, index, taps=sinc_taps, beta=kaiser_beta)
+            hc_shifted = resample_uniform_sinc(hc_vals, index, taps=sinc_taps, beta=kaiser_beta)
         else:
             time_delay = _time_delay_from_earth_center_lal(
                 prefix,

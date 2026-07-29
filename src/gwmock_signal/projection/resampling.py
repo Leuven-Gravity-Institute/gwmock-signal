@@ -1,0 +1,149 @@
+#
+# Copyright (C) 2026 Leuven Gravity Institute
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+"""Shared specification for the band-limited resampling kernel.
+
+Projecting onto a rotating detector requires evaluating the polarizations at
+``t - tau(t)``, where the delay changes every sample, so every output sample needs a
+different sub-sample shift. For a band-limited, uniformly sampled signal the *exact*
+interpolant is the sinc series; truncating it to a finite window is the only
+approximation, and its error falls steeply with the number of taps. That makes the
+accuracy a tunable rather than a fixed property of the method — unlike a cubic, whose
+error is fixed at O(h^4) no matter how much compute is available.
+
+This module holds the kernel *specification* only — tap count, window shape and the
+weight formula — because the NumPy path (:mod:`gwmock_signal.projection.network`) and
+the device path (:mod:`gwmock_signal.projection.jax_projection`) must resample
+identically or the two implementations disagree by more than either one's own error.
+The array evaluation is written twice, once per backend; the definition lives here once.
+
+!!! note "Choosing the tap count"
+
+    The defaults below were set by measured convergence, not from a design formula:
+    see ``tests/projection/test_resampling.py``, which refines both the tap count and
+    the sample rate against an interpolation-free direct-Fourier reference. A Kaiser
+    window is used because its stopband is controlled by a single parameter, so tap
+    count and attenuation can be traded explicitly.
+
+    No windowed-sinc kernel resamples accurately for signal content arbitrarily close
+    to Nyquist. The strain must be oversampled with margin; the tests quantify how much.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+#: Fewest taps that still defines a symmetric kernel.
+_MINIMUM_TAPS = 3
+
+#: Default number of kernel taps. Odd, so the kernel is symmetric about the sample
+#: preceding the requested position.
+DEFAULT_SINC_TAPS = 127
+
+#: Default Kaiser window shape parameter. This, not the tap count, sets the error floor:
+#: at 127 taps, beta = 12 stalls near 1e-8 while beta = 32 reaches 1e-12. It cannot be
+#: raised freely, because a larger beta needs more taps to hold its transition band --
+#: see :data:`_TAPS_PER_BETA` and :func:`validate_kernel`.
+DEFAULT_KAISER_BETA = 32.0
+
+#: Taps required per unit of Kaiser beta. Measured, not derived: at beta = 32, 127 taps
+#: reach 2.2e-12 at 0.8 x Nyquist while 63 taps give only 1.7e-4, because the transition
+#: band no longer fits. The bound ``taps >= 4 * beta - 1`` reproduces where that
+#: transition happens across the beta values tested.
+_TAPS_PER_BETA = 4.0
+
+
+def validate_kernel(taps: int, beta: float) -> tuple[int, float]:
+    """Validate a kernel specification and return it normalised.
+
+    Args:
+        taps: Number of kernel taps; must be an odd integer >= 3.
+        beta: Kaiser window shape parameter; must be non-negative and small enough that
+            its transition band fits in ``taps``.
+
+    Returns:
+        ``(taps, beta)`` as an ``int`` and a ``float``.
+
+    Raises:
+        ValueError: If ``taps`` is not an odd integer >= 3, if ``beta`` is negative, or
+            if ``beta`` is too large for ``taps``. The last case is rejected rather than
+            warned about because it fails *quietly*: the kernel still returns plausible
+            numbers, several orders of magnitude less accurate than the tap count implies.
+    """
+    taps = int(taps)
+    if taps < _MINIMUM_TAPS or taps % 2 == 0:
+        raise ValueError(f"taps must be an odd integer >= 3; got {taps}.")
+    beta = float(beta)
+    if beta < 0.0:
+        raise ValueError(f"Kaiser beta must be non-negative; got {beta}.")
+    minimum_taps = _TAPS_PER_BETA * beta - 1.0
+    if taps < minimum_taps:
+        raise ValueError(
+            f"Kaiser beta={beta} needs at least {minimum_taps:.0f} taps to hold its transition "
+            f"band, but taps={taps}. Either raise taps or lower beta; a beta too large for the "
+            f"kernel silently loses several orders of magnitude of accuracy."
+        )
+    return taps, beta
+
+
+def resample_uniform_sinc(
+    samples: np.ndarray,
+    index: np.ndarray,
+    *,
+    taps: int = DEFAULT_SINC_TAPS,
+    beta: float = DEFAULT_KAISER_BETA,
+) -> np.ndarray:
+    """Resample a uniformly sampled series at fractional positions (NumPy).
+
+    Evaluates the Kaiser-windowed sinc series. Positions outside
+    ``[0, len(samples) - 1]`` return zero, matching the ``fill_value=0.0`` behaviour of
+    the interpolation this replaces.
+
+    Weights are normalised to sum to one, which enforces unit gain at DC and removes
+    the amplitude bias the window would otherwise introduce near the ends of the series.
+
+    Args:
+        samples: Uniformly sampled series, shape ``(n,)``.
+        index: Fractional sample positions to evaluate at, any shape.
+        taps: Number of kernel taps.
+        beta: Kaiser window shape parameter.
+
+    Returns:
+        Interpolated values, the shape of ``index``.
+    """
+    taps, beta = validate_kernel(taps, beta)
+    samples = np.asarray(samples, dtype=float)
+    index = np.asarray(index, dtype=float)
+    n = samples.shape[0]
+    half = (taps - 1) // 2
+
+    base = np.floor(index)
+    frac = index - base
+    base_int = base.astype(np.int64)
+
+    total = np.zeros(index.shape, dtype=float)
+    weight_sum = np.zeros(index.shape, dtype=float)
+    # Kaiser window evaluated on the kernel's own support, so the taper is a property
+    # of the kernel rather than of where in the series it happens to land.
+    denominator = half + 1.0
+    for offset in range(-half, half + 1):
+        x = frac - offset
+        window = np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - (x / denominator) ** 2))) / np.i0(beta)
+        weight = np.sinc(x) * window
+        gathered = samples[np.clip(base_int + offset, 0, n - 1)]
+        total += weight * gathered
+        weight_sum += weight
+
+    interpolated = np.where(weight_sum != 0.0, total / weight_sum, 0.0)
+    in_range = (index >= 0.0) & (index <= n - 1)
+    return np.where(in_range, interpolated, 0.0)

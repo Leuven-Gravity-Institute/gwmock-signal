@@ -38,11 +38,11 @@ from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
-    gmst_rad,
     project_polarizations_fd,
     project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
+from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
 if TYPE_CHECKING:
@@ -141,7 +141,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
-            segment_start=jnp.asarray(coa_time, dtype=jnp.float64) + epoch,
+            segment_start_gps=coa_time + epoch,
             right_ascension=right_ascension,
             declination=declination,
             polarization_angle=polarization_angle,
@@ -156,7 +156,9 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
     # earth_rotation=False reference time: the midpoint of each event's placed segment.
     midpoint_offset = epoch + 0.5 * (n_samples - 1) * dt
-    gmst = gmst_rad(jnp.asarray(coa_time, dtype=jnp.float64) + midpoint_offset)
+    # Astropy is the single implementation of the sidereal model for both branches and
+    # both projection paths; see gwmock_signal.projection.sidereal.
+    gmst = jnp.asarray(gmst_rad_astropy(coa_time + midpoint_offset), dtype=jnp.float64)
 
     def _project_event(plus: Array, cross: Array, f_plus: Array, f_cross: Array, time_delay: Array) -> Array:
         strain = project_polarizations_fd(
@@ -205,7 +207,7 @@ def _project_rotating(  # noqa: PLR0913
     n_samples: int,
     sampling_frequency: float,
     merger_index: int,
-    segment_start: Array,
+    segment_start_gps: np.ndarray,
     right_ascension: Array,
     declination: Array,
     polarization_angle: Array,
@@ -223,7 +225,8 @@ def _project_rotating(  # noqa: PLR0913
         n_samples: Samples per event segment.
         sampling_frequency: Sample rate in Hz.
         merger_index: Sample index coalescence is rolled to.
-        segment_start: GPS time of each event segment's first sample, shape ``(n_events,)``.
+        segment_start_gps: GPS time of each event segment's first sample, shape
+            ``(n_events,)``. Used on the host to anchor sidereal time per event.
         right_ascension: Per-event right ascension in radians.
         declination: Per-event declination in radians.
         polarization_angle: Per-event polarization angle in radians.
@@ -242,13 +245,18 @@ def _project_rotating(  # noqa: PLR0913
     plus_td = jax.vmap(_to_time_domain)(fd.plus)
     cross_td = jax.vmap(_to_time_domain)(fd.cross)
 
-    def _one(  # noqa: PLR0913, PLR0917 - vmapped over six per-event arrays plus static geometry
+    # One Astropy evaluation per event on the host, plus one shared rate: the kernel then
+    # needs only a multiply-add for sidereal time, and no second sidereal implementation.
+    gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
+    gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
+
+    def _one(  # noqa: PLR0913, PLR0917 - vmapped per-event arrays plus static geometry
         plus: Array,
         cross: Array,
-        start: Array,
         ra: Array,
         dec: Array,
         psi: Array,
+        gmst_start: Array,
         response: Array,
         location: Array,
     ) -> Array:
@@ -257,12 +265,13 @@ def _project_rotating(  # noqa: PLR0913
             cross,
             response=response,
             location=location,
-            start_time=start,
             sampling_frequency=sampling_frequency,
             n_samples=n_samples,
             right_ascension=ra,
             declination=dec,
             polarization_angle=psi,
+            gmst_start=gmst_start,
+            gmst_rate=gmst_rate,
         )
 
     # Defined and jitted once, outside the detector loop. Building the jitted callable
@@ -279,10 +288,10 @@ def _project_rotating(  # noqa: PLR0913
             project_batch(
                 plus_td,
                 cross_td,
-                segment_start,
                 right_ascension,
                 declination,
                 polarization_angle,
+                gmst_anchors,
                 jnp.asarray(response, dtype=jnp.float64),
                 jnp.asarray(location, dtype=jnp.float64),
             )

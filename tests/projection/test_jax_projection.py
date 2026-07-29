@@ -269,6 +269,7 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
     from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
 
     sampling_frequency = 2048.0
     n_samples = 2**16
@@ -287,32 +288,31 @@ def test_rotating_projection_matches_numpy_path() -> None:
     )["E1"].value
 
     response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
     device = np.asarray(
         project_polarizations_td_rotating(
             plus,
             cross,
             response=response,
             location=location,
-            start_time=start_time,
             sampling_frequency=sampling_frequency,
             n_samples=n_samples,
+            gmst_start=float(anchors[0]),
+            gmst_rate=rate,
             **sky,
         )
     )
 
     scale = np.max(np.abs(reference))
-    # The tolerances below are relative, so a null response would make them vacuous or
+    # The tolerance below is relative, so a null response would make it vacuous or
     # impossible; the sky position is fixed, but assert the premise rather than assume it.
     assert scale > 0.0
-    # Tolerance is set by the interpolation scheme, not by float precision: the NumPy
-    # path uses a global not-a-knot cubic spline (SciPy's interp1d(kind="cubic")) and
-    # this one a local Catmull-Rom, and the
-    # two differ at the O((f/f_s)^4) error level they both carry. Measured on this
-    # signal the discrepancy scales as ~14x per doubling of the chirp's top frequency,
-    # confirming it is interpolation error rather than a difference in the projection.
-    # Both paths therefore need the strain oversampled well above its highest
-    # frequency; near Nyquist neither scheme is accurate.
-    assert np.max(np.abs(device - reference)) < 2e-4 * scale
+    # Round-off. Both paths resample with the same Kaiser-windowed sinc kernel and take
+    # sidereal time from Astropy -- the device path via a host-computed anchor and rate,
+    # which is linear to 6e-14 rad over these spans. Earlier revisions sat at 1e-3 (cubic
+    # interpolation) and then 3.9e-5 (two different sidereal implementations); a tolerance
+    # loose enough to pass those would no longer detect either regression.
+    assert np.max(np.abs(device - reference)) < 1e-10 * scale
 
 
 def test_rotating_projection_differs_from_static_for_long_signals() -> None:
@@ -325,6 +325,7 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
 
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
     from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
 
     sampling_frequency = 64.0
     n_samples = 2**18  # 4096 s, the scale of a BNS inspiral in the ET band
@@ -333,6 +334,7 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
 
     plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
     response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
 
     rotating = np.asarray(
         project_polarizations_td_rotating(
@@ -340,9 +342,10 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
             cross,
             response=response,
             location=location,
-            start_time=start_time,
             sampling_frequency=sampling_frequency,
             n_samples=n_samples,
+            gmst_start=float(anchors[0]),
+            gmst_rate=rate,
             **sky,
         )
     )
