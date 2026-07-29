@@ -72,10 +72,57 @@ def test_a_new_backend_instance_reuses_the_kernel() -> None:
     assert _batched_polarization_kernel.cache_info().hits == before + 1
 
 
-def test_different_configurations_get_different_kernels() -> None:
-    """Distinct grids must not share a kernel — that would silently use the wrong grid."""
+def test_different_presets_get_different_kernels() -> None:
+    """Two preset configurations must not share one kernel.
+
+    The cache is cleared first: other test modules populate it with the same configurations,
+    so asserting on cache growth without clearing would pass or fail depending on test order.
+    The frequency grid is no longer part of the key -- it is an argument -- so the distinction
+    tested here is the preset, which is what the key actually covers.
+    """
+    _batched_polarization_kernel.cache_clear()
     backend = RippleBackend()
-    before = _batched_polarization_kernel.cache_info().currsize
+    for approximant in ("IMRPhenomD", "IMRPhenomXAS"):
+        backend.generate_fd_polarizations_batch(
+            approximant,
+            sampling_frequency=1024.0,
+            minimum_frequency=25.0,
+            parameters=_waveform_parameters(),
+        )
+    assert _batched_polarization_kernel.cache_info().currsize == 2
+
+
+def test_varying_only_the_grid_reuses_one_kernel() -> None:
+    """A different frequency grid must *not* build a new kernel.
+
+    This is the payoff of taking the grid as an argument instead of keying on it. Varied via
+    the sample rate rather than the low-frequency cutoff: with no explicit ``f_ref`` the
+    backend uses ``minimum_frequency`` as the reference frequency, so changing the cutoff
+    genuinely changes the ripple preset and *should* build a new kernel. The sample rate
+    changes the grid alone.
+    """
+    _batched_polarization_kernel.cache_clear()
+    backend = RippleBackend()
+    for sampling_frequency in (1024.0, 2048.0, 4096.0):
+        backend.generate_fd_polarizations_batch(
+            "IMRPhenomD",
+            sampling_frequency=sampling_frequency,
+            minimum_frequency=25.0,
+            parameters=_waveform_parameters(),
+        )
+    info = _batched_polarization_kernel.cache_info()
+    assert info.currsize == 1, info
+    assert info.hits == 2, info
+
+
+def test_reference_frequency_is_part_of_the_key() -> None:
+    """A different reference frequency changes the preset, so it must not share a kernel.
+
+    Complements the test above: the grid is deliberately outside the key, ``f_ref`` is
+    deliberately inside it, and with the default backend the cutoff sets ``f_ref``.
+    """
+    _batched_polarization_kernel.cache_clear()
+    backend = RippleBackend()
     for minimum_frequency in (25.0, 30.0):
         backend.generate_fd_polarizations_batch(
             "IMRPhenomD",
@@ -83,7 +130,7 @@ def test_different_configurations_get_different_kernels() -> None:
             minimum_frequency=minimum_frequency,
             parameters=_waveform_parameters(),
         )
-    assert _batched_polarization_kernel.cache_info().currsize > before
+    assert _batched_polarization_kernel.cache_info().currsize == 2
 
 
 @pytest.mark.parametrize("earth_rotation", [False, True])

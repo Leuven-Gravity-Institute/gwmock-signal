@@ -493,6 +493,11 @@ def _project_rotating(  # noqa: PLR0913
     # needs only a multiply-add for sidereal time, and no second sidereal implementation.
     gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
     gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
+    # Explicit dtype rather than the weakly-typed Python float Astropy hands back. Differing
+    # values do not retrace (measured), but a weak type and a concrete float64 are two
+    # distinct signatures, so anything later passing an array scalar would pay a second
+    # compilation. Pinning it removes that possibility.
+    gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
 
     project_batch = _rotating_projection_kernel(n_samples, sampling_frequency)
 
