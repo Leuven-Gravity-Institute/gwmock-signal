@@ -26,8 +26,9 @@ lazily so the package still imports without it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -94,6 +95,113 @@ _ROTATION_BUFFER_MULTIPLIER = 1.6
 #: Fraction of device memory a batch may be sized to occupy. The rest is headroom for
 #: allocator fragmentation and anything else resident.
 _DEFAULT_MEMORY_FRACTION = 0.6
+
+
+#: Distinct projection-kernel configurations kept compiled. Each holds one XLA executable.
+_KERNEL_CACHE_SIZE = 32
+
+
+@lru_cache(maxsize=_KERNEL_CACHE_SIZE)
+def _static_projection_kernel(n_samples: int, sampling_frequency: float, merger_index: int) -> Callable[..., Array]:
+    """Return a cached jitted kernel for the midpoint-only (``earth_rotation=False``) path.
+
+    The frequency grid is taken as an argument rather than rebuilt here: it already exists on
+    the ripple output, and recomputing it would be the same quantity derived in two places.
+
+    Args:
+        n_samples: Samples per event segment.
+        sampling_frequency: Sample rate in Hz.
+        merger_index: Sample index coalescence is rolled to.
+
+    Returns:
+        A callable over ``(frequencies, plus, cross, f_plus, f_cross, time_delay)``, batched
+        over events and unmapped over the shared frequency grid.
+    """
+    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    def _project_event(  # noqa: PLR0913, PLR0917 - one vmapped argument per projection input
+        frequencies: Array,
+        plus: Array,
+        cross: Array,
+        f_plus: Array,
+        f_cross: Array,
+        time_delay: Array,
+    ) -> Array:
+        strain = project_polarizations_fd(
+            frequencies,
+            plus,
+            cross,
+            f_plus=f_plus,
+            f_cross=f_cross,
+            time_delay=time_delay,
+            n_samples=n_samples,
+            sampling_frequency=sampling_frequency,
+        )
+        return jnp.roll(strain, merger_index)  # place coalescence near the segment end
+
+    return jax.jit(jax.vmap(_project_event, in_axes=(None, 0, 0, 0, 0, 0)))
+
+
+@lru_cache(maxsize=_KERNEL_CACHE_SIZE)
+def _time_domain_kernel(n_samples: int, sampling_frequency: float, merger_index: int) -> Callable[[Array], Array]:
+    """Return a cached jitted inverse FFT that also places coalescence in the segment."""
+    import jax  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    def _to_time_domain(spectrum: Array) -> Array:
+        # Same scaling and placement as the static path, so the two differ only in how the
+        # detector response is applied.
+        return jnp.roll(jnp.fft.irfft(spectrum, n=n_samples) * sampling_frequency, merger_index)
+
+    return jax.jit(jax.vmap(_to_time_domain))
+
+
+@lru_cache(maxsize=_KERNEL_CACHE_SIZE)
+def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Callable[..., Array]:
+    """Return a cached jitted kernel for the rotating (``earth_rotation=True``) path.
+
+    Detector geometry and the sidereal rate are unmapped *arguments*, not closed-over values:
+    the geometry so one compiled kernel serves the whole network, and the rate because it is
+    derived from Astropy per call and would otherwise make every distinct epoch a new cache
+    key -- reintroducing exactly the per-call recompilation this cache removes.
+
+    Args:
+        n_samples: Samples per event segment.
+        sampling_frequency: Sample rate in Hz.
+
+    Returns:
+        A callable over ``(plus, cross, ra, dec, psi, gmst_start, gmst_rate, response,
+        location)``, batched over events.
+    """
+    import jax  # noqa: PLC0415
+
+    def _one(  # noqa: PLR0913, PLR0917 - vmapped per-event arrays plus unmapped geometry
+        plus: Array,
+        cross: Array,
+        ra: Array,
+        dec: Array,
+        psi: Array,
+        gmst_start: Array,
+        gmst_rate: Array,
+        response: Array,
+        location: Array,
+    ) -> Array:
+        return project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            right_ascension=ra,
+            declination=dec,
+            polarization_angle=psi,
+            gmst_start=gmst_start,
+            gmst_rate=gmst_rate,
+        )
+
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -259,7 +367,6 @@ def simulate_cbc_batch(  # noqa: PLR0913
         A :class:`BatchedDetectorStrain` with the ``(n_events, n_detectors,
         n_samples)`` strain and per-event timing metadata.
     """
-    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
     import jax.numpy as jnp  # noqa: PLC0415
 
     backend = backend or RippleBackend()
@@ -317,22 +424,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     # both projection paths; see gwmock_signal.projection.sidereal.
     gmst = jnp.asarray(gmst_rad_astropy(coa_time + midpoint_offset), dtype=jnp.float64)
 
-    def _project_event(plus: Array, cross: Array, f_plus: Array, f_cross: Array, time_delay: Array) -> Array:
-        strain = project_polarizations_fd(
-            fd.frequencies,
-            plus,
-            cross,
-            f_plus=f_plus,
-            f_cross=f_cross,
-            time_delay=time_delay,
-            n_samples=n_samples,
-            sampling_frequency=sampling_frequency,
-        )
-        return jnp.roll(strain, merger_index)  # place coalescence near the segment end
-
-    # jit-compile the vmapped projection so each detector's batch fuses into one
-    # kernel; compiled once and reused across detectors (shared shapes).
-    project_batch = jax.jit(jax.vmap(_project_event))
+    project_batch = _static_projection_kernel(n_samples, sampling_frequency, merger_index)
 
     per_detector = []
     for name in detector_names:
@@ -345,7 +437,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
             polarization_angle=polarization_angle,
         )
         time_delay = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
-        per_detector.append(project_batch(fd.plus, fd.cross, f_plus, f_cross, time_delay))
+        per_detector.append(project_batch(fd.frequencies, fd.plus, fd.cross, f_plus, f_cross, time_delay))
 
     strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples)
     return BatchedDetectorStrain(
@@ -391,52 +483,18 @@ def _project_rotating(  # noqa: PLR0913
     Returns:
         Strain of shape ``(n_events, n_detectors, n_samples)``.
     """
-    import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
 
-    def _to_time_domain(spectrum: Array) -> Array:
-        # Same scaling and placement as the static path, so the two differ only in how
-        # the detector response is applied.
-        return jnp.roll(jnp.fft.irfft(spectrum, n=n_samples) * sampling_frequency, merger_index)
-
-    plus_td = jax.vmap(_to_time_domain)(fd.plus)
-    cross_td = jax.vmap(_to_time_domain)(fd.cross)
+    to_time_domain = _time_domain_kernel(n_samples, sampling_frequency, merger_index)
+    plus_td = to_time_domain(fd.plus)
+    cross_td = to_time_domain(fd.cross)
 
     # One Astropy evaluation per event on the host, plus one shared rate: the kernel then
     # needs only a multiply-add for sidereal time, and no second sidereal implementation.
     gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
     gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
 
-    def _one(  # noqa: PLR0913, PLR0917 - vmapped per-event arrays plus static geometry
-        plus: Array,
-        cross: Array,
-        ra: Array,
-        dec: Array,
-        psi: Array,
-        gmst_start: Array,
-        response: Array,
-        location: Array,
-    ) -> Array:
-        return project_polarizations_td_rotating(
-            plus,
-            cross,
-            response=response,
-            location=location,
-            sampling_frequency=sampling_frequency,
-            n_samples=n_samples,
-            right_ascension=ra,
-            declination=dec,
-            polarization_angle=psi,
-            gmst_start=gmst_start,
-            gmst_rate=gmst_rate,
-        )
-
-    # Defined and jitted once, outside the detector loop. Building the jitted callable
-    # inside the loop would hand XLA a fresh closure per detector and pay a full
-    # compilation for each one, which at IMRPhenomXPHM scale is minutes per detector.
-    # The geometry is passed as unmapped arguments so one compiled kernel serves the
-    # whole network, mirroring the static path above.
-    project_batch = jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, None, None)))
+    project_batch = _rotating_projection_kernel(n_samples, sampling_frequency)
 
     per_detector = []
     for name in detector_names:
@@ -449,6 +507,7 @@ def _project_rotating(  # noqa: PLR0913
                 declination,
                 polarization_angle,
                 gmst_anchors,
+                gmst_rate,
                 jnp.asarray(response, dtype=jnp.float64),
                 jnp.asarray(location, dtype=jnp.float64),
             )

@@ -39,8 +39,9 @@ feed. The batch path takes the same options as a batch-wide keyword argument
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -96,6 +97,60 @@ _DEFAULT_RINGDOWN_FRACTION = 0.1
 _SEGMENT_BUFFER_SECONDS = 2.0
 #: Floor on the segment length (seconds) for very short signals.
 _MIN_SEGMENT_SECONDS = 1.0
+
+
+#: Distinct batched-kernel configurations kept compiled. Each entry holds one XLA
+#: executable, so the cache is bounded; a handful covers any realistic run, which varies
+#: catalogue size (a traced shape, handled by JAX's own cache) far more often than it
+#: varies approximant, grid length or waveform options.
+_KERNEL_CACHE_SIZE = 32
+
+
+@lru_cache(maxsize=_KERNEL_CACHE_SIZE)
+def _batched_polarization_kernel(  # noqa: PLR0913, PLR0917 - one key component per dependency
+    approximant: str,
+    n_samples: int,
+    sampling_frequency: float,
+    minimum_frequency: float,
+    f_ref: float,
+    waveform_arguments: tuple[tuple[str, object], ...],
+) -> Callable[[dict], tuple]:
+    """Return a cached, jitted, vmapped ripple evaluation for one kernel configuration.
+
+    Keyed on every value the kernel closes over, so two calls that would build an identical
+    kernel share one compiled executable instead of recompiling. Catalogue size is
+    deliberately *not* part of the key: it changes the input shape, which JAX's own cache
+    handles, and including it here would defeat the purpose whenever a chunked run ends with
+    a shorter final chunk.
+
+    Args:
+        approximant: A supported ripple approximant name.
+        n_samples: Length of the real time series the grid corresponds to.
+        sampling_frequency: Sample rate in Hz.
+        minimum_frequency: Low-frequency cutoff in Hz; bins below it are zeroed.
+        f_ref: Reference frequency handed to the ripple preset.
+        waveform_arguments: Resolved extra preset options, as sorted items so the key hashes.
+
+    Returns:
+        A callable taking the batched ripple parameter dict and returning ``(plus, cross)``.
+    """
+    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    ripplegw = importlib.import_module("ripplegw")
+    delta_f = sampling_frequency / n_samples
+    freqs = jnp.arange(n_samples // 2 + 1) * delta_f
+    in_band = freqs >= minimum_frequency
+    waveform = ripplegw.waveform_preset[approximant](f_ref=f_ref, **dict(waveform_arguments))
+
+    def _one(event: dict) -> tuple:
+        polarizations = waveform(freqs, event)
+        return (
+            jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0)),
+            jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0)),
+        )
+
+    return jax.jit(jax.vmap(_one))
 
 
 @dataclass(frozen=True)
@@ -293,20 +348,22 @@ class RippleBackend(WaveformBackend):
         jnp = self._jnp
         delta_f = sampling_frequency / n_samples
         freqs = jnp.arange(n_samples // 2 + 1) * delta_f
-        in_band = freqs >= minimum_frequency
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
-        waveform = self._ripplegw.waveform_preset[approximant](f_ref=f_ref, **resolved_arguments)
 
-        def _one(event: dict) -> tuple:
-            polarizations = waveform(freqs, event)
-            return (
-                jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0)),
-                jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0)),
-            )
-
-        # jit-compile the vmapped evaluation so the whole batch fuses into one
-        # kernel (the main GPU win); compiled once per (n_events, n_samples) shape.
-        plus, cross = self._jax.jit(self._jax.vmap(_one))(ripple_params)
+        # Fetched from a cache keyed on everything the kernel depends on, so repeated calls
+        # reuse one compiled executable. Building jax.jit around a closure defined here
+        # would hand XLA a new callable every call and re-pay tracing, lowering and
+        # compilation each time -- about 121 s per call for IMRPhenomXPHM on an A100, which
+        # made the batched path slower than the per-event LAL loop it replaces.
+        kernel = _batched_polarization_kernel(
+            approximant,
+            n_samples,
+            sampling_frequency,
+            minimum_frequency,
+            f_ref,
+            tuple(sorted(resolved_arguments.items())),
+        )
+        plus, cross = kernel(ripple_params)
         return FrequencyDomainPolarizations(
             frequencies=freqs,
             plus=plus,
