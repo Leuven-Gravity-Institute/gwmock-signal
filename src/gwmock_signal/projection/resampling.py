@@ -73,6 +73,57 @@ _EARTH_RADIUS_M = 6378137.0
 _SPEED_OF_LIGHT_M_S = 299792458.0
 
 
+#: Largest sub-sample alignment shift the padding is sized for. ``SamplingGrid.split_index``
+#: returns a remainder in ``[0, 1)`` by construction, so one sample of slack suffices -- but a
+#: direct caller passing more than this would reach past the padding, hence
+#: :func:`require_shift_within_padding`.
+MAXIMUM_ALIGNMENT_SHIFT_SAMPLES = 1.0
+
+
+def require_terrestrial_location(location: np.ndarray, *, name: str = "location") -> None:
+    """Reject a detector further from the geocentre than :data:`_EARTH_RADIUS_M`.
+
+    The padding bound assumes a ground-based detector. A space-based or incorrectly specified location
+    would need more padding than is allocated, and the shortfall would show up as quiet edge
+    corruption rather than an error, so it is checked where the location is still concrete.
+
+    Args:
+        location: Earth-fixed position in metres (3-vector).
+        name: What is being checked, for the error message.
+
+    Raises:
+        ValueError: If the position lies outside Earth's equatorial radius.
+    """
+    radius = float(np.linalg.norm(np.asarray(location, dtype=float)))
+    if radius > _EARTH_RADIUS_M:
+        raise ValueError(
+            f"{name} is {radius:.0f} m from the geocentre, beyond Earth's equatorial radius "
+            f"({_EARTH_RADIUS_M:.0f} m). The resampling edge padding is sized for ground-based "
+            f"detectors; a more distant one needs a larger bound than edge_padding() allocates."
+        )
+
+
+def require_shift_within_padding(shift_samples: np.ndarray | float, *, name: str = "shift") -> None:
+    """Reject an alignment shift larger than the padding is sized for.
+
+    Args:
+        shift_samples: Sub-sample shift(s), in samples.
+        name: What is being checked, for the error message.
+
+    Raises:
+        ValueError: If any shift is negative or at least
+            :data:`MAXIMUM_ALIGNMENT_SHIFT_SAMPLES`.
+    """
+    shifts = np.atleast_1d(np.asarray(shift_samples, dtype=float))
+    if np.any(shifts < 0.0) or np.any(shifts >= MAXIMUM_ALIGNMENT_SHIFT_SAMPLES):
+        worst = float(shifts[np.argmax(np.abs(shifts))])
+        raise ValueError(
+            f"{name} must lie in [0, {MAXIMUM_ALIGNMENT_SHIFT_SAMPLES}) samples; got {worst}. The "
+            f"resampling edge padding is sized for that range, so a larger shift would read past "
+            f"the padded region."
+        )
+
+
 def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS) -> int:
     """Return the zero-padding, in samples, each end of a resampled series needs.
 
@@ -95,8 +146,18 @@ def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS) -> in
     Returns:
         Padding in samples for each end.
     """
+    # Validated before sizing: an invalid tap count would otherwise allocate a padded buffer and
+    # only fail later inside the interpolation, having already reserved the memory.
+    taps, _ = validate_kernel(taps, DEFAULT_KAISER_BETA)
+    if not np.isfinite(sampling_frequency) or sampling_frequency <= 0.0:
+        raise ValueError(f"sampling_frequency must be positive and finite; got {sampling_frequency}.")
     max_delay_seconds = _EARTH_RADIUS_M / _SPEED_OF_LIGHT_M_S
-    return math.ceil(max_delay_seconds * sampling_frequency) + (int(taps) - 1) // 2 + 2
+    return (
+        math.ceil(max_delay_seconds * sampling_frequency)
+        + (taps - 1) // 2
+        + math.ceil(MAXIMUM_ALIGNMENT_SHIFT_SAMPLES)
+        + 1
+    )
 
 
 def validate_kernel(taps: int, beta: float) -> tuple[int, float]:

@@ -486,3 +486,61 @@ def test_edge_taps_read_zeros_not_repeated_endpoints() -> None:
     assert abs(padded_at(interior) - clamped_at(interior)) < 1e-9, (
         "the two treatments must be indistinguishable away from the edges"
     )
+
+
+def test_response_is_anchored_at_the_aligned_start() -> None:
+    """The antenna pattern must be evaluated at the aligned start, not the requested one.
+
+    When alignment moves a buffer back by a fractional sample, the sidereal anchor has to move
+    with it or ``F(t)`` and ``tau(t)`` are evaluated up to a full sample after the samples they
+    multiply. At Earth's real rotation rate that error is ~3e-8 in ``F`` and no ordinary test
+    would resolve it, so the rate is exaggerated here by a large factor. That magnifies the
+    coordinate error without changing which code path runs: ``gmst_rate`` is an ordinary traced
+    argument of the same kernel.
+
+    The check is against an independently computed first-sample response: with the anchor
+    convention ``gmst_start = gmst(aligned_start)``, the first output sample must equal
+    ``F(gmst_start) * h[0]`` for a signal whose first sample is 1 and whose neighbours make the
+    resampling a pure pass-through at zero shift.
+    """
+    from gwmock_signal.projection.jax_projection import (
+        antenna_pattern,
+        project_polarizations_td_rotating,
+    )
+
+    sampling_frequency = 2048.0
+    n_samples = 4096
+    sky = {"right_ascension": 1.1, "declination": -0.3, "polarization_angle": 0.4}
+    response, location = reconstructed_geometry("E1")
+
+    gmst_start = 0.7
+    # Absurd rate: one radian per second, ~14000x Earth's, so a one-sample anchor error becomes
+    # a ~5e-4 rad change in sidereal angle instead of ~3.6e-8.
+    exaggerated_rate = 1.0
+
+    plus = np.ones(n_samples)
+    cross = np.zeros(n_samples)
+    strain = np.asarray(
+        project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            gmst_start=gmst_start,
+            gmst_rate=exaggerated_rate,
+            extra_shift_samples=0.0,
+            **sky,
+        )
+    )
+
+    # Independent expectation for a sample well inside the buffer, where resampling is
+    # pass-through in amplitude for a constant input: F evaluated at the anchor plus the
+    # elapsed sidereal angle for that sample.
+    probe = n_samples // 2
+    gmst_at_probe = gmst_start + exaggerated_rate * probe / sampling_frequency
+    f_plus, _ = antenna_pattern(response, gmst_at_probe, **sky)
+    assert strain[probe] == pytest.approx(float(f_plus), rel=2e-3), (
+        "the response is not evaluated at gmst_start + rate * (sample / f_s); the anchor convention has drifted"
+    )

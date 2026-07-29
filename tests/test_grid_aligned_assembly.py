@@ -263,3 +263,146 @@ def test_grid_sample_rate_must_match_the_batch() -> None:
             parameters=parameters,
             output_grid=SamplingGrid(epoch=_T0, sampling_frequency=_FS / 2),
         )
+
+
+def _aligned_batch(coa_time: np.ndarray, detectors: list[str] | None = None) -> object:
+    parameters = dict(_BASE)
+    parameters["coa_time"] = coa_time
+    return simulate_cbc_batch(
+        "IMRPhenomD",
+        detectors or ["E1"],
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=parameters,
+        output_grid=_grid(),
+    )
+
+
+def test_signal_ending_exactly_on_a_segment_start_is_excluded() -> None:
+    """The half-open convention [start, start + duration) must be exact, not float-decided.
+
+    Highest-risk case for an off-by-one: the integer arithmetic is only correct if a signal
+    whose last sample sits immediately before a boundary belongs to the earlier segment alone.
+    """
+    grid = _grid()
+    batch = _aligned_batch(np.array([_T0 + 5.0, _T0 + 5.0]))
+    n_signal = np.asarray(batch.strain).shape[2]
+    # Place the buffer so its final sample is the one before the second segment starts.
+    end_index = grid.require_on_lattice(np.array([_STARTS[1]]), name="starts")[0]
+    shifted = object.__new__(type(batch))
+    object.__setattr__(shifted, "strain", batch.strain)
+    for field in ("detector_names", "coa_time", "epoch", "sampling_frequency", "grid"):
+        object.__setattr__(shifted, field, getattr(batch, field))
+    object.__setattr__(shifted, "start_index", np.array([end_index - n_signal, end_index], dtype=np.int64))
+
+    segments = assemble_segments(shifted, segment_duration=_SEGMENT, segment_start_times=_STARTS)
+    first, second = (s.to_dict()["E1"].value for s in segments)
+    # Event 0 ends exactly at the boundary: it belongs to the first segment only.
+    # Event 1 starts exactly at the boundary: to the second only.
+    assert np.any(first != 0.0)
+    assert np.any(second != 0.0)
+    # The last sample of the first segment and the first of the second come from different
+    # events, so neither segment can contain both contributions at the seam.
+    assert np.count_nonzero(first) > 0
+    assert np.count_nonzero(second) > 0
+
+
+def test_signal_spanning_many_segments() -> None:
+    """A signal longer than several segments must contribute its overlapping part to each."""
+    # Coalescence placed inside the span the segments below actually cover: coalescence sits
+    # near the end of its buffer, so the buffer occupies roughly [coa - 3.6 s, coa + 0.4 s].
+    batch = _aligned_batch(np.array([_T0 + 8.0, _T0 + 9.0]))
+    signal_seconds = np.asarray(batch.strain).shape[2] / _FS
+    # Segments short enough that one buffer genuinely spans several of them.
+    short_segment = signal_seconds / 4.0
+    starts = [_T0 + k * short_segment for k in range(16)]
+    segments = assemble_segments(batch, segment_duration=short_segment, segment_start_times=starts)
+    assert len(segments) == len(starts)
+    occupied = [int(np.count_nonzero(s.to_dict()["E1"].value)) for s in segments]
+    assert sum(1 for n in occupied if n > 0) >= 4, (signal_seconds, short_segment, occupied)
+
+
+def test_negative_start_index_is_handled() -> None:
+    """An event beginning before the grid epoch must still contribute its overlapping tail."""
+    grid = _grid()
+    batch = _aligned_batch(np.array([_T0 + 5.0, _T0 + 6.0]))
+    n_signal = np.asarray(batch.strain).shape[2]
+    shifted = object.__new__(type(batch))
+    object.__setattr__(shifted, "strain", batch.strain)
+    for field in ("detector_names", "coa_time", "epoch", "sampling_frequency", "grid"):
+        object.__setattr__(shifted, field, getattr(batch, field))
+    # Start well before the epoch, so only the tail of each buffer lands in segment zero.
+    object.__setattr__(shifted, "start_index", np.array([-n_signal // 2, -n_signal // 3], dtype=np.int64))
+
+    segments = assemble_segments(shifted, segment_duration=_SEGMENT, segment_start_times=_STARTS)
+    values = segments[0].to_dict()["E1"].value
+    assert np.count_nonzero(values) > 0, "a partially pre-epoch signal contributed nothing"
+    assert np.all(np.isfinite(values))
+    del grid
+
+
+def test_multiple_detectors_share_one_alignment() -> None:
+    """Detector delays differ, but the lattice index must not: it is not detector-specific."""
+    batch = _aligned_batch(_OFF_LATTICE, detectors=["E1", "E2", "E3"])
+    assert batch.start_index is not None
+    assert batch.start_index.shape == _OFF_LATTICE.shape
+    strain = np.asarray(batch.strain)
+    assert strain.shape[1] == 3
+    # Different geometry must give different strain, while sharing the same start indices.
+    # Compared relative to the signal amplitude: strain is ~1e-24, so numpy's default
+    # atol of 1e-8 would call any two of these arrays equal.
+    scale = np.max(np.abs(strain))
+    assert np.max(np.abs(strain[:, 0] - strain[:, 1])) > 1e-6 * scale
+    segments = assemble_segments(batch, segment_duration=_SEGMENT, segment_start_times=_STARTS)
+    assert set(segments[0].to_dict()) == {"E1", "E2", "E3"}
+
+
+def test_aligned_assembly_rejects_a_fractional_sample_segment() -> None:
+    """A direct caller must not get integer arithmetic on a rounded segment length."""
+    batch = _aligned_batch(_ON_LATTICE)
+    with pytest.raises(ValueError, match="whole number of samples"):
+        assemble_segments(batch, segment_duration=_SEGMENT + 0.3 / _FS, segment_start_times=_STARTS)
+
+
+def test_sidereal_anchor_uses_the_aligned_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rotating path must anchor sidereal time at the aligned start, not the requested one.
+
+    Tested at the seam rather than by its numerical effect. Alignment moves a buffer back by a
+    fractional sample; if the anchor does not move with it, ``F(t)`` and ``tau(t)`` lag the
+    samples they multiply by up to a full sample. At Earth's real rotation rate that is ~3e-8 in
+    ``F``, far too small for an end-to-end comparison to resolve, so this captures the times the
+    projection actually anchors on and checks them against the aligned starts.
+    """
+    from gwmock_signal import jax_batch
+
+    captured: list[np.ndarray] = []
+    original = jax_batch.gmst_anchor_and_rate
+
+    def _recording(start_times, **kwargs):
+        captured.append(np.atleast_1d(np.asarray(start_times, dtype=float)).copy())
+        return original(start_times, **kwargs)
+
+    monkeypatch.setattr(jax_batch, "gmst_anchor_and_rate", _recording)
+
+    grid = _grid()
+    parameters = dict(_BASE)
+    parameters["coa_time"] = _OFF_LATTICE
+    batch = simulate_cbc_batch(
+        "IMRPhenomD",
+        ["E1"],
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=parameters,
+        output_grid=grid,
+    )
+
+    assert captured, "the rotating path did not anchor sidereal time at all"
+    # split_index is applied to coa_time + epoch, so time_of(start_index) *is* the aligned
+    # buffer start; adding epoch again would count it twice.
+    requested = _OFF_LATTICE + batch.epoch
+    aligned = np.asarray(grid.time_of(batch.start_index), dtype=float)
+    # The two differ by the fractional remainder, which is exactly what must have been applied.
+    assert not np.allclose(requested, aligned, rtol=0.0, atol=1e-9)
+    assert np.allclose(captured[0], aligned, rtol=0.0, atol=1e-9), (
+        f"anchored at {captured[0]} but the aligned buffers start at {aligned}"
+    )

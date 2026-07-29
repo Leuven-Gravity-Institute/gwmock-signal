@@ -27,6 +27,7 @@ from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
     edge_padding,
+    require_terrestrial_location,
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy
@@ -281,6 +282,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
             # either end must read zero rather than clamping to and repeating the endpoint --
             # and with the same padding, or the two paths disagree at the edges by the
             # difference in padding alone.
+            require_terrestrial_location(location, name=f"location of {prefix}")
             pad = edge_padding(float(hp.sample_rate.value), sinc_taps)
             index = pad + np.arange(len(time_array), dtype=float) - time_delays / dt
             hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)

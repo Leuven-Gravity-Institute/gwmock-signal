@@ -43,6 +43,10 @@ from gwmock_signal.projection.jax_projection import (
     project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
+from gwmock_signal.projection.resampling import (
+    require_shift_within_padding,
+    require_terrestrial_location,
+)
 from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
 from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
@@ -57,11 +61,20 @@ class BatchedDetectorStrain:
 
     ``strain`` has shape ``(n_events, n_detectors, n_samples)`` and is a JAX array
     (on device). Each event/detector row is a time series with sample spacing
-    ``1 / sampling_frequency`` whose first sample is at GPS time
-    ``epoch + coa_time[event]`` (coalescence sits ``-epoch`` seconds from the start,
-    near the segment end). The signals are not yet placed on a shared timeline or
-    segmented into files — that assembly step injects them into fixed-duration data
-    segments and is handled separately.
+    ``1 / sampling_frequency``; coalescence sits ``-epoch`` seconds from the start of the
+    buffer, near its end.
+
+    Where the buffer *begins* depends on whether it was aligned to an output lattice:
+
+    - **Aligned** (``grid`` and ``start_index`` set): the first sample is at
+      ``grid.time_of(start_index)``, exactly on the lattice, so superposing the signal onto a
+      segment of that grid is an integer-offset add.
+    - **Unaligned** (both ``None``): the first sample is at ``epoch + coa_time[event]``, an
+      arbitrary time, and a consumer must resample to place it -- which is accurate only for
+      heavily oversampled strain.
+
+    The signals are not yet placed on a shared timeline or segmented into files; that assembly
+    step is handled separately.
     """
 
     strain: Array
@@ -553,6 +566,12 @@ def _project_rotating(  # noqa: PLR0913
 
     # One Astropy evaluation per event on the host, plus one shared rate: the kernel then
     # needs only a multiply-add for sidereal time, and no second sidereal implementation.
+    # Checked on the host, where these are concrete: inside the jitted kernel the geometry and
+    # the shift are traced, so the padding assumptions cannot be validated there.
+    require_shift_within_padding(alignment_shift, name="alignment_shift")
+    for detector in detector_names:
+        require_terrestrial_location(reconstructed_geometry(detector)[1], name=f"location of {detector}")
+
     gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
     gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
     # Explicit dtype rather than the weakly-typed Python float Astropy hands back. Differing
@@ -644,6 +663,15 @@ def assemble_segments(
     detectors = batch.detector_names
 
     if aligned:
+        # The catalogue wrapper checks this, but a direct caller reaches here too, and integer
+        # overlap arithmetic on a rounded length would silently describe a different interval
+        # from the one requested.
+        exact_samples = segment_duration * sampling_frequency
+        if abs(exact_samples - round(exact_samples)) > _WHOLE_SAMPLE_TOLERANCE:
+            raise ValueError(
+                f"segment_duration * sampling_frequency must be a whole number of samples for a "
+                f"grid-aligned batch; {segment_duration} x {sampling_frequency} = {exact_samples}."
+            )
         segment_index = batch.grid.require_on_lattice(
             np.asarray(segment_start_times, dtype=float), name="segment_start_times"
         )

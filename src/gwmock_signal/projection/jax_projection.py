@@ -280,7 +280,14 @@ def _interpolate_uniform_sinc(
 
     For a band-limited uniformly sampled signal the sinc series is the exact interpolant,
     so accuracy is set by the tap count and can be refined until it stops mattering. A
-    cubic cannot be refined at all. Positions outside ``[0, n_samples - 1]`` return zero.
+    cubic cannot be refined at all.
+
+    Positions whose centre index falls outside ``[0, n_samples - 1]`` return zero. Taps that
+    reach outside while the centre is inside are *clamped* to the first or last sample, which
+    repeats it -- so this helper alone does not zero-pad. Callers that need true zero padding,
+    including :func:`project_polarizations_td_rotating`, pass an already-padded array and an
+    index offset by that padding; see
+    :func:`gwmock_signal.projection.resampling.edge_padding`.
 
     The taps are accumulated in a ``fori_loop`` rather than gathered into one
     ``(taps, ...)`` array: at Einstein Telescope BNS segment lengths a 127-tap gather
@@ -377,13 +384,13 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
 
     !!! warning "Oversample the strain"
 
-        Resampling at the delayed times is a cubic interpolation, so its error grows
-        steeply as the signal approaches Nyquist and is worst at the merger, where the
-        waveform peaks. Against the NumPy path the largest sample-wise difference falls
-        roughly 8x per doubling of the sample rate. This is a property of the algorithm,
-        not of this implementation — ``project_polarizations_to_network`` carries the
-        same error — but it means the sample rate should be chosen well above the
-        signal's highest frequency, not merely above it.
+        Resampling at the delayed times uses the Kaiser-windowed sinc kernel in
+        :mod:`gwmock_signal.projection.resampling`, which is the exact interpolant for a
+        band-limited series in the limit of many taps. Its error is nonetheless a steep
+        function of how close the signal comes to Nyquist: the shipped kernel reaches ~1e-12
+        up to about 0.8 x Nyquist and degrades sharply above that. The sample rate should
+        therefore be chosen well above the signal's highest frequency, not merely above it.
+        ``project_polarizations_to_network`` uses the same kernel and has the same limit.
 
     !!! note "Time coordinate"
 
