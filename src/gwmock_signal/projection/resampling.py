@@ -124,7 +124,7 @@ def require_shift_within_padding(shift_samples: np.ndarray | float, *, name: str
         )
 
 
-def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS) -> int:
+def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS, beta: float = DEFAULT_KAISER_BETA) -> int:
     """Return the zero-padding, in samples, each end of a resampled series needs.
 
     Both projection paths must pad identically or they disagree at the buffer edges by the
@@ -142,13 +142,20 @@ def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS) -> in
     Args:
         sampling_frequency: Sample rate in Hz.
         taps: Taps in the resampling kernel.
+        beta: Kaiser window shape parameter the caller will actually use.
 
     Returns:
         Padding in samples for each end.
+
+    Raises:
+        ValueError: If the kernel configuration is invalid, or the sample rate is not positive
+            and finite.
     """
-    # Validated before sizing: an invalid tap count would otherwise allocate a padded buffer and
-    # only fail later inside the interpolation, having already reserved the memory.
-    taps, _ = validate_kernel(taps, DEFAULT_KAISER_BETA)
+    # Validated before sizing, so an invalid kernel cannot reserve a padded buffer and only fail
+    # afterwards inside the interpolation. The caller's own beta is validated, not the default:
+    # checking against the default both rejected valid small-taps/small-beta pairs and let an
+    # invalid large-beta pair through until after the allocation.
+    taps, _ = validate_kernel(taps, beta)
     if not np.isfinite(sampling_frequency) or sampling_frequency <= 0.0:
         raise ValueError(f"sampling_frequency must be positive and finite; got {sampling_frequency}.")
     max_delay_seconds = _EARTH_RADIUS_M / _SPEED_OF_LIGHT_M_S

@@ -453,7 +453,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     # than clamping to the first or last sample and repeating it. Sized for the largest
     # geocenter delay this detector can have (|location| / c, a sky-independent upper bound),
     # the kernel half-width, and the sub-sample alignment shift.
-    pad = edge_padding(sampling_frequency, sinc_taps)
+    pad = edge_padding(sampling_frequency, sinc_taps, kaiser_beta)
     padded_plus = jnp.pad(jnp.asarray(plus, dtype=jnp.float64), (pad, pad))
     padded_cross = jnp.pad(jnp.asarray(cross, dtype=jnp.float64), (pad, pad))
     padded_length = n_samples + 2 * pad

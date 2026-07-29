@@ -488,20 +488,18 @@ def test_edge_taps_read_zeros_not_repeated_endpoints() -> None:
     )
 
 
-def test_response_is_anchored_at_the_aligned_start() -> None:
-    """The antenna pattern must be evaluated at the aligned start, not the requested one.
+def test_sidereal_time_advances_linearly_across_the_buffer() -> None:
+    """The response must track ``gmst_start + gmst_rate * sample / f_s`` across the buffer.
 
-    When alignment moves a buffer back by a fractional sample, the sidereal anchor has to move
-    with it or ``F(t)`` and ``tau(t)`` are evaluated up to a full sample after the samples they
-    multiply. At Earth's real rotation rate that error is ~3e-8 in ``F`` and no ordinary test
-    would resolve it, so the rate is exaggerated here by a large factor. That magnifies the
-    coordinate error without changing which code path runs: ``gmst_rate`` is an ordinary traced
-    argument of the same kernel.
+    This pins the primitive's own GMST progression, and nothing more. It does **not** cover the
+    caller-side fix that anchors sidereal time at the *aligned* start rather than the requested
+    one: it supplies ``gmst_start`` by hand with ``extra_shift_samples=0``, so it passes whether
+    or not that correction is present -- which was the case when it was first written under a
+    name claiming otherwise. ``test_sidereal_anchor_uses_the_aligned_start`` in
+    ``tests/test_grid_aligned_assembly.py`` is the regression test for the correction.
 
-    The check is against an independently computed first-sample response: with the anchor
-    convention ``gmst_start = gmst(aligned_start)``, the first output sample must equal
-    ``F(gmst_start) * h[0]`` for a signal whose first sample is 1 and whose neighbours make the
-    resampling a pure pass-through at zero shift.
+    The rate is exaggerated so the linear progression is resolvable at all; at Earth's rate the
+    change across a buffer is far below the tolerance any comparison here could use.
     """
     from gwmock_signal.projection.jax_projection import (
         antenna_pattern,
@@ -544,3 +542,53 @@ def test_response_is_anchored_at_the_aligned_start() -> None:
     assert strain[probe] == pytest.approx(float(f_plus), rel=2e-3), (
         "the response is not evaluated at gmst_start + rate * (sample / f_s); the anchor convention has drifted"
     )
+
+
+def test_production_projection_accepts_a_non_default_kernel() -> None:
+    """A valid non-default tap/beta pair must work end to end, and size its padding from itself.
+
+    Kernel validity couples taps and beta -- a large beta needs enough taps to hold its
+    transition band -- so a non-default pair exercises a path the defaults never do. It also
+    guards the ``edge_padding`` bug found in review, where the padding validated the *default*
+    beta rather than the caller's: that both rejected valid small-taps/small-beta pairs and let
+    an invalid large-beta pair through until after the buffer had been allocated.
+    """
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+
+    sampling_frequency = 2048.0
+    n_samples = 4096
+    start_time = 1.4e9
+    sky = {"right_ascension": 0.9, "declination": 0.1, "polarization_angle": 0.2}
+    response, location = reconstructed_geometry("E1")
+    anchors, rate = gmst_anchor_and_rate(start_time)
+
+    taps, beta = 63, 15.0  # valid together: 63 >= 4 * 15 - 1
+    assert edge_padding(sampling_frequency, taps, beta) < edge_padding(sampling_frequency, 127, 32.0)
+
+    plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
+    common = {
+        "response": response,
+        "location": location,
+        "sampling_frequency": sampling_frequency,
+        "n_samples": n_samples,
+        "gmst_start": float(anchors[0]),
+        "gmst_rate": rate,
+        **sky,
+    }
+    custom = np.asarray(project_polarizations_td_rotating(plus, cross, sinc_taps=taps, kaiser_beta=beta, **common))
+    default = np.asarray(project_polarizations_td_rotating(plus, cross, **common))
+
+    assert np.all(np.isfinite(custom))
+    scale = np.max(np.abs(default))
+    assert scale > 0.0
+    # A shorter kernel is less accurate, but on an oversampled chirp it must still agree closely
+    # with the default; a gross disagreement would mean the padding or index offset is wrong for
+    # a non-default tap count.
+    interior = slice(200, n_samples - 200)
+    assert np.max(np.abs(custom[interior] - default[interior])) < 1e-6 * scale
+
+    # An invalid pair must be refused before anything is allocated.
+    with pytest.raises(ValueError, match="transition"):
+        project_polarizations_td_rotating(plus, cross, sinc_taps=63, kaiser_beta=32.0, **common)

@@ -278,33 +278,96 @@ def _aligned_batch(coa_time: np.ndarray, detectors: list[str] | None = None) -> 
     )
 
 
-def test_signal_ending_exactly_on_a_segment_start_is_excluded() -> None:
-    """The half-open convention [start, start + duration) must be exact, not float-decided.
+def test_segment_ownership_is_exact_at_a_boundary() -> None:
+    """A signal ending at a boundary belongs to the earlier segment only, and vice versa.
 
-    Highest-risk case for an off-by-one: the integer arithmetic is only correct if a signal
-    whose last sample sits immediately before a boundary belongs to the earlier segment alone.
+    The half-open convention ``[start, start + duration)`` is only meaningful if ownership at the
+    seam is exact. An earlier version of this test asserted merely that both segments contained
+    *some* nonzero data, which stays true when a boundary event is misattributed in either
+    direction -- and both its events shared one strain array, so their contributions were not even
+    distinguishable. It could not fail.
+
+    This builds a synthetic batch whose two events carry distinct constant values, so every output
+    sample can be attributed to exactly one of them.
     """
-    grid = _grid()
-    batch = _aligned_batch(np.array([_T0 + 5.0, _T0 + 5.0]))
-    n_signal = np.asarray(batch.strain).shape[2]
-    # Place the buffer so its final sample is the one before the second segment starts.
-    end_index = grid.require_on_lattice(np.array([_STARTS[1]]), name="starts")[0]
-    shifted = object.__new__(type(batch))
-    object.__setattr__(shifted, "strain", batch.strain)
-    for field in ("detector_names", "coa_time", "epoch", "sampling_frequency", "grid"):
-        object.__setattr__(shifted, field, getattr(batch, field))
-    object.__setattr__(shifted, "start_index", np.array([end_index - n_signal, end_index], dtype=np.int64))
+    from gwmock_signal.jax_batch import BatchedDetectorStrain
 
-    segments = assemble_segments(shifted, segment_duration=_SEGMENT, segment_start_times=_STARTS)
-    first, second = (s.to_dict()["E1"].value for s in segments)
-    # Event 0 ends exactly at the boundary: it belongs to the first segment only.
-    # Event 1 starts exactly at the boundary: to the second only.
-    assert np.any(first != 0.0)
-    assert np.any(second != 0.0)
-    # The last sample of the first segment and the first of the second come from different
-    # events, so neither segment can contain both contributions at the seam.
-    assert np.count_nonzero(first) > 0
-    assert np.count_nonzero(second) > 0
+    n_signal = 64
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    segment_duration = n_segment / _FS
+    starts = [grid.time_of(0), grid.time_of(n_segment)]
+
+    # Event 0 ends on the sample before the second segment starts; event 1 starts exactly on it.
+    start_index = np.array([n_segment - n_signal, n_segment], dtype=np.int64)
+    strain = np.stack([np.full((1, n_signal), 1.0), np.full((1, n_signal), 2.0)])
+    batch = BatchedDetectorStrain(
+        strain=strain,
+        detector_names=("E1",),
+        coa_time=np.asarray(grid.time_of(start_index), dtype=float),
+        epoch=0.0,
+        sampling_frequency=_FS,
+        start_index=start_index,
+        grid=grid,
+    )
+
+    first, second = (
+        s.to_dict()["E1"].value
+        for s in assemble_segments(batch, segment_duration=segment_duration, segment_start_times=starts)
+    )
+
+    # Event 0 occupies exactly the tail of the first segment, and nothing of the second.
+    assert np.array_equal(first[: n_segment - n_signal], np.zeros(n_segment - n_signal))
+    assert np.array_equal(first[n_segment - n_signal :], np.ones(n_signal))
+    assert 2.0 not in set(np.unique(first)), "event 1 leaked into the segment before it starts"
+
+    # Event 1 occupies exactly the head of the second segment, and nothing of the first.
+    assert np.array_equal(second[:n_signal], np.full(n_signal, 2.0))
+    assert np.array_equal(second[n_signal:], np.zeros(n_segment - n_signal))
+    assert 1.0 not in set(np.unique(second)), "event 0 leaked into the segment after it ends"
+
+
+def test_signal_straddling_a_boundary_is_split_exactly() -> None:
+    """A signal crossing a segment boundary must be cropped at exactly the right sample.
+
+    The ownership test above places each event wholly inside one segment, so it never exercises
+    the cropping arithmetic -- an off-by-one in the slice bounds survives it untouched, because
+    the signal length caps the bound. This one straddles the seam, so both slice ends are load
+    bearing: 24 samples must land at the end of the first segment and the remaining 40 at the
+    start of the second, with nothing spilling either way.
+    """
+    from gwmock_signal.jax_batch import BatchedDetectorStrain
+
+    n_signal = 64
+    n_segment = 128
+    before_boundary = 24
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    starts = [grid.time_of(0), grid.time_of(n_segment)]
+    start_index = np.array([n_segment - before_boundary], dtype=np.int64)
+
+    batch = BatchedDetectorStrain(
+        strain=np.full((1, 1, n_signal), 5.0),
+        detector_names=("E1",),
+        coa_time=np.asarray(grid.time_of(start_index), dtype=float),
+        epoch=0.0,
+        sampling_frequency=_FS,
+        start_index=start_index,
+        grid=grid,
+    )
+    first, second = (
+        s.to_dict()["E1"].value
+        for s in assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts)
+    )
+
+    assert np.array_equal(first[:-before_boundary], np.zeros(n_segment - before_boundary))
+    assert np.array_equal(first[-before_boundary:], np.full(before_boundary, 5.0))
+
+    after_boundary = n_signal - before_boundary
+    assert np.array_equal(second[:after_boundary], np.full(after_boundary, 5.0))
+    assert np.array_equal(second[after_boundary:], np.zeros(n_segment - after_boundary))
+
+    # Every sample of the signal is placed exactly once, in total.
+    assert np.count_nonzero(first) + np.count_nonzero(second) == n_signal
 
 
 def test_signal_spanning_many_segments() -> None:
