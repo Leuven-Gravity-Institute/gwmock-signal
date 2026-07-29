@@ -339,6 +339,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     polarization_angle: float,
     gmst_start: float,
     gmst_rate: float,
+    extra_shift_samples: float = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
 ) -> Array:
@@ -393,6 +394,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             implementation of the sidereal model; see that module for why a linear model
             is exact at these segment lengths.
         gmst_rate: dGMST/dt in radians per second.
+        extra_shift_samples: Additional shift, in samples, applied together with the
+            geocenter delay. Used to land the output on a caller's sample lattice; because it
+            joins the delay inside one resampling, the alignment costs no extra interpolation
+            and inherits the kernel's accuracy rather than a downstream cubic's.
         sinc_taps: Taps in the resampling kernel. More taps cost arithmetic and buy
             accuracy; the default is set by measured convergence.
         kaiser_beta: Kaiser window shape parameter for the resampling kernel.
@@ -421,8 +426,9 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         polarization_angle=polarization_angle,
     )
 
-    # Fractional sample index of t - tau(t) on the uniform input grid.
-    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency
+    # Fractional sample index of t - tau(t) on the uniform input grid, plus any lattice
+    # alignment the caller asked for -- one shift, one resampling.
+    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency - extra_shift_samples
     plus_shifted = _interpolate_uniform_sinc(plus, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
     cross_shifted = _interpolate_uniform_sinc(cross, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
 

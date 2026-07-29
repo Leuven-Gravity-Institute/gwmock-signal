@@ -44,6 +44,7 @@ from gwmock_signal.projection.jax_projection import (
     time_delay_from_geocenter,
 )
 from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
+from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
 if TYPE_CHECKING:
@@ -68,6 +69,13 @@ class BatchedDetectorStrain:
     coa_time: np.ndarray
     epoch: float
     sampling_frequency: float
+    #: Lattice index of each event's first sample, when the batch was generated against an
+    #: output grid. Set means every event starts exactly on that grid, so superposing it is an
+    #: integer-offset add; ``None`` means the starts are arbitrary and the consumer has to
+    #: resample, which is accurate only for heavily oversampled signals.
+    start_index: np.ndarray | None = None
+    #: The grid the indices refer to, or ``None`` when unaligned.
+    grid: SamplingGrid | None = None
 
 
 #: Peak device buffers, in units of one ``n_events x n_samples`` float64 array, needed by
@@ -183,6 +191,7 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
         dec: Array,
         psi: Array,
         gmst_start: Array,
+        extra_shift: Array,
         gmst_rate: Array,
         response: Array,
         location: Array,
@@ -199,9 +208,10 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
             polarization_angle=psi,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
+            extra_shift_samples=extra_shift,
         )
 
-    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, None, None, None)))
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -330,6 +340,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     parameters: Mapping[str, object],
     backend: RippleBackend | None = None,
     earth_rotation: bool = True,
+    output_grid: SamplingGrid | None = None,
 ) -> BatchedDetectorStrain:
     """Simulate a catalogue of CBC signals on device, one strain per event and detector.
 
@@ -353,6 +364,13 @@ def simulate_cbc_batch(  # noqa: PLR0913
             ``coa_time``.
         backend: Optional configured :class:`RippleBackend` (e.g. with a fixed
             ``segment_duration`` or ``f_ref``). Defaults to ``RippleBackend()``.
+        output_grid: Sample lattice the returned strain should start on. When given, each
+            event's first sample is placed exactly on the grid and the sub-sample remainder is
+            absorbed into the shift the projection already applies -- an exact resampling
+            rather than a second, cruder one downstream. Superposition then becomes an
+            integer-offset add. When omitted, buffers start at the arbitrary time
+            ``epoch + coa_time`` and the consumer must resample; see
+            :mod:`gwmock_signal.sampling_grid` for what that costs.
         earth_rotation: If ``True`` (default, matching
             :func:`~gwmock_signal.projection.network.project_polarizations_to_network`),
             evaluate the antenna pattern and geocenter delay per sample and resample the
@@ -398,6 +416,20 @@ def simulate_cbc_batch(  # noqa: PLR0913
     polarization_angle = jnp.asarray(_required(parameters, "polarization_angle"), dtype=jnp.float64)
     coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
 
+    # Split each event's desired start into a lattice index and the sub-sample remainder the
+    # projection must absorb. Without a grid there is nothing to align to and the remainder is
+    # zero, which leaves both branches exactly as they were.
+    if output_grid is None:
+        start_index = None
+        alignment_shift = np.zeros_like(coa_time)
+    else:
+        if output_grid.sampling_frequency != sampling_frequency:
+            raise ValueError(
+                f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal "
+                f"sampling_frequency ({sampling_frequency})."
+            )
+        start_index, alignment_shift = output_grid.split_index(coa_time + epoch)
+
     if earth_rotation:
         strain = _project_rotating(
             fd,
@@ -409,6 +441,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
             right_ascension=right_ascension,
             declination=declination,
             polarization_angle=polarization_angle,
+            alignment_shift=alignment_shift,
         )
         return BatchedDetectorStrain(
             strain=strain,
@@ -416,6 +449,8 @@ def simulate_cbc_batch(  # noqa: PLR0913
             coa_time=coa_time,
             epoch=epoch,
             sampling_frequency=sampling_frequency,
+            start_index=start_index,
+            grid=output_grid,
         )
 
     # earth_rotation=False reference time: the midpoint of each event's placed segment.
@@ -437,7 +472,18 @@ def simulate_cbc_batch(  # noqa: PLR0913
             polarization_angle=polarization_angle,
         )
         time_delay = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
-        per_detector.append(project_batch(fd.frequencies, fd.plus, fd.cross, f_plus, f_cross, time_delay))
+        # The alignment offset is a pure time shift, so it rides on the same exact phase
+        # factor as the geocenter delay: no interpolation is involved on this branch at all.
+        per_detector.append(
+            project_batch(
+                fd.frequencies,
+                fd.plus,
+                fd.cross,
+                f_plus,
+                f_cross,
+                time_delay + jnp.asarray(alignment_shift, dtype=jnp.float64) / sampling_frequency,
+            )
+        )
 
     strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples)
     return BatchedDetectorStrain(
@@ -460,6 +506,7 @@ def _project_rotating(  # noqa: PLR0913
     right_ascension: Array,
     declination: Array,
     polarization_angle: Array,
+    alignment_shift: np.ndarray,
 ) -> Array:
     """Project a batch with a time-dependent antenna pattern, on device.
 
@@ -479,6 +526,9 @@ def _project_rotating(  # noqa: PLR0913
         right_ascension: Per-event right ascension in radians.
         declination: Per-event declination in radians.
         polarization_angle: Per-event polarization angle in radians.
+        alignment_shift: Per-event sub-sample offset, in samples, to absorb so the output
+            starts on the caller's lattice. Folded into the resampling the projection already
+            performs, so it is one exact operation rather than two.
 
     Returns:
         Strain of shape ``(n_events, n_detectors, n_samples)``.
@@ -512,6 +562,7 @@ def _project_rotating(  # noqa: PLR0913
                 declination,
                 polarization_angle,
                 gmst_anchors,
+                jnp.asarray(alignment_shift, dtype=jnp.float64),
                 gmst_rate,
                 jnp.asarray(response, dtype=jnp.float64),
                 jnp.asarray(location, dtype=jnp.float64),
@@ -531,11 +582,17 @@ def assemble_segments(
 ) -> list[DetectorStrainStack]:
     """Scatter the batched signals into fixed-duration data segments (in memory).
 
-    Each output segment spans ``[start, start + segment_duration)``. Every signal
-    that overlaps a segment is injected into it with
-    :func:`~gwmock_signal.injection.inject_strains_sequential`, which crops the
-    signal to the segment span — so a signal longer than ``segment_duration``
-    contributes its overlapping part to each of the consecutive segments it spans.
+    Each output segment spans ``[start, start + segment_duration)``. A signal longer than
+    ``segment_duration`` contributes its overlapping part to each of the consecutive segments
+    it spans.
+
+    When ``batch`` was generated against a :class:`~gwmock_signal.sampling_grid.SamplingGrid`
+    -- see ``output_grid`` on :func:`simulate_cbc_batch` -- every signal already starts on the
+    output lattice and superposition is an exact integer-offset add. The segment starts are
+    then required to lie on that same grid, and are rejected rather than rounded if they do
+    not. Otherwise signals fall between samples and
+    :func:`~gwmock_signal.injection.inject_strains_sequential` resamples them, which is only
+    accurate for heavily oversampled strain.
 
     Args:
         batch: Batched per-event/detector strain from :func:`simulate_cbc_batch`.
@@ -547,7 +604,8 @@ def assemble_segments(
             ``TimeSeries`` to inject into. When ``None`` (default), zero-noise
             segments are created.
         interpolate_if_offset: Forwarded to ``inject_strains_sequential`` for
-            signals whose start is not on a segment-sample boundary.
+            signals whose start is not on a segment-sample boundary. Unused when the batch
+            carries a sampling grid, because then nothing needs interpolating.
 
     Returns:
         One :class:`~gwmock_signal.multichannel.stack.DetectorStrainStack` per
@@ -566,6 +624,13 @@ def assemble_segments(
     n_segment_samples = round(segment_duration * sampling_frequency)
     detectors = batch.detector_names
 
+    aligned = batch.start_index is not None and batch.grid is not None
+    if aligned:
+        segment_index = batch.grid.require_on_lattice(
+            np.asarray(segment_start_times, dtype=float), name="segment_start_times"
+        )
+        event_index = np.asarray(batch.start_index, dtype=np.int64)
+
     segments: list[DetectorStrainStack] = []
     for k, raw_start in enumerate(segment_start_times):
         seg_start = float(raw_start)
@@ -577,12 +642,59 @@ def assemble_segments(
                 background = backgrounds[k][name]
             else:
                 background = TimeSeries(np.zeros(n_segment_samples), t0=seg_start, sample_rate=sampling_frequency)
+            if aligned:
+                channels[name] = _superpose_on_lattice(
+                    background,
+                    strain[:, d],
+                    event_index - int(segment_index[k]),
+                    overlapping,
+                    n_segment_samples,
+                )
+                continue
             injections = [TimeSeries(strain[i, d], t0=float(signal_start[i]), dt=dt) for i in overlapping]
             channels[name] = inject_strains_sequential(
                 background, injections, interpolate_if_offset=interpolate_if_offset
             )
         segments.append(DetectorStrainStack.from_mapping(detectors, channels))
     return segments
+
+
+def _superpose_on_lattice(
+    background: TimeSeries,
+    strain: np.ndarray,
+    offsets: np.ndarray,
+    overlapping: np.ndarray,
+    n_segment_samples: int,
+) -> TimeSeries:
+    """Add lattice-aligned signals into one segment with integer slicing only.
+
+    Exact by construction: every signal already starts on the segment's own lattice, so this
+    is a slice addition with no resampling. The alternative -- letting a signal land between
+    samples and interpolating -- reaches 12% error at half Nyquist and 49% at 0.8 Nyquist,
+    which would discard the accuracy the device projection was built for.
+
+    Args:
+        background: Segment to add into; returned unmodified in identity terms (a new series
+            is produced), matching ``inject_strains_sequential``.
+        strain: Per-event strain for one detector, shape ``(n_events, n_samples)``.
+        offsets: Start offset of each event in samples relative to the segment start.
+        overlapping: Indices of events that overlap this segment.
+        n_segment_samples: Samples in the segment.
+
+    Returns:
+        A new ``TimeSeries`` holding the background plus every overlapping signal.
+    """
+    data = np.array(background.value, dtype=float, copy=True)
+    n_signal = strain.shape[1]
+    for i in overlapping:
+        offset = int(offsets[i])
+        source_start = max(0, -offset)
+        source_stop = min(n_signal, n_segment_samples - offset)
+        if source_stop <= source_start:
+            continue
+        target_start = offset + source_start
+        data[target_start : target_start + (source_stop - source_start)] += strain[i, source_start:source_stop]
+    return TimeSeries(data, t0=background.t0, dt=background.dt, unit=background.unit)
 
 
 def simulate_cbc_catalogue(  # noqa: PLR0913
