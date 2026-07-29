@@ -55,6 +55,58 @@ def test_mismatched_length_raises():
         DetectorStrainStack.from_mapping(["H1", "L1"], strains)
 
 
+def test_mismatched_epoch_raises():
+    """Same rate and length but a different ``t0`` is not an aligned stack.
+
+    The check compares ``t0`` and ``dx`` instead of materialising both time indices, so this
+    pins that the cheap comparison still rejects a genuine misalignment.
+    """
+    strains = {"H1": _ch(t0=0.0), "L1": _ch(t0=1.0)}
+    with pytest.raises(ValueError, match="time grid does not match"):
+        DetectorStrainStack.from_mapping(["H1", "L1"], strains)
+
+
+def test_mismatched_sample_rate_names_the_channel():
+    """A different sample rate is rejected, and the message says which channel.
+
+    GWpy's own compatibility check raises instead of returning False, so its exception is
+    re-raised with the channel index -- which is the part the caller cannot work out alone.
+    """
+    strains = {"H1": _ch(fs=128.0), "L1": _ch(fs=256.0)}
+    with pytest.raises(ValueError, match="Channel 1 is not compatible") as raised:
+        DetectorStrainStack.from_mapping(["H1", "L1"], strains)
+    assert "sample sizes do not match" in str(raised.value)
+
+
+def test_matching_channels_accepted_without_materialising_the_index():
+    """Equal ``t0``, ``dx`` and length must be accepted, and the index left unbuilt.
+
+    GWpy creates the time index lazily, so ``xindex`` being absent afterwards is what shows the
+    validation no longer allocates one array per channel per segment.
+    """
+    strains = {"H1": _ch(t0=5.0), "L1": _ch(t0=5.0)}
+    stack = DetectorStrainStack.from_mapping(["H1", "L1"], strains)
+    assert stack.detector_names == ("H1", "L1")
+    assert all(getattr(s, "_xindex", None) is None for s in strains.values())
+
+
+def test_irregularly_sampled_channels_compared_directly():
+    """Series built from an explicit ``times=`` array have no ``dx``, so fall back to the index.
+
+    Nothing in gwmock_signal produces these, but the validation must not raise ``AttributeError``
+    on a series a caller hands it.
+    """
+    times = np.array([0.0, 0.5, 1.7, 3.0])
+    a = TimeSeries(np.zeros(4), times=times)
+    # Matching indices must be accepted: `dx` raises for these, so this is the path that
+    # exercises the fallback rather than the t0/dx comparison.
+    stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": a, "L1": TimeSeries(np.ones(4), times=times)})
+    assert stack.data.shape == (2, 4)
+    # Differing indices are rejected by gwpy's own compatibility check, before the fallback.
+    with pytest.raises(ValueError, match="Channel 1 is not compatible"):
+        DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": a, "L1": TimeSeries(np.zeros(4), times=times + 1.0)})
+
+
 def test_empty_detector_names_raises():
     """Empty ``detector_names`` is rejected."""
     with pytest.raises(ValueError, match="non-empty"):

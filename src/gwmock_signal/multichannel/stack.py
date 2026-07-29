@@ -32,20 +32,42 @@ from gwpy.timeseries import TimeSeries, TimeSeriesDict
 _HDF5_STACK_ORDER_ATTR = "gwmock_signal_detector_strain_stack_order"
 
 
+def _same_time_samples(series: TimeSeries, reference: TimeSeries) -> bool:
+    """Return whether two equal-length series sample the same times.
+
+    Compared through ``t0`` and ``dx`` rather than by materialising both time indices. GWpy
+    builds a regular index as ``t0 + arange(n) * dx``, so for equal lengths those two scalars
+    matching is not an approximation of index equality -- it is exactly equivalent, and it
+    avoids allocating and comparing an array per channel. Assembly builds one stack per segment,
+    where that allocation showed up as ~10% of the host cost.
+
+    A series constructed with an explicit irregular ``times=`` array has no ``dx``; those fall
+    back to comparing the indices directly.
+    """
+    try:
+        return bool(series.t0 == reference.t0 and series.dx == reference.dx)
+    except AttributeError:
+        return bool(np.array_equal(series.times.value, reference.times.value))
+
+
 def _validate_aligned_channels(channels: Sequence[TimeSeries]) -> None:
     """Require identical length, sample rate, and time samples across channels."""
     if len(channels) == 0:
         raise ValueError("At least one channel is required.")
     ref = channels[0]
-    ref_times = ref.times.value
     for i, s in enumerate(channels[1:], start=1):
-        if not s.is_compatible(ref):
+        # GWpy's is_compatible() returns True or raises -- it never returns False -- so testing
+        # its return value left this branch unreachable and reported gwpy's message without
+        # saying which channel was at fault. Its own exception is re-raised with that index.
+        try:
+            s.check_compatible(ref)
+        except ValueError as error:
             raise ValueError(
-                f"Channel {i} is not compatible with reference channel 0 (mismatched unit or sample rate)."
-            )
+                f"Channel {i} is not compatible with reference channel 0 (mismatched unit or sample rate): {error}"
+            ) from error
         if len(s) != len(ref):
             raise ValueError(f"Channel {i} length {len(s)} does not match reference length {len(ref)}.")
-        if not np.array_equal(s.times.value, ref_times):
+        if not _same_time_samples(s, ref):
             raise ValueError(
                 f"Channel {i} time grid does not match reference (channel 0); "
                 "all detectors must share identical sample times."

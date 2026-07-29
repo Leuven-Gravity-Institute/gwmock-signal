@@ -692,19 +692,21 @@ def assemble_segments(
             overlapping = np.nonzero((signal_start < seg_end) & (signal_end > seg_start))[0]
         channels: dict[str, TimeSeries] = {}
         for d, name in enumerate(detectors):
+            if aligned:
+                channels[name] = _aligned_channel(
+                    background=None if backgrounds is None else backgrounds[k][name],
+                    strain=strain[:, d],
+                    offsets=event_index - int(segment_index[k]),
+                    overlapping=overlapping,
+                    n_segment_samples=n_segment_samples,
+                    segment_start=seg_start,
+                    sampling_frequency=sampling_frequency,
+                )
+                continue
             if backgrounds is not None:
                 background = backgrounds[k][name]
             else:
                 background = TimeSeries(np.zeros(n_segment_samples), t0=seg_start, sample_rate=sampling_frequency)
-            if aligned:
-                channels[name] = _superpose_on_lattice(
-                    background,
-                    strain[:, d],
-                    event_index - int(segment_index[k]),
-                    overlapping,
-                    n_segment_samples,
-                )
-                continue
             injections = [TimeSeries(strain[i, d], t0=float(signal_start[i]), dt=dt) for i in overlapping]
             channels[name] = inject_strains_sequential(
                 background, injections, interpolate_if_offset=interpolate_if_offset
@@ -713,14 +715,54 @@ def assemble_segments(
     return segments
 
 
-def _superpose_on_lattice(
-    background: TimeSeries,
+def _aligned_channel(  # noqa: PLR0913
+    *,
+    background: TimeSeries | None,
     strain: np.ndarray,
     offsets: np.ndarray,
     overlapping: np.ndarray,
     n_segment_samples: int,
+    segment_start: float,
+    sampling_frequency: float,
 ) -> TimeSeries:
-    """Add lattice-aligned signals into one segment with integer slicing only.
+    """Superpose one segment and detector, wrapping the result exactly once.
+
+    The accumulator is a bare array that becomes a ``TimeSeries`` only at the end. Building the
+    accumulator *as* a ``TimeSeries`` cost two full copies of every segment -- one to obtain a
+    writable buffer, one from gwpy's copy-on-construct -- and the scatter runs at ~1.1x the
+    memory-bandwidth bound for the traffic it must do, so a redundant traversal of the segment is
+    a first-order cost rather than bookkeeping.
+
+    Args:
+        background: Segment to add into, or ``None`` for a zero background. Never mutated.
+        strain: Per-event strain for one detector, shape ``(n_events, n_samples)``.
+        offsets: Start offset of each event in samples relative to the segment start.
+        overlapping: Indices of events that overlap this segment.
+        n_segment_samples: Samples in the segment.
+        segment_start: GPS time of the segment's first sample.
+        sampling_frequency: Sample rate in Hz.
+
+    Returns:
+        The background plus every overlapping signal.
+    """
+    if background is None:
+        data = np.zeros(n_segment_samples, dtype=float)
+        unit = None
+    else:
+        data = np.array(background.value, dtype=float, copy=True)
+        unit = background.unit
+    _superpose_on_lattice(data, strain, offsets, overlapping)
+    # copy=False hands gwpy the buffer just built here, which nothing else holds a reference to.
+    return TimeSeries(data, t0=segment_start, sample_rate=sampling_frequency, unit=unit, copy=False)
+
+
+def _superpose_on_lattice(
+    data: np.ndarray,
+    strain: np.ndarray,
+    offsets: np.ndarray,
+    overlapping: np.ndarray,
+) -> None:
+    """Add lattice-aligned signals into one segment, in place, with integer slicing only.
 
     Exact by construction: every signal already starts on the segment's own lattice, so this
     is a slice addition with no resampling. The alternative -- letting a signal land between
@@ -728,17 +770,13 @@ def _superpose_on_lattice(
     which would discard the accuracy the device projection was built for.
 
     Args:
-        background: Segment to add into; returned unmodified in identity terms (a new series
-            is produced), matching ``inject_strains_sequential``.
+        data: Accumulator for one segment and detector, shape ``(n_segment_samples,)``,
+            **modified in place**. The caller owns it and wraps it afterwards.
         strain: Per-event strain for one detector, shape ``(n_events, n_samples)``.
         offsets: Start offset of each event in samples relative to the segment start.
         overlapping: Indices of events that overlap this segment.
-        n_segment_samples: Samples in the segment.
-
-    Returns:
-        A new ``TimeSeries`` holding the background plus every overlapping signal.
     """
-    data = np.array(background.value, dtype=float, copy=True)
+    n_segment_samples = data.shape[0]
     n_signal = strain.shape[1]
     for i in overlapping:
         offset = int(offsets[i])
@@ -748,7 +786,6 @@ def _superpose_on_lattice(
             continue
         target_start = offset + source_start
         data[target_start : target_start + (source_stop - source_start)] += strain[i, source_start:source_stop]
-    return TimeSeries(data, t0=background.t0, dt=background.dt, unit=background.unit)
 
 
 def simulate_cbc_catalogue(  # noqa: PLR0913
