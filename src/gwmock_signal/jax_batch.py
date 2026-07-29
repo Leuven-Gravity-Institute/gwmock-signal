@@ -69,6 +69,150 @@ class BatchedDetectorStrain:
     sampling_frequency: float
 
 
+#: Peak device buffers, in units of one ``n_events x n_samples`` float64 array, needed by
+#: batched waveform generation itself — the part that does not scale with the number of
+#: detectors. Calibrated from a single measurement: an IMRPhenomXPHM batch of 16384 events
+#: at 8192 samples on 3 detectors asked XLA for 85.4 GiB, which is 85.4 such units, and
+#: :data:`_PROJECTION_BUFFERS_PER_DETECTOR` accounts for the rest.
+#:
+#: This is one data point, not a calibration curve. It is used only to size chunks and to
+#: turn an opaque out-of-memory abort into an actionable error, so it is deliberately on
+#: the pessimistic side: over-estimating costs a smaller chunk, under-estimating costs a
+#: crashed production run.
+_GENERATION_BUFFERS = 73.4
+
+#: Additional peak buffers per detector, same units: the projected strain plus the inverse
+#: FFT and stacking temporaries that accompany it.
+_PROJECTION_BUFFERS_PER_DETECTOR = 4.0
+
+#: Multiplier applied when ``earth_rotation=True``. The rotating path inverse-FFTs the
+#: polarizations, holds per-sample sidereal time, delay and antenna-pattern arrays, and
+#: gathers through a windowed-sinc kernel, so it needs more live arrays per detector than
+#: the frequency-domain path. Not separately measured -- flagged in the docstring.
+_ROTATION_BUFFER_MULTIPLIER = 1.6
+
+#: Fraction of device memory a batch may be sized to occupy. The rest is headroom for
+#: allocator fragmentation and anything else resident.
+_DEFAULT_MEMORY_FRACTION = 0.6
+
+
+def estimate_batch_memory_bytes(
+    n_events: int,
+    n_detectors: int,
+    n_samples: int,
+    *,
+    earth_rotation: bool = True,
+) -> int:
+    """Estimate peak device memory for one :func:`simulate_cbc_batch` call.
+
+    A vmapped batch holds far more than the strain it returns: the measured peak for an
+    IMRPhenomXPHM batch was about 28x its own output. The estimate is therefore
+    ``n_events * n_samples * 8 * (generation + per_detector * n_detectors)``, with the
+    coefficients above.
+
+    !!! warning "One calibration point"
+
+        The coefficients come from a single A100 measurement with IMRPhenomXPHM, and the
+        split between detector-independent and per-detector buffers is assumed rather than
+        measured. Treat this as an order-of-magnitude guard that produces a useful error
+        message, not as an accurate predictor. Approximants with smaller graphs than
+        IMRPhenomXPHM will be over-estimated, which only costs a smaller chunk.
+
+    Args:
+        n_events: Events in the batch.
+        n_detectors: Detectors projected onto.
+        n_samples: Samples per event segment.
+        earth_rotation: Whether the rotating projection is used, which needs more
+            simultaneous buffers per detector.
+
+    Returns:
+        Estimated peak bytes.
+    """
+    if min(n_events, n_detectors, n_samples) < 1:
+        raise ValueError("n_events, n_detectors and n_samples must all be >= 1")
+    per_detector = _PROJECTION_BUFFERS_PER_DETECTOR * (_ROTATION_BUFFER_MULTIPLIER if earth_rotation else 1.0)
+    buffers = _GENERATION_BUFFERS + per_detector * n_detectors
+    return int(n_events * n_samples * 8 * buffers)
+
+
+def available_device_memory_bytes() -> int | None:
+    """Return the memory limit of the default JAX device, or ``None`` if unknown.
+
+    CPU devices do not report a limit, and neither do some older backends, so callers must
+    treat ``None`` as "cannot check" rather than as "no limit".
+    """
+    try:
+        import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+    except ImportError:
+        return None
+    devices = jax.devices()
+    if not devices:
+        return None
+    stats = getattr(devices[0], "memory_stats", lambda: None)()
+    if not stats:
+        return None
+    limit = stats.get("bytes_limit")
+    return int(limit) if limit else None
+
+
+def recommend_chunk_size(
+    n_detectors: int,
+    n_samples: int,
+    *,
+    earth_rotation: bool = True,
+    memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
+    available_bytes: int | None = None,
+) -> int | None:
+    """Return the largest event count expected to fit, or ``None`` if unknown.
+
+    Args:
+        n_detectors: Detectors projected onto.
+        n_samples: Samples per event segment.
+        earth_rotation: Whether the rotating projection is used.
+        memory_fraction: Fraction of device memory the batch may occupy; must be in ``(0, 1]``.
+        available_bytes: Device memory limit; queried from JAX when omitted.
+
+    Returns:
+        A chunk size of at least 1, or ``None`` when the device limit is unknown.
+
+    Raises:
+        ValueError: If ``memory_fraction`` is outside ``(0, 1]``.
+    """
+    # A fraction above 1 would recommend a chunk larger than the device, i.e. it would hand
+    # back exactly the out-of-memory abort this function exists to prevent.
+    if not 0.0 < memory_fraction <= 1.0:
+        raise ValueError(f"memory_fraction must be in (0, 1]; got {memory_fraction}.")
+    limit = available_device_memory_bytes() if available_bytes is None else available_bytes
+    if not limit:
+        return None
+    per_event = estimate_batch_memory_bytes(1, n_detectors, n_samples, earth_rotation=earth_rotation)
+    return max(1, int(limit * memory_fraction // per_event))
+
+
+def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_rotation: bool) -> None:
+    """Raise a useful error when a batch is not expected to fit in device memory.
+
+    XLA's own failure for this is a bare ``RESOURCE_EXHAUSTED`` naming a number of GiB,
+    with nothing about which knob to turn. This names the estimate, the limit, and a chunk
+    size that should work.
+    """
+    limit = available_device_memory_bytes()
+    if not limit:
+        return
+    estimate = estimate_batch_memory_bytes(n_events, n_detectors, n_samples, earth_rotation=earth_rotation)
+    if estimate <= limit:
+        return
+    suggestion = recommend_chunk_size(n_detectors, n_samples, earth_rotation=earth_rotation, available_bytes=limit)
+    raise MemoryError(
+        f"This batch is estimated to need {estimate / 2**30:.1f} GiB of device memory but the "
+        f"device reports {limit / 2**30:.1f} GiB: {n_events} events x {n_detectors} detectors x "
+        f"{n_samples} samples, earth_rotation={earth_rotation}. Generate the catalogue through "
+        f"simulate_cbc_catalogue(chunk_size={suggestion}), or reduce n_samples by raising "
+        f"minimum_frequency. The estimate is approximate (see estimate_batch_memory_bytes); "
+        f"pass a larger chunk_size explicitly if you believe it is pessimistic."
+    )
+
+
 def simulate_cbc_batch(  # noqa: PLR0913
     approximant: str,
     detector_names: Sequence[str],
@@ -119,6 +263,19 @@ def simulate_cbc_batch(  # noqa: PLR0913
     import jax.numpy as jnp  # noqa: PLC0415
 
     backend = backend or RippleBackend()
+
+    # Before generating anything: the estimate includes the waveform-generation buffers, so a
+    # check placed after generation could never fire for a batch that exhausts memory *during*
+    # generation -- which is most of the estimate. The grid length does not need the waveform,
+    # only the lightest chirp mass (or a pinned segment duration, which _segment_samples
+    # handles), so it can be sized up front.
+    _check_batch_fits(
+        len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
+        len(tuple(detector_names)),
+        _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency),
+        earth_rotation=earth_rotation,
+    )
+
     fd = backend.generate_fd_polarizations_batch(
         approximant,
         sampling_frequency=sampling_frequency,
@@ -375,8 +532,10 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     start_time: float,
     end_time: float,
     backend: RippleBackend | None = None,
+    earth_rotation: bool = True,
     n_chirp_mass_bins: int = 1,
     chunk_size: int | None = None,
+    memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
     interpolate_if_offset: bool = True,
 ) -> list[DetectorStrainStack]:
     """Generate a catalogue on device and assemble it into fixed-duration segments.
@@ -412,14 +571,23 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         backend: Optional configured :class:`RippleBackend`. If it pins a
             ``segment_duration`` that grid is used for every bin (binning then
             saves no buffer memory but the run stays output-identical).
+        earth_rotation: Forwarded to :func:`simulate_cbc_batch`. Defaults to ``True``, and
+            also makes the automatic chunk size smaller, because the rotating path holds
+            more buffers per detector.
         n_chirp_mass_bins: Number of chirp-mass groups generated separately, each on
             its own worst-case grid (lightest first), injected on top of the
             earlier bins. ``1`` (default) uses a single grid sized for the
             lowest-mass event. Binned output agrees with a single-grid run only at
             the per-event grid discretization level (a fraction of a percent in
             overlap) — the resolution the per-event path uses.
-        chunk_size: If set, generate at most this many events per batched call
-            (within each bin). Output-identical to ``None``; only bounds peak memory.
+        chunk_size: Generate at most this many events per batched call (within each bin).
+            Output-identical whatever the value; it only bounds peak memory. When omitted,
+            a size is chosen from the device memory limit and the grid actually selected
+            (see :func:`recommend_chunk_size`) — previously the default was no chunking at
+            all, which is what made a large catalogue abort with a bare XLA
+            out-of-memory error. Pass an explicit value to override the estimate.
+        memory_fraction: Fraction of device memory an automatically chosen chunk may
+            occupy. Ignored when ``chunk_size`` is given.
         interpolate_if_offset: Forwarded to :func:`assemble_segments`.
 
     Returns:
@@ -444,7 +612,18 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         # Pin the grid to this bin's worst case so every chunk of the bin shares it
         # (chunking stays output-identical). A user-pinned backend is left as-is.
         bin_backend = _bin_backend(backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
-        for chunk_indices in _count_chunks(bin_indices, chunk_size):
+        # Size the chunk from this bin's own grid: bins differ in n_samples by design, so a
+        # single catalogue-wide chunk size would be wrong for all but one of them.
+        effective_chunk = chunk_size
+        if effective_chunk is None:
+            bin_samples = _bin_n_samples(bin_backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
+            effective_chunk = recommend_chunk_size(
+                len(tuple(detector_names)),
+                bin_samples,
+                earth_rotation=earth_rotation,
+                memory_fraction=memory_fraction,
+            )
+        for chunk_indices in _count_chunks(bin_indices, effective_chunk):
             chunk_parameters = {key: np.asarray(values)[chunk_indices] for key, values in parameters.items()}
             batch = simulate_cbc_batch(
                 approximant,
@@ -453,6 +632,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
                 minimum_frequency=minimum_frequency,
                 parameters=chunk_parameters,
                 backend=bin_backend,
+                earth_rotation=earth_rotation,
             )
             # Chain groups: inject each on top of the segments built from earlier ones.
             backgrounds = [stack.to_dict() for stack in segments] if segments is not None else None
@@ -501,6 +681,39 @@ def _bin_backend(
         return backend
     lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
     return backend.with_segment_duration(backend.segment_duration_for(lightest, minimum_frequency, sampling_frequency))
+
+
+def _planned_n_samples(
+    backend: RippleBackend,
+    parameters: Mapping[str, object],
+    minimum_frequency: float,
+    sampling_frequency: float,
+) -> int:
+    """Return the shared grid length the batch will allocate, before generating it.
+
+    The batched ripple path sizes one grid from the smallest chirp mass present (or from a
+    pinned segment duration), so the dominant term in the memory estimate is knowable in
+    advance. That is what lets the preflight run before any large allocation happens.
+    """
+    lightest = float(np.min(_chirp_mass(parameters)))
+    return int(backend._segment_samples(lightest, minimum_frequency, sampling_frequency))
+
+
+def _bin_n_samples(
+    backend: RippleBackend,
+    parameters: Mapping[str, object],
+    bin_indices: np.ndarray,
+    minimum_frequency: float,
+    sampling_frequency: float,
+) -> int:
+    """Return the grid length the bin will use, without generating any waveform.
+
+    Needed before the batch runs so the chunk can be sized from the grid that will
+    actually be allocated: bins deliberately differ in ``n_samples``, so one
+    catalogue-wide chunk size would be wrong for all but one of them.
+    """
+    lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
+    return int(backend._segment_samples(lightest, minimum_frequency, sampling_frequency))
 
 
 def _required(parameters: Mapping[str, object], name: str) -> object:
