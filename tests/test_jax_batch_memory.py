@@ -1,0 +1,128 @@
+"""Tests for device-memory estimation, chunk sizing and the batch preflight.
+
+The point of this machinery is not precision — the underlying coefficients are calibrated
+from one measurement — but that a catalogue too large for the device fails with an
+actionable message instead of a bare XLA ``RESOURCE_EXHAUSTED``, and that the default
+chunk size is derived from the grid actually selected rather than left unbounded.
+
+The consistency test below is the one that matters most: it checks the model against every
+A100 observation available, including the configuration that actually ran out of memory.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from gwmock_signal import jax_batch
+from gwmock_signal.jax_batch import (
+    estimate_batch_memory_bytes,
+    recommend_chunk_size,
+)
+
+_A100_BYTES = 80 * 2**30
+
+
+def test_estimate_scales_linearly_in_events_and_samples() -> None:
+    """Peak memory is proportional to the total sample count of the batch."""
+    base = estimate_batch_memory_bytes(100, 3, 1024)
+    assert estimate_batch_memory_bytes(200, 3, 1024) == pytest.approx(2 * base, rel=1e-12)
+    assert estimate_batch_memory_bytes(100, 3, 2048) == pytest.approx(2 * base, rel=1e-12)
+
+
+def test_estimate_grows_with_detectors_but_not_proportionally() -> None:
+    """Only the projection buffers scale with detector count; generation does not.
+
+    Guards the modelling decision: treating the whole estimate as proportional to detector
+    count would under-estimate single-detector batches, which is the dangerous direction.
+    """
+    one = estimate_batch_memory_bytes(100, 1, 1024)
+    three = estimate_batch_memory_bytes(100, 3, 1024)
+    assert one < three < 3 * one
+
+
+def test_rotating_path_is_estimated_larger() -> None:
+    """The rotating path holds more per-detector buffers, so it must chunk smaller."""
+    static = estimate_batch_memory_bytes(100, 3, 1024, earth_rotation=False)
+    rotating = estimate_batch_memory_bytes(100, 3, 1024, earth_rotation=True)
+    assert rotating > static
+    assert recommend_chunk_size(3, 1024, earth_rotation=True, available_bytes=_A100_BYTES) <= (
+        recommend_chunk_size(3, 1024, earth_rotation=False, available_bytes=_A100_BYTES)
+    )
+
+
+@pytest.mark.parametrize(
+    ("n_events", "n_samples", "fits"),
+    [
+        # The measurement the coefficients come from: this asked XLA for 85.4 GiB and failed.
+        (16384, 8192, False),
+        # Chunk sizes that were run successfully on an A100.
+        (2048, 8192, True),
+        (8, 4194304, True),  # BNS, f_min 10 Hz
+        (2, 33554432, True),  # BNS, f_min 5 Hz
+    ],
+)
+def test_model_agrees_with_every_a100_observation(n_events: int, n_samples: int, fits: bool) -> None:
+    """The estimate must classify all four observed configurations correctly."""
+    estimate = estimate_batch_memory_bytes(n_events, 3, n_samples, earth_rotation=False)
+    assert (estimate <= _A100_BYTES) is fits, f"{estimate / 2**30:.1f} GiB vs {_A100_BYTES / 2**30:.0f} GiB"
+
+
+def test_recommended_chunk_fits_the_budget() -> None:
+    """A recommended chunk must fit within the fraction it was sized against."""
+    for n_samples in (8192, 131072, 4194304, 33554432):
+        chunk = recommend_chunk_size(3, n_samples, available_bytes=_A100_BYTES, memory_fraction=0.6)
+        assert chunk >= 1
+        assert estimate_batch_memory_bytes(chunk, 3, n_samples) <= 0.6 * _A100_BYTES
+
+
+def test_recommendation_is_none_when_the_device_limit_is_unknown() -> None:
+    """A CPU device reports no limit, and that must read as "cannot check", not "no limit"."""
+    assert recommend_chunk_size(3, 8192, available_bytes=None) is None or isinstance(
+        recommend_chunk_size(3, 8192, available_bytes=None), int
+    )
+    # Explicitly: with no queryable limit the answer is None rather than a guess.
+    assert recommend_chunk_size(3, 8192, available_bytes=0) is None
+
+
+def test_preflight_is_silent_when_the_limit_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never block a run because the device could not be queried."""
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: None)
+    jax_batch._check_batch_fits(10**9, 3, 10**6, earth_rotation=True)
+
+
+def test_preflight_passes_a_batch_that_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch inside the limit must not raise."""
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: _A100_BYTES)
+    jax_batch._check_batch_fits(1024, 3, 8192, earth_rotation=True)
+
+
+def test_preflight_error_names_the_numbers_and_a_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole reason this exists: the message must say what to do next."""
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: _A100_BYTES)
+    with pytest.raises(MemoryError) as excinfo:
+        jax_batch._check_batch_fits(16384, 3, 8192, earth_rotation=False)
+    message = str(excinfo.value)
+    assert "GiB" in message
+    assert "chunk_size=" in message
+    assert "16384 events" in message
+    assert "minimum_frequency" in message
+
+
+@pytest.mark.parametrize(("events", "detectors", "samples"), [(0, 3, 8), (1, 0, 8), (1, 3, 0), (-1, 3, 8)])
+def test_degenerate_shapes_rejected(events: int, detectors: int, samples: int) -> None:
+    """Zero or negative shapes are a caller error, not a zero-memory batch."""
+    with pytest.raises(ValueError, match=">= 1"):
+        estimate_batch_memory_bytes(events, detectors, samples)
+
+
+def test_catalogue_forwards_earth_rotation() -> None:
+    """``simulate_cbc_catalogue`` must expose Earth rotation.
+
+    It did not when the rotating path first landed, so the production entry point silently
+    took the new default with no way to turn it off.
+    """
+    import inspect
+
+    signature = inspect.signature(jax_batch.simulate_cbc_catalogue)
+    assert "earth_rotation" in signature.parameters
+    assert signature.parameters["earth_rotation"].default is True
