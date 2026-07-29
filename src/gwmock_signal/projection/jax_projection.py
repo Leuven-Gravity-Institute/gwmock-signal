@@ -42,6 +42,8 @@ from typing import TYPE_CHECKING
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    SPEED_OF_LIGHT_M_S,
+    edge_padding,
     validate_kernel,
 )
 
@@ -62,8 +64,6 @@ _TT_MINUS_TAI = 32.184
 # explicit value for other epochs. UTC = GPS - (tai_minus_utc + _GPS_MINUS_TAI).
 _DEFAULT_TAI_MINUS_UTC = 37.0
 _ARCSEC_TO_RAD = math.pi / 648000.0
-# Speed of light (exact, SI); matches astropy.constants.c.value.
-_SPEED_OF_LIGHT_M_S = 299792458.0
 
 
 def gmst_rad(
@@ -211,7 +211,7 @@ def time_delay_from_geocenter(
             sindec * jnp.ones_like(gha),
         ]
     )
-    return -jnp.tensordot(location, propagation_direction, axes=1) / _SPEED_OF_LIGHT_M_S
+    return -jnp.tensordot(location, propagation_direction, axes=1) / SPEED_OF_LIGHT_M_S
 
 
 def project_polarizations_fd(  # noqa: PLR0913
@@ -276,7 +276,14 @@ def _interpolate_uniform_sinc(
 
     For a band-limited uniformly sampled signal the sinc series is the exact interpolant,
     so accuracy is set by the tap count and can be refined until it stops mattering. A
-    cubic cannot be refined at all. Positions outside ``[0, n_samples - 1]`` return zero.
+    cubic cannot be refined at all.
+
+    Positions whose centre index falls outside ``[0, n_samples - 1]`` return zero. Taps that
+    reach outside while the centre is inside are *clamped* to the first or last sample, which
+    repeats it -- so this helper alone does not zero-pad. Callers that need true zero padding,
+    including :func:`project_polarizations_td_rotating`, pass an already-padded array and an
+    index offset by that padding; see
+    :func:`gwmock_signal.projection.resampling.edge_padding`.
 
     The taps are accumulated in a ``fori_loop`` rather than gathered into one
     ``(taps, ...)`` array: at Einstein Telescope BNS segment lengths a 127-tap gather
@@ -339,6 +346,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     polarization_angle: float,
     gmst_start: float,
     gmst_rate: float,
+    extra_shift_samples: float = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
 ) -> Array:
@@ -358,15 +366,31 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     since a time-varying response is not a frequency-domain multiply — is not a small
     approximation there, it is the wrong answer.
 
+    !!! note "Edge support is zero-padded, not clipped"
+
+        The delay and the sinc kernel both reach outside the input buffer near its ends. The
+        polarizations are therefore gathered from a zero-padded copy, so out-of-range taps
+        contribute zero. Without that they would clip to the first or last sample and *repeat*
+        it, which distorts the edges by an amount that depends on how large the waveform is
+        there -- fine for a tapered inspiral, wrong for a waveform with abrupt support, and this
+        primitive is waveform-agnostic. The width comes from
+        :func:`~gwmock_signal.projection.resampling.edge_padding`, which both projection paths
+        call so neither can pad differently from the other. It covers the largest geocenter
+        delay *any ground-based detector* can have -- Earth's equatorial radius over c, not this
+        detector's own distance, because ``location`` is a traced argument here and making it
+        static would cost one compiled kernel per detector -- plus the kernel half-width and the
+        sub-sample alignment shift. ``require_terrestrial_location`` enforces that assumption on
+        the host, where the geometry is still concrete.
+
     !!! warning "Oversample the strain"
 
-        Resampling at the delayed times is a cubic interpolation, so its error grows
-        steeply as the signal approaches Nyquist and is worst at the merger, where the
-        waveform peaks. Against the NumPy path the largest sample-wise difference falls
-        roughly 8x per doubling of the sample rate. This is a property of the algorithm,
-        not of this implementation — ``project_polarizations_to_network`` carries the
-        same error — but it means the sample rate should be chosen well above the
-        signal's highest frequency, not merely above it.
+        Resampling at the delayed times uses the Kaiser-windowed sinc kernel in
+        :mod:`gwmock_signal.projection.resampling`, which is the exact interpolant for a
+        band-limited series in the limit of many taps. Its error is nonetheless a steep
+        function of how close the signal comes to Nyquist: the shipped kernel reaches ~1e-12
+        up to about 0.8 x Nyquist and degrades sharply above that. The sample rate should
+        therefore be chosen well above the signal's highest frequency, not merely above it.
+        ``project_polarizations_to_network`` uses the same kernel and has the same limit.
 
     !!! note "Time coordinate"
 
@@ -393,6 +417,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             implementation of the sidereal model; see that module for why a linear model
             is exact at these segment lengths.
         gmst_rate: dGMST/dt in radians per second.
+        extra_shift_samples: Additional shift, in samples, applied together with the
+            geocenter delay. Used to land the output on a caller's sample lattice; because it
+            joins the delay inside one resampling, the alignment costs no extra interpolation
+            and inherits the kernel's accuracy rather than a downstream cubic's.
         sinc_taps: Taps in the resampling kernel. More taps cost arithmetic and buy
             accuracy; the default is set by measured convergence.
         kaiser_beta: Kaiser window shape parameter for the resampling kernel.
@@ -421,9 +449,19 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         polarization_angle=polarization_angle,
     )
 
-    # Fractional sample index of t - tau(t) on the uniform input grid.
-    index = jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency
-    plus_shifted = _interpolate_uniform_sinc(plus, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
-    cross_shifted = _interpolate_uniform_sinc(cross, index, n_samples, taps=sinc_taps, beta=kaiser_beta)
+    # Gather from a zero-padded copy so kernel taps reaching past either end read zero rather
+    # than clamping to the first or last sample and repeating it. Sized for the largest
+    # geocenter delay this detector can have (|location| / c, a sky-independent upper bound),
+    # the kernel half-width, and the sub-sample alignment shift.
+    pad = edge_padding(sampling_frequency, sinc_taps, kaiser_beta)
+    padded_plus = jnp.pad(jnp.asarray(plus, dtype=jnp.float64), (pad, pad))
+    padded_cross = jnp.pad(jnp.asarray(cross, dtype=jnp.float64), (pad, pad))
+    padded_length = n_samples + 2 * pad
+
+    # Fractional sample index of t - tau(t) on the padded input grid, plus any lattice
+    # alignment the caller asked for -- one shift, one resampling.
+    index = pad + jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency - extra_shift_samples
+    plus_shifted = _interpolate_uniform_sinc(padded_plus, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
+    cross_shifted = _interpolate_uniform_sinc(padded_cross, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
 
     return f_plus * plus_shifted + f_cross * cross_shifted
