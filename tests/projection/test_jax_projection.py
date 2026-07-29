@@ -366,3 +366,49 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
 
     mismatch = np.max(np.abs(rotating - static)) / np.max(np.abs(rotating))
     assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"
+
+
+def test_edge_taps_read_zeros_not_repeated_endpoints() -> None:
+    """Out-of-range kernel taps must read zeros, not a repeated endpoint sample.
+
+    The gather clamps its indices, so without an explicitly zero-padded source the taps that
+    reach past either end read the first or last sample repeatedly. That *invents* a
+    continuation of the signal: for a constant input, clamping returns the constant exactly,
+    as though the buffer extended forever. Zero padding instead represents the truth that the
+    strain is zero outside the buffer, and the resulting edge ringing is the honest
+    consequence of a discontinuous input.
+
+    Tested with a constant rather than a tapered inspiral on purpose. A tapered signal hides
+    the difference, and this primitive is waveform-agnostic: it must be correct for waveforms
+    with abrupt support too.
+
+    The assertion is on the *difference between the two treatments* near the edge, and on their
+    agreement in the interior, rather than on a specific edge value -- the edge value depends
+    on the kernel's weight distribution and asserting a guessed number would test nothing.
+    """
+    import jax.numpy as jnp
+
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc
+
+    n_samples = 8192
+    pad = 109  # what the projection uses at 2048 Hz for a ground-based detector
+    constant = jnp.ones(n_samples)
+    zero_padded = jnp.pad(constant, (pad, pad))
+
+    def padded_at(offset: float) -> float:
+        return float(_interpolate_uniform_sinc(zero_padded, jnp.array([pad + offset]), n_samples + 2 * pad)[0])
+
+    def clamped_at(offset: float) -> float:
+        return float(_interpolate_uniform_sinc(constant, jnp.array([offset]), n_samples)[0])
+
+    # Fractional offsets: at a whole-sample offset the sinc weights vanish on every tap but the
+    # centre one, so no treatment of the edges is observable there at all.
+    near_edge = 0.5
+    interior = n_samples // 2 + 0.5
+
+    assert abs(padded_at(near_edge) - clamped_at(near_edge)) > 1e-3, (
+        "zero padding and endpoint clamping agree at the edge, so the source is not padded"
+    )
+    assert abs(padded_at(interior) - clamped_at(interior)) < 1e-9, (
+        "the two treatments must be indistinguishable away from the edges"
+    )

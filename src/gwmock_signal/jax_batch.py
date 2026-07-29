@@ -105,6 +105,11 @@ _ROTATION_BUFFER_MULTIPLIER = 1.6
 _DEFAULT_MEMORY_FRACTION = 0.6
 
 
+#: How close ``segment_duration * sampling_frequency`` must be to a whole number for the
+#: segments to share one lattice. A segment boundary landing mid-sample cannot be honoured by
+#: any integer-offset scheme.
+_WHOLE_SAMPLE_TOLERANCE = 1e-6
+
 #: Distinct projection-kernel configurations kept compiled. Each holds one XLA executable.
 _KERNEL_CACHE_SIZE = 32
 
@@ -437,7 +442,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
-            segment_start_gps=coa_time + epoch,
+            # The aligned buffer starts one fractional sample earlier than requested, so the
+            # sidereal anchor must move with it or F(t) and tau(t) are evaluated up to a full
+            # sample after the samples they multiply.
+            segment_start_gps=coa_time + epoch - alignment_shift / sampling_frequency,
             right_ascension=right_ascension,
             declination=declination,
             polarization_angle=polarization_angle,
@@ -456,8 +464,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
     # earth_rotation=False reference time: the midpoint of each event's placed segment.
     midpoint_offset = epoch + 0.5 * (n_samples - 1) * dt
     # Astropy is the single implementation of the sidereal model for both branches and
-    # both projection paths; see gwmock_signal.projection.sidereal.
-    gmst = jnp.asarray(gmst_rad_astropy(coa_time + midpoint_offset), dtype=jnp.float64)
+    # both projection paths; see gwmock_signal.projection.sidereal. The alignment shift moves
+    # the buffer, so the midpoint reference time moves with it, as in the rotating branch.
+    aligned_midpoint = coa_time + midpoint_offset - alignment_shift / sampling_frequency
+    gmst = jnp.asarray(gmst_rad_astropy(aligned_midpoint), dtype=jnp.float64)
 
     project_batch = _static_projection_kernel(n_samples, sampling_frequency, merger_index)
 
@@ -492,6 +502,8 @@ def simulate_cbc_batch(  # noqa: PLR0913
         coa_time=coa_time,
         epoch=epoch,
         sampling_frequency=sampling_frequency,
+        start_index=start_index,
+        grid=output_grid,
     )
 
 
@@ -619,12 +631,18 @@ def assemble_segments(
     _, _, n_samples = strain.shape
     sampling_frequency = batch.sampling_frequency
     dt = 1.0 / sampling_frequency
-    signal_start = batch.epoch + np.asarray(batch.coa_time, dtype=float)
+    aligned = batch.start_index is not None and batch.grid is not None
+    if aligned:
+        # Where the buffer actually begins, which differs from epoch + coa_time by the
+        # fractional remainder the device absorbed. Using the requested time here would
+        # misattribute overlap for events sitting within a fraction of a sample of a boundary.
+        signal_start = np.asarray(batch.grid.time_of(batch.start_index), dtype=float)
+    else:
+        signal_start = batch.epoch + np.asarray(batch.coa_time, dtype=float)
     signal_end = signal_start + n_samples * dt
     n_segment_samples = round(segment_duration * sampling_frequency)
     detectors = batch.detector_names
 
-    aligned = batch.start_index is not None and batch.grid is not None
     if aligned:
         segment_index = batch.grid.require_on_lattice(
             np.asarray(segment_start_times, dtype=float), name="segment_start_times"
@@ -712,6 +730,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     n_chirp_mass_bins: int = 1,
     chunk_size: int | None = None,
     memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
+    align_to_output_grid: bool = True,
     interpolate_if_offset: bool = True,
 ) -> list[DetectorStrainStack]:
     """Generate a catalogue on device and assemble it into fixed-duration segments.
@@ -764,6 +783,11 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             out-of-memory error. Pass an explicit value to override the estimate.
         memory_fraction: Fraction of device memory an automatically chosen chunk may
             occupy. Ignored when ``chunk_size`` is given.
+        align_to_output_grid: Generate every batch on the lattice defined by this function's
+            own segment starts, so superposition is an exact integer-offset add. Defaults to
+            ``True`` because the alternative resamples each signal with a cubic spline, which
+            reaches 12% error at half Nyquist. Set ``False`` only to reproduce that older
+            behaviour deliberately; it is a legacy mode, not a fallback.
         interpolate_if_offset: Forwarded to :func:`assemble_segments`.
 
     Returns:
@@ -782,6 +806,20 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     backend = backend or RippleBackend()
     n_segments = int(np.ceil((end_time - start_time) / segment_duration))
     segment_start_times = start_time + np.arange(n_segments) * segment_duration
+
+    output_grid: SamplingGrid | None = None
+    if align_to_output_grid:
+        samples_per_segment = segment_duration * sampling_frequency
+        if abs(samples_per_segment - round(samples_per_segment)) > _WHOLE_SAMPLE_TOLERANCE:
+            raise ValueError(
+                f"segment_duration * sampling_frequency must be a whole number of samples for the "
+                f"segments to share one lattice; {segment_duration} x {sampling_frequency} = "
+                f"{samples_per_segment}. Adjust one of them, or pass align_to_output_grid=False to "
+                f"accept resampled superposition."
+            )
+        # One grid for the whole catalogue, so every chunk and every chirp-mass bin lands on the
+        # same lattice and can be superposed with integer offsets.
+        output_grid = SamplingGrid.from_segment_starts(segment_start_times, sampling_frequency)
 
     segments: list[DetectorStrainStack] | None = None
     for bin_indices in _chirp_mass_bins(parameters, n_chirp_mass_bins):
@@ -809,6 +847,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
                 parameters=chunk_parameters,
                 backend=bin_backend,
                 earth_rotation=earth_rotation,
+                output_grid=output_grid,
             )
             # Chain groups: inject each on top of the segments built from earlier ones.
             backgrounds = [stack.to_dict() for stack in segments] if segments is not None else None

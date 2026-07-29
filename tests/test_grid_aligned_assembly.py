@@ -126,6 +126,110 @@ def test_unaligned_batch_carries_no_grid() -> None:
     assert batch.start_index is None
 
 
+@pytest.mark.parametrize("earth_rotation", [False, True])
+def test_both_branches_report_alignment(earth_rotation: bool) -> None:
+    """Both branches must carry the metadata, or assembly silently resamples anyway.
+
+    The static branch originally omitted it, and the omission was invisible because the
+    aligned-versus-unaligned static comparison then assembled *both* sides unaligned.
+    """
+    parameters = dict(_BASE)
+    parameters["coa_time"] = _OFF_LATTICE
+    batch = simulate_cbc_batch(
+        "IMRPhenomD",
+        ["E1"],
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=parameters,
+        earth_rotation=earth_rotation,
+        output_grid=_grid(),
+    )
+    assert batch.grid is not None, "alignment metadata missing, so assembly would resample"
+    assert batch.start_index is not None
+
+
+@pytest.mark.parametrize("earth_rotation", [False, True])
+def test_alignment_changes_the_result_on_both_branches(earth_rotation: bool) -> None:
+    """Alignment must actually take effect on the static branch too, not only the rotating one."""
+    unaligned = _assembled(_OFF_LATTICE, grid=None, earth_rotation=earth_rotation)
+    aligned = _assembled(_OFF_LATTICE, grid=_grid(), earth_rotation=earth_rotation)
+    scale = max(np.max(np.abs(unaligned)), np.max(np.abs(aligned)))
+    assert np.max(np.abs(aligned - unaligned)) > 0.01 * scale
+
+
+def test_overlap_uses_the_aligned_buffer_start() -> None:
+    """An event a fraction of a sample inside a segment must be classified by where it lands.
+
+    The overlap test originally used the *requested* start, which differs from the aligned one
+    by the fractional remainder, so an event within a fraction of a sample of a boundary could
+    be attributed to the wrong segment.
+    """
+    grid = _grid()
+    # Place coalescence so the buffer start sits just before a segment boundary, with a
+    # fractional remainder that the device absorbs.
+    boundary = _STARTS[1]
+    parameters = dict(_BASE)
+    parameters["coa_time"] = np.array([boundary + 0.4 / _FS, boundary + 10.0])
+    batch = simulate_cbc_batch(
+        "IMRPhenomD",
+        ["E1"],
+        sampling_frequency=_FS,
+        minimum_frequency=_F_MIN,
+        parameters=parameters,
+        output_grid=grid,
+    )
+    # The recorded start must be the lattice sample the data really begins on.
+    assert np.allclose(grid.time_of(batch.start_index), grid.time_of(grid.split_index(batch.coa_time + batch.epoch)[0]))
+    segments = assemble_segments(batch, segment_duration=_SEGMENT, segment_start_times=_STARTS)
+    assert len(segments) == len(_STARTS)
+
+
+def test_catalogue_aligns_by_default() -> None:
+    """The production entry point must use the grid, not just expose the option.
+
+    It previously built its own segment starts and then called the primitive without a grid, so
+    the advertised path kept the cubic error.
+    """
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    parameters = dict(_BASE)
+    parameters["coa_time"] = _OFF_LATTICE
+    common = {
+        "sampling_frequency": _FS,
+        "minimum_frequency": _F_MIN,
+        "parameters": parameters,
+        "segment_duration": _SEGMENT,
+        "start_time": _T0,
+        "end_time": _T0 + 2 * _SEGMENT,
+    }
+    aligned = simulate_cbc_catalogue("IMRPhenomD", ["E1"], **common)
+    legacy = simulate_cbc_catalogue("IMRPhenomD", ["E1"], align_to_output_grid=False, **common)
+    a = np.concatenate([s.to_dict()["E1"].value for s in aligned])
+    b = np.concatenate([s.to_dict()["E1"].value for s in legacy])
+    scale = max(np.max(np.abs(a)), np.max(np.abs(b)))
+    assert scale > 0.0
+    assert np.max(np.abs(a - b)) > 0.01 * scale, "default catalogue output is not aligned"
+
+
+def test_catalogue_rejects_a_fractional_sample_segment() -> None:
+    """A segment boundary landing mid-sample cannot share a lattice with the others."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    parameters = dict(_BASE)
+    parameters["coa_time"] = _ON_LATTICE
+    with pytest.raises(ValueError, match="whole number of samples"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            ["E1"],
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters=parameters,
+            segment_duration=_SEGMENT + 0.3 / _FS,
+            start_time=_T0,
+            end_time=_T0 + 2 * _SEGMENT,
+        )
+
+
 def test_off_lattice_segment_starts_are_rejected() -> None:
     """An aligned batch cannot be scattered onto segments that miss its lattice."""
     parameters = dict(_BASE)

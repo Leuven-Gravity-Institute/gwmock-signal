@@ -359,6 +359,18 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     since a time-varying response is not a frequency-domain multiply — is not a small
     approximation there, it is the wrong answer.
 
+    !!! note "Edge support is zero-padded, not clipped"
+
+        The delay and the sinc kernel both reach outside the input buffer near its ends. The
+        polarizations are therefore gathered from a zero-padded copy, so out-of-range taps
+        contribute zero. Without that they would clip to the first or last sample and *repeat*
+        it, which distorts the edges by an amount that depends on how large the waveform is
+        there -- fine for a tapered inspiral, wrong for a waveform with abrupt support, and this
+        primitive is waveform-agnostic. The padding is
+        ``ceil(|location| / c * f_s) + (taps - 1) // 2 + 2`` samples per side, covering the
+        largest possible geocenter delay, the kernel half-width, and the sub-sample alignment
+        shift.
+
     !!! warning "Oversample the strain"
 
         Resampling at the delayed times is a cubic interpolation, so its error grows

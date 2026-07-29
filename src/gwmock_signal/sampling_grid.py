@@ -48,10 +48,22 @@ from dataclasses import dataclass
 
 import numpy as np
 
-#: How close to an integer a sample index must be to count as on-lattice. Generous next to
-#: float64 resolution on GPS times (~1e-7 s at 1.4e9), and far tighter than the sub-sample
-#: offsets that motivate the check (order 0.5 samples).
-_LATTICE_TOLERANCE_SAMPLES = 1e-6
+#: Timestamp ULPs of slack allowed when deciding whether a time is on the lattice. The
+#: tolerance has to be derived from float64 resolution rather than fixed: one ULP of a GPS
+#: timestamp near 1.4e9 is about 2.4e-7 s, which at 2048 Hz is already 4.9e-4 samples. A fixed
+#: 1e-6-sample tolerance -- the first thing written here -- was therefore some 500x *tighter*
+#: than the timestamps can represent, and would have falsely rejected lattice times produced by
+#: ordinary arithmetic. It survived initial testing only because 64 s at 2048 Hz happens to be
+#: exact in binary; a non-power-of-two segment duration would have broken it.
+_LATTICE_TOLERANCE_ULPS = 8.0
+
+#: Smallest tolerance to use, in samples, so that a tiny epoch does not make the check
+#: unreasonably strict.
+_MINIMUM_TOLERANCE_SAMPLES = 1e-9
+
+#: Largest tolerance to use, in samples. Well below the half-sample displacements the check
+#: exists to catch, so no plausible ULP growth can make it accept a genuinely off-lattice time.
+_MAXIMUM_TOLERANCE_SAMPLES = 1e-2
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,19 @@ class SamplingGrid:
         """Seconds between samples."""
         return 1.0 / self.sampling_frequency
 
+    def lattice_tolerance_samples(self, gps_time: np.ndarray | float) -> float:
+        """Return the on-lattice tolerance, in samples, appropriate to these timestamps.
+
+        Scaled by the float64 resolution of the times involved, because at GPS magnitudes that
+        resolution is coarser than any fixed tolerance worth writing down: near 1.4e9 one ULP
+        is already ~5e-4 samples at 2048 Hz.
+        """
+        magnitude = max(abs(float(self.epoch)), float(np.max(np.abs(np.asarray(gps_time, dtype=float)))))
+        ulp_samples = float(np.spacing(magnitude)) * self.sampling_frequency
+        return float(
+            np.clip(_LATTICE_TOLERANCE_ULPS * ulp_samples, _MINIMUM_TOLERANCE_SAMPLES, _MAXIMUM_TOLERANCE_SAMPLES)
+        )
+
     def index_of(self, gps_time: np.ndarray | float) -> np.ndarray:
         """Return the (generally fractional) lattice index of *gps_time*.
 
@@ -109,7 +134,7 @@ class SamplingGrid:
     def is_on_lattice(self, gps_time: np.ndarray | float) -> np.ndarray:
         """Return whether each *gps_time* coincides with a lattice sample."""
         exact = self.index_of(gps_time)
-        return np.abs(exact - np.round(exact)) <= _LATTICE_TOLERANCE_SAMPLES
+        return np.abs(exact - np.round(exact)) <= self.lattice_tolerance_samples(gps_time)
 
     def require_on_lattice(self, gps_time: np.ndarray | float, *, name: str) -> np.ndarray:
         """Return integer lattice indices, rejecting any time that is off-lattice.
@@ -130,7 +155,7 @@ class SamplingGrid:
         """
         times = np.atleast_1d(np.asarray(gps_time, dtype=float))
         exact = self.index_of(times)
-        offenders = np.abs(exact - np.round(exact)) > _LATTICE_TOLERANCE_SAMPLES
+        offenders = np.abs(exact - np.round(exact)) > self.lattice_tolerance_samples(times)
         if np.any(offenders):
             first = int(np.argmax(offenders))
             raise ValueError(
