@@ -676,6 +676,16 @@ def assemble_segments(
             np.asarray(segment_start_times, dtype=float), name="segment_start_times"
         )
         event_index = np.asarray(batch.start_index, dtype=np.int64)
+        # Checked up front rather than per channel: a mismatched background is a caller error, and
+        # discovering it on the last segment after assembling every earlier one wastes the work.
+        _require_backgrounds_match_segments(
+            backgrounds,
+            detectors=detectors,
+            segment_index=segment_index,
+            n_segment_samples=n_segment_samples,
+            grid=batch.grid,
+            sampling_frequency=sampling_frequency,
+        )
 
     segments: list[DetectorStrainStack] = []
     for k, raw_start in enumerate(segment_start_times):
@@ -696,7 +706,7 @@ def assemble_segments(
                 channels[name] = _aligned_channel(
                     background=None if backgrounds is None else backgrounds[k][name],
                     strain=strain[:, d],
-                    offsets=event_index - int(segment_index[k]),
+                    offsets=offset,
                     overlapping=overlapping,
                     n_segment_samples=n_segment_samples,
                     segment_start=seg_start,
@@ -713,6 +723,102 @@ def assemble_segments(
             )
         segments.append(DetectorStrainStack.from_mapping(detectors, channels))
     return segments
+
+
+def _require_backgrounds_match_segments(  # noqa: PLR0913
+    backgrounds: Sequence[Mapping[str, TimeSeries]] | None,
+    *,
+    detectors: tuple[str, ...],
+    segment_index: np.ndarray,
+    n_segment_samples: int,
+    grid: SamplingGrid,
+    sampling_frequency: float,
+) -> None:
+    """Check every supplied background against the segment it is paired with.
+
+    A no-op when ``backgrounds`` is ``None``, so the caller needs no branch.
+
+    Args:
+        backgrounds: Per-segment mapping of detector name to background, or ``None``.
+        detectors: Detector names, in batch order.
+        segment_index: Lattice index of each segment's first sample.
+        n_segment_samples: Samples each segment must contain.
+        grid: Lattice the batch and the segment starts share.
+        sampling_frequency: Sample rate in Hz the batch was generated at.
+
+    Raises:
+        ValueError: If any background does not match its segment.
+    """
+    if backgrounds is None:
+        return
+    for k, index in enumerate(segment_index):
+        for name in detectors:
+            _require_background_matches_segment(
+                backgrounds[k][name],
+                name=name,
+                segment_index=int(index),
+                n_segment_samples=n_segment_samples,
+                grid=grid,
+                sampling_frequency=sampling_frequency,
+            )
+
+
+def _require_background_matches_segment(  # noqa: PLR0913
+    background: TimeSeries,
+    *,
+    name: str,
+    segment_index: int,
+    n_segment_samples: int,
+    grid: SamplingGrid,
+    sampling_frequency: float,
+) -> None:
+    """Reject a background that does not describe the segment it will be added to.
+
+    The signals are placed by integer lattice offsets derived from ``segment_start_times``, so a
+    background describing a *different* interval cannot be reconciled with them -- and the failure
+    is silent in either direction. Taking the background's own epoch for the result would label
+    the output with one interval while the data sits at another; taking the segment's, as this
+    code does, silently discards what the caller asked for. Both were measured: a background
+    offset by 100 s, one at twice the sample rate, and one of half the length were all accepted
+    and produced quietly wrong output, the last of them a half-length segment.
+
+    Rejecting instead follows the same rule as the sampling grid itself -- a mismatch is a caller
+    error worth naming, not something to round away.
+
+    Args:
+        background: Caller-supplied background for one segment and detector.
+        name: Detector name, for the error message.
+        segment_index: Lattice index of the segment's first sample.
+        n_segment_samples: Samples the segment must contain.
+        grid: Lattice the batch and the segment starts share.
+        sampling_frequency: Sample rate in Hz the batch was generated at.
+
+    Raises:
+        ValueError: If the background's length, sample rate or epoch does not match the segment.
+    """
+    if len(background) != n_segment_samples:
+        raise ValueError(
+            f"background for {name} at segment index {segment_index} has {len(background)} "
+            f"samples, but the segment is {n_segment_samples}. A shorter background silently "
+            f"yields a shorter segment, so it is rejected."
+        )
+    background_rate = float(background.sample_rate.value)
+    # Relative comparison: a rate that is not a power of two does not round-trip exactly through
+    # gwpy's dt, so exact equality would reject a background the caller built correctly.
+    if not np.isclose(background_rate, sampling_frequency, rtol=1e-12, atol=0.0):
+        raise ValueError(
+            f"background for {name} at segment index {segment_index} is sampled at "
+            f"{background_rate} Hz, but the batch is at {sampling_frequency} Hz."
+        )
+    background_index = int(grid.require_on_lattice(float(background.t0.value), name=f"t0 of background for {name}"))
+    if background_index != segment_index:
+        raise ValueError(
+            f"background for {name} starts at lattice index {background_index}, but the segment "
+            f"it is paired with starts at {segment_index} "
+            f"({(background_index - segment_index) / sampling_frequency:+g} s away). The signals "
+            f"are placed by integer offsets from the segment start, so a background describing a "
+            f"different interval cannot be combined with them."
+        )
 
 
 def _aligned_channel(  # noqa: PLR0913

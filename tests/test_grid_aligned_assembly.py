@@ -469,3 +469,95 @@ def test_sidereal_anchor_uses_the_aligned_start(monkeypatch: pytest.MonkeyPatch)
     assert np.allclose(captured[0], aligned, rtol=0.0, atol=1e-9), (
         f"anchored at {captured[0]} but the aligned buffers start at {aligned}"
     )
+
+
+def _synthetic_aligned_batch(n_signal: int, n_segment: int, grid: SamplingGrid) -> object:
+    """One event of constant strain, aligned to *grid*, for background-validation tests."""
+    from gwmock_signal.jax_batch import BatchedDetectorStrain
+
+    return BatchedDetectorStrain(
+        strain=np.ones((1, 1, n_signal)),
+        detector_names=("E1",),
+        coa_time=np.array([0.0]),
+        epoch=_T0,
+        sampling_frequency=_FS,
+        start_index=np.array([0], dtype=np.int64),
+        grid=grid,
+    )
+
+
+def _background_case(n_segment: int, grid: SamplingGrid, **overrides: float) -> tuple[object, dict, list[float]]:
+    """Return ``(batch, backgrounds, starts)`` with one background, optionally inconsistent with its segment."""
+    from gwpy.timeseries import TimeSeries
+
+    batch = _synthetic_aligned_batch(64, n_segment, grid)
+    length = int(overrides.get("length", n_segment))
+    background = TimeSeries(
+        np.zeros(length),
+        t0=overrides.get("t0", grid.time_of(0)),
+        sample_rate=overrides.get("sample_rate", _FS),
+    )
+    return batch, [{"E1": background}], [float(grid.time_of(0))]
+
+
+def test_a_correct_background_is_accepted_and_added() -> None:
+    """The matching case must still work, and the background must actually be included."""
+    from gwpy.timeseries import TimeSeries
+
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    batch = _synthetic_aligned_batch(64, n_segment, grid)
+    background = TimeSeries(np.full(n_segment, 7.0), t0=grid.time_of(0), sample_rate=_FS)
+    segments = assemble_segments(
+        batch,
+        segment_duration=n_segment / _FS,
+        segment_start_times=[float(grid.time_of(0))],
+        backgrounds=[{"E1": background}],
+    )
+    data = np.asarray(segments[0]["E1"].value)
+    assert len(data) == n_segment
+    # Background everywhere, plus the signal over its first 64 samples.
+    assert np.allclose(data[:64], 8.0)
+    assert np.allclose(data[64:], 7.0)
+
+
+def test_background_of_the_wrong_length_is_rejected() -> None:
+    """Measured: a half-length background was accepted and yielded a half-length segment."""
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    batch, backgrounds, starts = _background_case(n_segment, grid, length=n_segment // 2)
+    with pytest.raises(ValueError, match="samples, but the segment is"):
+        assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
+
+
+def test_background_at_the_wrong_sample_rate_is_rejected() -> None:
+    """Measured: the batch's rate silently replaced the background's."""
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    batch, backgrounds, starts = _background_case(n_segment, grid, sample_rate=_FS * 2)
+    with pytest.raises(ValueError, match="is sampled at"):
+        assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
+
+
+def test_background_starting_elsewhere_is_rejected() -> None:
+    """Measured: a background 100 s from the segment was accepted and silently relabelled.
+
+    This is the case Copilot raised on the PR. Its suggested fix -- take the background's own
+    ``t0`` for the result -- would have swapped one silent inconsistency for another: the data is
+    placed by integer offsets from the *segment* start, so labelling the output with a different
+    epoch describes an interval the samples do not occupy.
+    """
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    batch, backgrounds, starts = _background_case(n_segment, grid, t0=float(grid.time_of(0)) + 100.0)
+    with pytest.raises(ValueError, match="but the segment it is paired with starts at"):
+        assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
+
+
+def test_background_off_the_lattice_is_rejected() -> None:
+    """A background starting between samples cannot be reconciled with integer placement."""
+    n_segment = 128
+    grid = SamplingGrid(epoch=_T0, sampling_frequency=_FS)
+    batch, backgrounds, starts = _background_case(n_segment, grid, t0=float(grid.time_of(0)) + 0.4 / _FS)
+    with pytest.raises(ValueError, match="must lie on the sampling grid"):
+        assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
