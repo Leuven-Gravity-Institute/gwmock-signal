@@ -169,12 +169,19 @@ def recommend_chunk_size(
         n_detectors: Detectors projected onto.
         n_samples: Samples per event segment.
         earth_rotation: Whether the rotating projection is used.
-        memory_fraction: Fraction of device memory the batch may occupy.
+        memory_fraction: Fraction of device memory the batch may occupy; must be in ``(0, 1]``.
         available_bytes: Device memory limit; queried from JAX when omitted.
 
     Returns:
         A chunk size of at least 1, or ``None`` when the device limit is unknown.
+
+    Raises:
+        ValueError: If ``memory_fraction`` is outside ``(0, 1]``.
     """
+    # A fraction above 1 would recommend a chunk larger than the device, i.e. it would hand
+    # back exactly the out-of-memory abort this function exists to prevent.
+    if not 0.0 < memory_fraction <= 1.0:
+        raise ValueError(f"memory_fraction must be in (0, 1]; got {memory_fraction}.")
     limit = available_device_memory_bytes() if available_bytes is None else available_bytes
     if not limit:
         return None
@@ -256,6 +263,19 @@ def simulate_cbc_batch(  # noqa: PLR0913
     import jax.numpy as jnp  # noqa: PLC0415
 
     backend = backend or RippleBackend()
+
+    # Before generating anything: the estimate includes the waveform-generation buffers, so a
+    # check placed after generation could never fire for a batch that exhausts memory *during*
+    # generation -- which is most of the estimate. The grid length does not need the waveform,
+    # only the lightest chirp mass (or a pinned segment duration, which _segment_samples
+    # handles), so it can be sized up front.
+    _check_batch_fits(
+        len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
+        len(tuple(detector_names)),
+        _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency),
+        earth_rotation=earth_rotation,
+    )
+
     fd = backend.generate_fd_polarizations_batch(
         approximant,
         sampling_frequency=sampling_frequency,
@@ -265,15 +285,6 @@ def simulate_cbc_batch(  # noqa: PLR0913
     n_samples = fd.n_samples
     dt = 1.0 / sampling_frequency
     merger_index, epoch = backend.coalescence_placement(n_samples, sampling_frequency)
-
-    # Checked here rather than earlier because n_samples -- the dominant term -- is only
-    # known once the shared grid has been sized from the lightest chirp mass in the batch.
-    _check_batch_fits(
-        len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
-        len(tuple(detector_names)),
-        n_samples,
-        earth_rotation=earth_rotation,
-    )
 
     right_ascension = jnp.asarray(_required(parameters, "right_ascension"), dtype=jnp.float64)
     declination = jnp.asarray(_required(parameters, "declination"), dtype=jnp.float64)
@@ -670,6 +681,22 @@ def _bin_backend(
         return backend
     lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
     return backend.with_segment_duration(backend.segment_duration_for(lightest, minimum_frequency, sampling_frequency))
+
+
+def _planned_n_samples(
+    backend: RippleBackend,
+    parameters: Mapping[str, object],
+    minimum_frequency: float,
+    sampling_frequency: float,
+) -> int:
+    """Return the shared grid length the batch will allocate, before generating it.
+
+    The batched ripple path sizes one grid from the smallest chirp mass present (or from a
+    pinned segment duration), so the dominant term in the memory estimate is knowable in
+    advance. That is what lets the preflight run before any large allocation happens.
+    """
+    lightest = float(np.min(_chirp_mass(parameters)))
+    return int(backend._segment_samples(lightest, minimum_frequency, sampling_frequency))
 
 
 def _bin_n_samples(

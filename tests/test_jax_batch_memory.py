@@ -75,13 +75,21 @@ def test_recommended_chunk_fits_the_budget() -> None:
         assert estimate_batch_memory_bytes(chunk, 3, n_samples) <= 0.6 * _A100_BYTES
 
 
-def test_recommendation_is_none_when_the_device_limit_is_unknown() -> None:
+def test_recommendation_is_none_when_the_device_limit_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     """A CPU device reports no limit, and that must read as "cannot check", not "no limit"."""
-    assert recommend_chunk_size(3, 8192, available_bytes=None) is None or isinstance(
-        recommend_chunk_size(3, 8192, available_bytes=None), int
-    )
-    # Explicitly: with no queryable limit the answer is None rather than a guess.
+    # Patched rather than relying on whatever device the test host happens to have, so the
+    # assertion is about behaviour and not about the runner.
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: None)
+    assert recommend_chunk_size(3, 8192) is None
+    # An explicit zero limit means the same thing.
     assert recommend_chunk_size(3, 8192, available_bytes=0) is None
+
+
+@pytest.mark.parametrize("fraction", [0.0, -0.1, 1.01, 2.0, float("nan")])
+def test_memory_fraction_outside_the_unit_interval_rejected(fraction: float) -> None:
+    """A fraction above 1 would recommend a chunk larger than the device it is sized for."""
+    with pytest.raises(ValueError, match=r"\(0, 1\]"):
+        recommend_chunk_size(3, 8192, available_bytes=_A100_BYTES, memory_fraction=fraction)
 
 
 def test_preflight_is_silent_when_the_limit_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,6 +114,47 @@ def test_preflight_error_names_the_numbers_and_a_remedy(monkeypatch: pytest.Monk
     assert "chunk_size=" in message
     assert "16384 events" in message
     assert "minimum_frequency" in message
+
+
+def test_preflight_runs_before_waveform_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check must fire before anything large is allocated.
+
+    Most of the estimate *is* the waveform-generation buffers, so a preflight placed after
+    generation could never fire for a batch that exhausts memory while generating -- which
+    defeats the purpose. Asserted by making generation explode if it is ever reached.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+    import numpy as np
+
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: 1024)  # absurdly small
+
+    class _ExplodingBackend(RippleBackend):
+        def generate_fd_polarizations_batch(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("waveform generation ran before the memory preflight")
+
+    parameters = {
+        "detector_frame_mass_1": np.array([30.0, 25.0]),
+        "detector_frame_mass_2": np.array([28.0, 22.0]),
+        "luminosity_distance": np.array([900.0, 1200.0]),
+        "inclination": np.array([0.3, 1.1]),
+        "coa_phase": np.array([0.0, 2.0]),
+        "right_ascension": np.array([1.3, 4.0]),
+        "declination": np.array([-0.4, 0.6]),
+        "polarization_angle": np.array([0.7, 2.1]),
+        "coa_time": np.array([1.4e9, 1.4e9 + 300.0]),
+    }
+    with pytest.raises(MemoryError, match="chunk_size="):
+        jax_batch.simulate_cbc_batch(
+            "IMRPhenomD",
+            ["E1", "E2", "E3"],
+            sampling_frequency=1024.0,
+            minimum_frequency=25.0,
+            parameters=parameters,
+            backend=_ExplodingBackend(),
+        )
 
 
 @pytest.mark.parametrize(("events", "detectors", "samples"), [(0, 3, 8), (1, 0, 8), (1, 3, 0), (-1, 3, 8)])
