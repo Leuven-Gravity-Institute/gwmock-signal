@@ -25,14 +25,14 @@ variants (``IMRPhenomD_NRTidalv2``, ``IMRPhenomXAS_NRTidalv3``), and the
 precessing models (``IMRPhenomPv2``, ``IMRPhenomXP``, ``IMRPhenomXPHM``).
 
 Extra ripple options travel through the ``waveform_arguments`` mapping, as with
-the other backends, but here they are *constructor* kwargs of the ripple preset
+the other backends, but here they are *constructor* kwargs of the ripple waveform
 rather than call-time options. The whitelist is intentionally narrow because
 ripple's options surface is thin and pre-1.0: only ``no_taper`` (the NRTidal
 variants) is forwarded. ``f_ref`` is owned by the backend, and
 ``use_lambda_tildes`` is refused because it would switch ripple to a
 ``lambda_tilde``/``delta_lambda_tilde`` parameterisation this backend does not
 feed. The batch path takes the same options as a batch-wide keyword argument
-(the preset is built once, so they are constructor-level, not per-event). See
+(the waveform is built once, so they are constructor-level, not per-event). See
 ``_ALLOWED_WAVEFORM_ARGUMENTS`` / ``_RESERVED_WAVEFORM_ARGUMENTS``.
 """
 
@@ -53,6 +53,93 @@ if TYPE_CHECKING:
     from jax import Array
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
+
+#: Lowest ripple version exposing the registry API this backend calls.
+_MINIMUM_RIPPLE_VERSION = "0.3"
+
+#: Exactly what *production* code in this module reaches for in ripplegw, as
+#: ``(module_path, attribute)``. Deliberately not a broader surface: the guard below refuses to
+#: construct the backend when one of these is absent, so requiring anything the backend does not
+#: call would reject an otherwise compatible release -- which is the opposite of the intent behind
+#: leaving the dependency unbounded above. ``list_waveforms`` and ``get_waveform_metadata`` are
+#: used only by the interface tests and are deliberately *not* required here.
+_REQUIRED_RIPPLE_INTERFACE: Final[tuple[tuple[str, str], ...]] = (
+    ("ripplegw", "waveform"),
+    ("ripplegw.conversions", "ms_to_Mc_eta"),
+    ("ripplegw.constants", "MTSUN"),
+)
+
+
+def _require_ripple_interface(modules: Mapping[str, object]) -> None:
+    """Reject an installed ripple that does not expose what this backend calls.
+
+    The dependency carries **no upper bound**, so a future incompatible release is installable.
+    Without this check such a release surfaces as an ``AttributeError`` from inside a jitted
+    kernel, after a catalogue has been configured -- which is exactly how 0.3.0 broke the
+    previous code, which called the ``waveform_preset`` mapping 0.3.0 removed.
+
+    Args:
+        modules: The imported ripple modules, keyed by import path.
+
+    Raises:
+        RuntimeError: If any required attribute is missing, naming the installed version and
+            every absent attribute.
+    """
+    missing = [
+        f"{module_path}.{attribute}"
+        for module_path, attribute in _REQUIRED_RIPPLE_INTERFACE
+        if getattr(modules.get(module_path), attribute, None) is None
+    ]
+    if missing:
+        version = getattr(modules.get("ripplegw"), "__version__", "unknown")
+        raise RuntimeError(
+            f"Installed ripplegw {version} is missing {', '.join(missing)}, which this backend "
+            f"calls. gwmock-signal needs the registry API introduced in ripplegw "
+            f"{_MINIMUM_RIPPLE_VERSION}. Install a compatible version, or report this if a newer "
+            f"ripple has changed the interface again -- the dependency is intentionally unbounded "
+            f"above, so this check is what makes such a change legible instead of an "
+            f"AttributeError during waveform generation."
+        )
+
+
+def _build_ripple_waveform(
+    waveform_factory: object,
+    approximant: str,
+    *,
+    f_ref: float,
+    options: Mapping[str, object],
+) -> object:
+    """Construct a ripple waveform, turning a rejected option into a compatibility error.
+
+    ``_ALLOWED_WAVEFORM_ARGUMENTS`` is a static whitelist, and the ripple dependency is
+    deliberately unbounded above, so a release that renames or drops an option would let it pass
+    validation here and then raise a bare ``TypeError`` from inside ripple. The real construction
+    is wrapped instead of inspecting a signature: inspection needs a throwaway instance, and would
+    have to skip the check silently whenever that instance could not be built.
+
+    Args:
+        waveform_factory: ``ripplegw.waveform``.
+        approximant: The model to construct.
+        f_ref: Reference frequency.
+        options: Extra constructor options, already whitelisted for this approximant.
+
+    Returns:
+        The constructed waveform, callable as ``wf(frequencies, params)``.
+
+    Raises:
+        RuntimeError: If the installed ripple rejects the arguments.
+    """
+    try:
+        return waveform_factory(approximant, f_ref=f_ref, **dict(options))
+    except TypeError as exc:
+        raise RuntimeError(
+            f"The installed ripplegw rejected the constructor arguments for {approximant} "
+            f"(f_ref plus {sorted(options) or 'no extra options'}): {exc}. This backend "
+            f"whitelists those options statically and the ripplegw dependency is intentionally "
+            f"unbounded above, so an option renamed or removed upstream surfaces here rather than "
+            f"as a bare TypeError inside ripple."
+        ) from exc
+
 
 #: Extra ripple *constructor* options this backend forwards, keyed by approximant.
 #: ripple options are constructor-time (``ripplegw.waveform(name, f_ref=..., **extras)``),
@@ -112,9 +199,9 @@ def _batched_polarization_kernel(
     f_ref: float,
     waveform_arguments: tuple[tuple[str, object], ...],
 ) -> Callable[..., tuple]:
-    """Return a cached, jitted, vmapped ripple evaluation for one preset configuration.
+    """Return a cached, jitted, vmapped ripple evaluation for one waveform configuration.
 
-    Keyed only on what builds the ripple preset. The frequency grid and its in-band mask are
+    Keyed only on what builds the ripple waveform. The frequency grid and its in-band mask are
     *arguments*, not part of the key: the caller already computes the grid and returns that
     same array to its own caller, so rebuilding it here would derive one quantity in two
     places -- and if the two ever diverged, the in-band mask would silently misalign with the
@@ -126,8 +213,8 @@ def _batched_polarization_kernel(
 
     Args:
         approximant: A supported ripple approximant name.
-        f_ref: Reference frequency handed to the ripple preset.
-        waveform_arguments: Resolved extra preset options, as sorted items so the key hashes.
+        f_ref: Reference frequency handed to the ripple waveform constructor.
+        waveform_arguments: Resolved extra constructor options, as sorted items so the key hashes.
 
     Returns:
         A callable over ``(frequencies, in_band, ripple_params)`` returning ``(plus, cross)``,
@@ -137,7 +224,19 @@ def _batched_polarization_kernel(
     import jax.numpy as jnp  # noqa: PLC0415
 
     ripplegw = importlib.import_module("ripplegw")
-    waveform = ripplegw.waveform(approximant, f_ref=f_ref, **dict(waveform_arguments))
+    # Checked here as well as in RippleBackend.__init__. This helper imports ripple itself, so it
+    # is reachable without a constructed backend -- private, and only called from
+    # generate_fd_polarizations_batch today, but the guard is what keeps an unbounded dependency
+    # legible and it should not depend on which door the caller came through. lru_cache means this
+    # runs once per configuration.
+    _require_ripple_interface(
+        {
+            "ripplegw": ripplegw,
+            "ripplegw.conversions": importlib.import_module("ripplegw.conversions"),
+            "ripplegw.constants": importlib.import_module("ripplegw.constants"),
+        }
+    )
+    waveform = _build_ripple_waveform(ripplegw.waveform, approximant, f_ref=f_ref, options=dict(waveform_arguments))
 
     def _one(frequencies: object, in_band: object, event: dict) -> tuple:
         polarizations = waveform(frequencies, event)
@@ -215,6 +314,13 @@ class RippleBackend(WaveformBackend):
             self._constants = importlib.import_module("ripplegw.constants")
         except ImportError as exc:
             raise ImportError(_RIPPLE_IMPORT_ERROR) from exc
+        _require_ripple_interface(
+            {
+                "ripplegw": self._ripplegw,
+                "ripplegw.conversions": self._conversions,
+                "ripplegw.constants": self._constants,
+            }
+        )
         # ripple needs double precision for waveform phase accuracy over long
         # inspirals. Importing ripplegw already enables this globally; set it
         # explicitly so correctness does not depend on import order.
@@ -329,7 +435,7 @@ class RippleBackend(WaveformBackend):
                 to 1-D arrays of equal length ``n_events`` (e.g. ``detector_frame_mass_1``,
                 ``spin_1z``, ``inclination``). Omitted optional parameters default to zero.
             waveform_arguments: Optional extra ripple constructor options applied to the
-                whole batch (the preset is built once). Same whitelist as the per-event
+                whole batch (the waveform is built once). Same whitelist as the per-event
                 path — e.g. ``{"no_taper": True}`` for the NRTidal variants. These are
                 constructor-level, not per-event, so they take scalars, not arrays.
 
@@ -614,7 +720,12 @@ class RippleBackend(WaveformBackend):
         if resolved.is_tidal:
             ripple_params["lambda_1"] = resolved.lambda_1
             ripple_params["lambda_2"] = resolved.lambda_2
-        waveform = self._ripplegw.waveform(approximant, f_ref=resolved.f_ref, **resolved.waveform_arguments)
+        waveform = _build_ripple_waveform(
+            self._ripplegw.waveform,
+            approximant,
+            f_ref=resolved.f_ref,
+            options=resolved.waveform_arguments,
+        )
         polarizations = waveform(freqs, ripple_params)
 
         # Zero out-of-band bins (including DC, where the amplitude diverges) and

@@ -30,11 +30,13 @@ dependencies = [
 pycbc = ["pycbc>=2.5.0"]
 sgwb = ["gwmock-noise>=0.9.0"]
 # Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
-# that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works. The upper
-# bound stays because ripple is pre-1.0 and its constructor options are whitelisted per
-# approximant in ripple.py -- ``test_waveform_arguments`` fails on a bump that renames one,
-# which is the point.
-jax = ["ripplegw>=0.3,<0.4"]
+# that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works.
+# Deliberately no upper bound, so a compatible newer ripple installs without a release here.
+# What replaces the bound: `_require_ripple_interface` checks the API surface when the backend
+# is constructed, so an incompatible version fails with a message naming the version and the
+# missing names; and the interface tests in tests/waveform/test_waveform_arguments.py fail in
+# the bump PR rather than at generation time.
+jax = ["ripplegw>=0.3"]
 
 [tool.dependency-support-policy]
 policy = "spec0"
