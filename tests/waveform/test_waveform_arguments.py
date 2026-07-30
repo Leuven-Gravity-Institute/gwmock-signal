@@ -412,7 +412,9 @@ def test_ripple_whitelisted_options_exist_in_constructors() -> None:
     import inspect
 
     for approximant, options in _ALLOWED_WAVEFORM_ARGUMENTS.items():
-        signature = inspect.signature(ripplegw.waveform_preset[approximant].__init__)
+        # The registry maps a name to the *class*; 0.3.0 replaced the ``waveform_preset``
+        # mapping with a ``waveform(name, **config)`` factory, so the class is reached this way.
+        signature = inspect.signature(ripplegw.WAVEFORM_REGISTRY[approximant].__init__)
         for option in options:
             assert option in signature.parameters, f"{approximant} preset no longer accepts {option!r}"
 
@@ -423,7 +425,7 @@ def test_ripple_reserved_use_lambda_tildes_still_exists() -> None:
     import inspect
 
     assert "use_lambda_tildes" in _RESERVED_WAVEFORM_ARGUMENTS
-    signature = inspect.signature(ripplegw.waveform_preset["IMRPhenomD_NRTidalv2"].__init__)
+    signature = inspect.signature(ripplegw.WAVEFORM_REGISTRY["IMRPhenomD_NRTidalv2"].__init__)
     assert "use_lambda_tildes" in signature.parameters
 
 
@@ -432,5 +434,53 @@ def test_ripple_no_taper_absent_from_non_nrtidal_constructor() -> None:
     ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
     import inspect
 
-    signature = inspect.signature(ripplegw.waveform_preset["IMRPhenomD"].__init__)
+    signature = inspect.signature(ripplegw.WAVEFORM_REGISTRY["IMRPhenomD"].__init__)
     assert "no_taper" not in signature.parameters
+
+
+def test_spin_and_tidal_classification_agrees_with_ripple_metadata() -> None:
+    """This backend's model groupings must match the metadata ripple publishes.
+
+    ``_ALIGNED_SPIN_MODELS`` / ``_TIDAL_MODELS`` / ``_PRECESSING_MODELS`` encode which spin and
+    tidal parameters each approximant takes. Since 0.3 ripple publishes the same facts through
+    ``get_waveform_metadata``, so the classification now exists in two places and can drift --
+    and a drift would route parameters to the wrong model silently, not loudly. Rather than
+    delete the local tuples (they also fix the *order* of the public approximant list and gate
+    validation messages), this pins the two against each other so a version bump that
+    reclassifies a model fails here.
+    """
+    ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+
+    from gwmock_signal.waveform.backends.ripple import (
+        _ALIGNED_SPIN_MODELS,
+        _PRECESSING_MODELS,
+        _TIDAL_MODELS,
+    )
+
+    for approximant in _ALIGNED_SPIN_MODELS:
+        metadata = ripplegw.get_waveform_metadata(approximant)
+        assert not metadata["is_tidal"], f"{approximant} is tidal per ripple but listed as aligned-spin"
+        assert not metadata["is_precessing"], f"{approximant} is precessing per ripple but listed as aligned-spin"
+    for approximant in _TIDAL_MODELS:
+        assert ripplegw.get_waveform_metadata(approximant)["is_tidal"], (
+            f"{approximant} is listed as tidal but ripple says it is not"
+        )
+    for approximant in _PRECESSING_MODELS:
+        assert ripplegw.get_waveform_metadata(approximant)["is_precessing"], (
+            f"{approximant} is listed as precessing but ripple says it is not"
+        )
+
+
+def test_every_supported_approximant_is_registered_with_ripple() -> None:
+    """No approximant this backend advertises may be missing from ripple's registry.
+
+    ``available_approximants`` is a promise; an unregistered name would only fail at generation
+    time, after a catalogue has been configured around it.
+    """
+    ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+
+    from gwmock_signal.waveform.backends.ripple import _SUPPORTED_APPROXIMANTS
+
+    registered = set(ripplegw.list_waveforms())
+    missing = sorted(set(_SUPPORTED_APPROXIMANTS) - registered)
+    assert not missing, f"advertised but not registered with ripple: {missing}"

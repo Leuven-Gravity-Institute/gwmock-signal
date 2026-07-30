@@ -29,12 +29,12 @@ dependencies = [
 [project.optional-dependencies]
 pycbc = ["pycbc>=2.5.0"]
 sgwb = ["gwmock-noise>=0.9.0"]
-# Upper bound is required, not cautionary: ripplegw 0.3.0 removed the
-# ``waveform_preset[name](...)`` mapping this backend calls (ripple.py) in favour of a
-# ``waveform(name, **config)`` factory over a registry. Without the bound, a fresh resolve of
-# this extra installs 0.3.0 and every ripple waveform raises AttributeError at generation time.
-# Lift it together with the port to the new API.
-jax = ["ripplegw>=0.2.1,<0.3"]
+# Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
+# that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works. The upper
+# bound stays because ripple is pre-1.0 and its constructor options are whitelisted per
+# approximant in ripple.py -- ``test_waveform_arguments`` fails on a bump that renames one,
+# which is the point.
+jax = ["ripplegw>=0.3,<0.4"]
 
 [tool.dependency-support-policy]
 policy = "spec0"

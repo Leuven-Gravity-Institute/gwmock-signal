@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
 
 #: Extra ripple *constructor* options this backend forwards, keyed by approximant.
-#: ripple options are constructor-time (``waveform_preset[name](f_ref=..., **extras)``),
+#: ripple options are constructor-time (``ripplegw.waveform(name, f_ref=..., **extras)``),
 #: not call-time. ripple is pre-1.0, so this whitelist is deliberately narrow and is
 #: hardened by ``test_waveform_arguments`` against ripple's real constructor signatures,
 #: which will trip CI on a version bump that adds, renames, or removes an option.
@@ -137,7 +137,7 @@ def _batched_polarization_kernel(
     import jax.numpy as jnp  # noqa: PLC0415
 
     ripplegw = importlib.import_module("ripplegw")
-    waveform = ripplegw.waveform_preset[approximant](f_ref=f_ref, **dict(waveform_arguments))
+    waveform = ripplegw.waveform(approximant, f_ref=f_ref, **dict(waveform_arguments))
 
     def _one(frequencies: object, in_band: object, event: dict) -> tuple:
         polarizations = waveform(frequencies, event)
@@ -614,7 +614,7 @@ class RippleBackend(WaveformBackend):
         if resolved.is_tidal:
             ripple_params["lambda_1"] = resolved.lambda_1
             ripple_params["lambda_2"] = resolved.lambda_2
-        waveform = self._ripplegw.waveform_preset[approximant](f_ref=resolved.f_ref, **resolved.waveform_arguments)
+        waveform = self._ripplegw.waveform(approximant, f_ref=resolved.f_ref, **resolved.waveform_arguments)
         polarizations = waveform(freqs, ripple_params)
 
         # Zero out-of-band bins (including DC, where the amplitude diverges) and
