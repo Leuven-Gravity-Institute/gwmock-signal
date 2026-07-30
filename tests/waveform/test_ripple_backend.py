@@ -412,7 +412,8 @@ def test_generate_fd_polarizations_grid_and_masking() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     import jax
 
-    fd = RippleBackend().generate_fd_polarizations(
+    backend = RippleBackend()
+    fd = backend.generate_fd_polarizations(
         "IMRPhenomD", sampling_frequency=_FS, minimum_frequency=_F_MIN, **_BBH_PARAMS
     )
     assert fd.sampling_frequency == _FS
@@ -423,9 +424,13 @@ def test_generate_fd_polarizations_grid_and_masking() -> None:
     freqs = np.asarray(fd.frequencies)
     assert freqs[0] == 0.0
     assert np.allclose(np.diff(freqs), _FS / fd.n_samples)
-    # Out-of-band bins (including DC) are zeroed and the result is finite.
-    assert np.all(np.asarray(fd.plus)[freqs < _F_MIN] == 0.0)
-    assert np.all(np.isfinite(np.asarray(fd.plus)))
+    # Below the taper's lower edge (including DC) the bins are zeroed, and the result is finite.
+    # Between that edge and _F_MIN the amplitude is attenuated rather than absent: the cutoff is a
+    # raised-cosine ramp, because a rectangular one rang across the whole buffer. See
+    # tests/waveform/test_cutoff_taper.py.
+    plus = np.asarray(fd.plus)
+    assert np.all(plus[freqs < backend.signal_start_frequency(_F_MIN)] == 0.0)
+    assert np.all(np.isfinite(plus))
 
 
 def test_generate_fd_polarizations_conditions_to_td_waveform() -> None:
