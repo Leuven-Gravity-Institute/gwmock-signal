@@ -24,18 +24,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import lal
 import numpy as np
 from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
 
-if TYPE_CHECKING:
-    from gwmock_signal.detector import CustomDetector
+from gwmock_signal.detector import CustomDetector
 
 #: How a caller names a detector: a built-in LAL interferometer code, or an explicit geometry.
 #: Defined here rather than in either projection module, so both paths mean the same thing by it.
+#: ``CustomDetector`` is imported at runtime, not under ``TYPE_CHECKING``: a PEP 695 alias is
+#: lazily evaluated, so a type-only import leaves ``DetectorSpec.__value__`` raising NameError for
+#: anything that introspects it. ``gwmock_signal.detector`` imports only stdlib and lal, and the
+#: package ``__init__`` resolves submodules lazily, so there is no cycle in either direction.
 type DetectorSpec = str | CustomDetector
 
 
@@ -64,8 +67,6 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
         ValueError: If a string is not a detector LAL knows about, or if two entries resolve to
             the same LAL detector.
     """
-    from gwmock_signal.detector import CustomDetector  # noqa: PLC0415 — avoids an import cycle
-
     resolved: list[tuple[str, str]] = []
     for raw in detector_specs:
         if isinstance(raw, str):

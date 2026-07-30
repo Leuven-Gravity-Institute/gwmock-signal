@@ -93,3 +93,22 @@ def test_duplicate_lookup_keys_are_rejected_by_the_resolver() -> None:
     prefix = detector.to_lal().frDetector.prefix
     with pytest.raises(ValueError, match="resolve to the same LAL detector"):
         resolve_detectors([detector, prefix])
+
+
+def test_detector_spec_alias_is_resolvable() -> None:
+    """The `DetectorSpec` alias must resolve, not merely exist.
+
+    Two earlier versions of this alias were wrong in opposite ways. It was first written as the
+    plain string ``"str | CustomDetector"``, which is a value rather than an alias and is inert to
+    type checkers. Replacing it with a PEP 695 ``type`` statement fixed that, but PEP 695 aliases
+    are *lazily* evaluated, so with ``CustomDetector`` imported only under ``TYPE_CHECKING`` the
+    alias existed while ``__value__`` raised ``NameError`` for anything introspecting it -- a
+    documentation generator, or a runtime validator.
+
+    Neither mistake breaks an import or a test, which is why this asserts on the resolved value.
+    """
+    from gwmock_signal.projection.geometry import DetectorSpec
+
+    resolved = DetectorSpec.__value__
+    assert CustomDetector in resolved.__args__
+    assert str in resolved.__args__
