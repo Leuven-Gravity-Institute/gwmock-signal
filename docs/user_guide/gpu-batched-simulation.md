@@ -18,8 +18,16 @@ remains the default; this page covers the batched device path.
 !!! note "Requires the JAX extra"
 
     Install with **`pip install 'gwmock-signal[jax]'`** (see
-    [Installation](installation.md)). The batched API lives in
-    `gwmock_signal.jax_batch`.
+    [Installation](installation.md)).
+
+    The batched entry points are re-exported from the package root, so prefer
+    `from gwmock_signal import simulate_cbc_catalogue` over the
+    `gwmock_signal.jax_batch` submodule path. Both work; the root import is the
+    advertised one and does not tie you to the module layout.
+
+    Import resolution is lazy, so `import gwmock_signal` succeeds without the
+    extra installed. Generating a waveform without it raises an `ImportError`
+    naming the install command.
 
 !!! tip "See also"
 
@@ -46,7 +54,7 @@ A catalogue mixes two notions of "duration" that this API keeps separate:
 
 ```python
 import numpy as np
-from gwmock_signal.jax_batch import simulate_cbc_catalogue
+from gwmock_signal import simulate_cbc_catalogue
 
 # Canonical gwmock-pop parameter names as a struct-of-arrays (one entry per event).
 catalogue = {
@@ -98,11 +106,14 @@ to each segment it spans. Segments are **zero-noise by default**; pass
 coloured noise from `gwmock-noise`.
 
 ```python
-from gwmock_signal.jax_batch import simulate_cbc_batch, assemble_segments
+from gwmock_signal import assemble_segments, simulate_cbc_batch
 
 batch = simulate_cbc_batch(
-    "IMRPhenomD", ["H1", "L1"],
-    sampling_frequency=4096.0, minimum_frequency=20.0, parameters=catalogue,
+    "IMRPhenomD",
+    ["H1", "L1"],
+    sampling_frequency=4096.0,
+    minimum_frequency=20.0,
+    parameters=catalogue,
 )
 segments = assemble_segments(
     batch,

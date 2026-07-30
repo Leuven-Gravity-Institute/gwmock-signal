@@ -24,7 +24,7 @@ _DEVICE_SYMBOLS = (
     "BatchedDetectorStrain",
     "SamplingGrid",
     "assemble_segments",
-    "recommend_chunk_size",
+    "RippleBackend",
     "simulate_cbc_batch",
     "simulate_cbc_catalogue",
 )
@@ -49,11 +49,16 @@ def test_the_exported_object_is_the_submodule_object(name: str) -> None:
 
     A re-implementation behind the public name would drift from the one the tests exercise.
     """
-    pytest.importorskip("jax", reason="jax not installed")
+    # No importorskip: importing ``jax_batch`` does not import JAX, so this runs in a base
+    # installation too -- which is the mode the lazy table exists to support, and where an earlier
+    # version of this test was silently skipped and therefore vacuous.
     import importlib
 
-    module_name = "gwmock_signal.sampling_grid" if name == "SamplingGrid" else "gwmock_signal.jax_batch"
-    assert getattr(gwmock_signal, name) is getattr(importlib.import_module(module_name), name)
+    module = {
+        "SamplingGrid": "gwmock_signal.sampling_grid",
+        "RippleBackend": "gwmock_signal.waveform.backends",
+    }.get(name, "gwmock_signal.jax_batch")
+    assert getattr(gwmock_signal, name) is getattr(importlib.import_module(module), name)
 
 
 def test_importing_the_package_does_not_import_jax() -> None:
@@ -96,3 +101,42 @@ def test_an_unknown_symbol_still_raises_attribute_error() -> None:
     """The lazy ``__getattr__`` must not turn a typo into something other than AttributeError."""
     with pytest.raises(AttributeError):
         gwmock_signal.simulate_cbc_catalog  # noqa: B018 - the access is the assertion
+
+
+def test_recommend_chunk_size_is_deliberately_not_root_api() -> None:
+    """The memory heuristic stays out of the package root, but remains reachable.
+
+    Its model is calibrated from a single A100 measurement and exists to turn an opaque allocation
+    failure into an actionable one, so it is not a promise worth making at the root. Pinned in both
+    directions so neither the omission nor the availability is lost by accident.
+    """
+    assert "recommend_chunk_size" not in gwmock_signal.__all__
+    from gwmock_signal.jax_batch import recommend_chunk_size
+
+    assert callable(recommend_chunk_size)
+
+
+def test_the_missing_extra_failure_names_the_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without the ``[jax]`` extra, *using* the device path must say how to fix it.
+
+    This is the likely first experience of the feature for anyone on a base install, and it was the
+    one path the review could not execute -- resolving an exported name stays lazy and succeeds, so
+    the failure only appears on use. Simulated by making the ripple import fail rather than by
+    uninstalling anything.
+    """
+    import importlib
+
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    real_import = importlib.import_module
+
+    def _fail_for_ripple(name: str, *args: object, **kwargs: object) -> object:
+        if name.startswith("ripplegw") or name == "jax":
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", _fail_for_ripple)
+    with pytest.raises(ImportError) as raised:
+        RippleBackend()
+    message = str(raised.value)
+    assert "gwmock-signal[jax]" in message, f"the error does not name the install command: {message}"

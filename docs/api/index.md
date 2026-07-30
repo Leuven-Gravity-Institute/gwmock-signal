@@ -61,6 +61,11 @@ tree (`src/gwmock_signal/`).
 `gwmock_signal.__init__`. Prefer these imports in application code; submodule
 paths are stable but longer.
 
+Resolution is lazy, so importing the package does not import JAX. Only touching
+one of the **On device** symbols loads
+[`gwmock_signal.jax_batch`](../user_guide/gpu-batched-simulation.md), and those
+require the `[jax]` extra to _run_.
+
 | Symbol                          | Category     | Reference                         |
 | ------------------------------- | ------------ | --------------------------------- |
 | `CBCSimulator`                  | Simulator    | [Simulator API](simulator/)       |
@@ -73,6 +78,12 @@ paths are stable but longer.
 | `CustomDetector`                | Detector     | [Network API](network/)           |
 | `WaveformBackend`               | Waveform     | [Waveform API](waveform/)         |
 | `LALSimulationBackend`          | Waveform     | [Waveform API](waveform/)         |
+| `RippleBackend`                 | Waveform     | [Waveform API](waveform/)         |
+| `simulate_cbc_catalogue`        | On device    | [Waveform API](waveform/)         |
+| `simulate_cbc_batch`            | On device    | [Waveform API](waveform/)         |
+| `assemble_segments`             | On device    | [Waveform API](waveform/)         |
+| `BatchedDetectorStrain`         | On device    | [Waveform API](waveform/)         |
+| `SamplingGrid`                  | On device    | [Waveform API](waveform/)         |
 | `resolve_simulator_backend`     | Registry     | [Registry API](registry/)         |
 | `register_simulator_backend`    | Registry     | [Registry API](registry/)         |
 | `list_registered_source_types`  | Registry     | [Registry API](registry/)         |
