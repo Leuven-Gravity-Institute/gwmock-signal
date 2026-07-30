@@ -22,6 +22,7 @@ pytest.importorskip("ripplegw", reason="ripple not installed")
 from gwmock_signal.waveform.backends.ripple import (
     _INSPIRAL_SAFETY_FRACTION,
     RippleBackend,
+    _inspiral_margin,
     _inspiral_seconds,
 )
 
@@ -57,40 +58,55 @@ def test_the_1pn_estimate_always_exceeds_the_newtonian_one() -> None:
     for mass1, mass2, f_min in _CASES:
         chirp_mass, eta = _chirp_mass_and_eta(mass1, mass2)
         newtonian = _newtonian_seconds(chirp_mass, f_min, mtsun)
-        corrected = float(_inspiral_seconds(chirp_mass, eta, f_min, mtsun))
+        corrected = float(_inspiral_seconds(chirp_mass, eta, f_min, mtsun)[0])
         assert corrected > newtonian, f"{mass1}+{mass2} at {f_min} Hz: 1PN estimate is not longer"
 
 
 def test_duration_depends_on_mass_ratio_at_fixed_chirp_mass() -> None:
     """At fixed chirp mass, a more asymmetric binary lasts longer.
 
-    This is why the batch path cannot size its grid from the lightest chirp mass alone. The total
-    mass is ``Mc * eta^(-3/5)``, so lowering eta raises the 1PN term.
+    The total mass is ``Mc * eta^(-3/5)``, so lowering eta raises the 1PN term. This is why the
+    duration estimate needs the mass ratio; whether it can also reorder two events is a separate and
+    narrower question, covered below.
     """
     backend = RippleBackend()
     mtsun = float(backend._constants.MTSUN)
-    equal = float(_inspiral_seconds(3.0, 0.25, 10.0, mtsun))
-    asymmetric = float(_inspiral_seconds(3.0, 0.10, 10.0, mtsun))
+    equal = float(_inspiral_seconds(3.0, 0.25, 10.0, mtsun)[0])
+    asymmetric = float(_inspiral_seconds(3.0, 0.10, 10.0, mtsun)[0])
     assert asymmetric > equal, "the asymmetric binary is not longer at equal chirp mass"
 
 
 def test_a_heavier_but_more_asymmetric_binary_can_be_the_longest() -> None:
-    """The lightest chirp mass in a batch is not necessarily the longest inspiral.
+    """The lightest chirp mass in a batch is not always the longest inspiral.
 
-    ``_segment_samples`` therefore takes every event and uses the maximum. If it instead reduced to
-    the lightest chirp mass, this batch would be sized for the wrong event.
+    ``tau0 ~ Mc^(-5/3)`` dominates, so the lightest event usually *is* the longest and the window
+    where this fails is narrow: at 20 Hz a heavier event overtakes a lighter equal-mass one only
+    within about 3.5% in chirp mass. It is not exotic, though -- a 1:8 mass ratio flips it at +0.5%,
+    which is an ordinary NSBH. Taking the maximum over every event is exact and costs nothing, so
+    there is no reason to reason about a proxy at all.
     """
     backend = RippleBackend()
-    light_equal = _chirp_mass_and_eta(2.0, 2.0)
-    heavy_asymmetric = _chirp_mass_and_eta(20.0, 1.2)
-    chirp_masses = np.array([light_equal[0], heavy_asymmetric[0]])
-    etas = np.array([light_equal[1], heavy_asymmetric[1]])
+    mtsun = float(backend._constants.MTSUN)
+    f_min = 20.0
+    # Verified to straddle the crossover: nearly equal chirp masses, ordinary versus 1:8 mass ratio.
+    lighter = (2.18, 0.25)
+    heavier = (2.18 * 1.005, 0.10)
 
-    both = backend._segment_samples(chirp_masses, 10.0, _FS, eta=etas)
-    lightest_only = backend._segment_samples(
-        np.array([chirp_masses.min()]), 10.0, _FS, eta=np.array([etas[np.argmin(chirp_masses)]])
+    lighter_seconds = float(_inspiral_seconds(*lighter, f_min, mtsun)[0])
+    heavier_seconds = float(_inspiral_seconds(*heavier, f_min, mtsun)[0])
+    assert heavier[0] > lighter[0], "test premise broken: the second event is not the heavier one"
+    assert heavier_seconds > lighter_seconds, (
+        "test premise broken: the heavier binary is not the longer one, so this cannot distinguish "
+        "a maximum over durations from a reduction to the lightest chirp mass"
     )
-    assert both >= lightest_only
+
+    # An earlier version asserted only `both >= lightest_only`, which any implementation taking a
+    # maximum satisfies -- including one maximising over the wrong quantity. The batch must be sized
+    # for the *heavier* event specifically.
+    both = backend._segment_samples(
+        np.array([lighter[0], heavier[0]]), f_min, _FS, eta=np.array([lighter[1], heavier[1]])
+    )
+    assert both == backend._segment_samples(heavier[0], f_min, _FS, eta=heavier[1])
 
 
 @pytest.mark.parametrize(("mass1", "mass2", "f_min"), _CASES)
@@ -104,14 +120,17 @@ def test_every_buffer_holds_its_inspiral_with_the_stated_margin(mass1: float, ma
     backend = RippleBackend()
     mtsun = float(backend._constants.MTSUN)
     chirp_mass, eta = _chirp_mass_and_eta(mass1, mass2)
-    inspiral = float(_inspiral_seconds(chirp_mass, eta, f_min, mtsun))
+    inspiral, relative_correction = _inspiral_seconds(chirp_mass, eta, f_min, mtsun)
+    inspiral = float(inspiral)
 
     n_samples = backend._segment_samples(chirp_mass, f_min, _FS, eta=eta)
     room = (1.0 - backend._ringdown_fraction) * n_samples / _FS
     margin = room / inspiral - 1.0
-    assert margin >= _INSPIRAL_SAFETY_FRACTION, (
+    promised = _inspiral_margin(relative_correction)
+    assert margin >= promised, (
         f"{mass1}+{mass2} at {f_min} Hz has {margin:.1%} of room over a {inspiral:.1f} s inspiral, "
-        f"below the {_INSPIRAL_SAFETY_FRACTION:.0%} the sizing promises"
+        f"below the {promised:.1%} the sizing promises for a 1PN term of "
+        f"{float(np.max(relative_correction)):.1%}"
     )
 
 
@@ -161,3 +180,70 @@ def test_the_nsbh_case_no_longer_wraps_its_inspiral() -> None:
         f"{reference_level:.2e} for a 4x longer buffer, a ratio of {level / reference_level:.1f}; "
         f"the inspiral is still wrapping"
     )
+
+
+def test_the_margin_grows_with_the_1pn_term_when_the_series_stops_converging() -> None:
+    """Where the 1PN term is large the margin must grow with it, not stay at the 10% floor.
+
+    A fixed fraction is only defensible while the PN series converges, and nothing restricts callers
+    to that regime: a 60+3 binary at 512 Hz is accepted, and its expansion parameter is ~0.79, where
+    the omitted terms are the same order as the one retained. The margin is therefore the larger of
+    the floor and the 1PN term itself.
+    """
+    backend = RippleBackend()
+    mtsun = float(backend._constants.MTSUN)
+    chirp_mass, eta = _chirp_mass_and_eta(60.0, 3.0)
+
+    _, gentle = _inspiral_seconds(chirp_mass, eta, 10.0, mtsun)
+    _, severe = _inspiral_seconds(chirp_mass, eta, 512.0, mtsun)
+    assert float(severe) > float(gentle), "test premise broken: the higher cutoff is not the harder case"
+
+    assert _inspiral_margin(gentle) >= _INSPIRAL_SAFETY_FRACTION
+    assert _inspiral_margin(severe) >= float(severe), (
+        "where the 1PN term is large the margin must be at least as large as it, since the omitted "
+        "terms are then the same order"
+    )
+
+
+@pytest.mark.parametrize(
+    ("chirp_mass", "eta"),
+    [
+        (1.2, 0.0),  # eta must be positive
+        (1.2, -0.1),
+        (1.2, 0.3),  # 0.25 is the equal-mass maximum
+        (1.2, float("nan")),
+        (0.0, 0.25),  # chirp mass must be positive
+        (-1.0, 0.25),
+        (float("inf"), 0.25),
+    ],
+)
+def test_unphysical_inputs_are_rejected(chirp_mass: float, eta: float) -> None:
+    """Bad masses or ratios must raise, not produce a plausible-looking duration.
+
+    Without this an ``eta`` above the equal-mass maximum, or a non-finite mass, yields a number that
+    sizes a buffer -- and the resulting grid would be silently wrong rather than absent.
+    """
+    backend = RippleBackend()
+    with pytest.raises(ValueError, match="must be"):
+        _inspiral_seconds(chirp_mass, eta, 10.0, float(backend._constants.MTSUN))
+
+
+@pytest.mark.parametrize("minimum_frequency", [0.0, -10.0, float("nan"), float("inf")])
+def test_an_invalid_cutoff_frequency_is_rejected(minimum_frequency: float) -> None:
+    """A non-positive or non-finite cutoff cannot define a chirp time."""
+    backend = RippleBackend()
+    with pytest.raises(ValueError, match="minimum_frequency"):
+        _inspiral_seconds(1.2, 0.25, minimum_frequency, float(backend._constants.MTSUN))
+
+
+def test_the_mass_ratio_must_be_supplied() -> None:
+    """``eta`` is required, so no caller can silently take an equal-mass underestimate.
+
+    An equal-mass default reads as harmless but underestimates the duration for every asymmetric
+    binary, which is precisely the direction that wraps an inspiral around the buffer.
+    """
+    backend = RippleBackend()
+    with pytest.raises(TypeError):
+        backend._segment_samples(1.2, 10.0, _FS)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        backend.segment_duration_for(1.2, 10.0, _FS)  # type: ignore[call-arg]
