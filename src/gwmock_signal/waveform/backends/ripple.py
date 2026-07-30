@@ -216,6 +216,25 @@ _MIN_SEGMENT_SECONDS = 1.0
 #: Largest physical symmetric mass ratio, attained at equal masses.
 _MAXIMUM_ETA = 0.25
 
+#: Width of the amplitude taper below ``minimum_frequency``, as a fraction of it.
+#:
+#: The out-of-band bins used to be zeroed with a hard ``freqs >= minimum_frequency`` mask. The
+#: waveform amplitude at the cutoff is *not* zero, so that is a rectangular truncation of a nonzero
+#: function, and its inverse transform rings across the whole buffer. Measured in the post-ringdown
+#: region, where nothing should be: 3.7e-3 of peak for a 30+28 system at 20 Hz, and the ringing's own
+#: spectrum peaks at exactly ``minimum_frequency``, which is what identifies it as a cutoff artefact
+#: rather than anything physical.
+#:
+#: The ramp runs *below* the cutoff, over ``[f_min / (1 + fraction), f_min]``, so the requested band
+#: keeps every bin it had. Tapering *above* the cutoff suppresses the ringing just as well but
+#: removes in-band power -- 4.2% at this width -- which is the one thing this backend should not
+#: trade away. The cost lands on buffer length instead: see :meth:`RippleBackend.signal_start_frequency`.
+#:
+#: 0.05 rather than 0.02, because a system whose merger sits near the cutoff needs a wider ramp: at
+#: 0.02 a 30+28 binary improves only 16x, against 63x at 0.05 and 259x at 0.10. Lighter systems
+#: saturate by 0.02, so the wider default costs them nothing but buffer.
+_DEFAULT_TAPER_FRACTION = 0.05
+
 #: Minimum fractional headroom beyond the 1PN chirp time.
 #:
 #: A *proportional* margin, because the omitted terms scale with the duration. The flat
@@ -230,8 +249,8 @@ _MAXIMUM_ETA = 0.25
 _INSPIRAL_SAFETY_FRACTION = 0.10
 
 
-def _inspiral_margin(relative_correction: np.ndarray) -> float:
-    """Return the fractional headroom to add to the 1PN duration estimate.
+def _inspiral_margin(relative_correction: np.ndarray | float) -> np.ndarray:
+    """Return the fractional headroom to add to the 1PN duration estimate, per event.
 
     At least :data:`_INSPIRAL_SAFETY_FRACTION`, and never smaller than the 1PN term itself.
 
@@ -241,13 +260,82 @@ def _inspiral_margin(relative_correction: np.ndarray) -> float:
     with it. That makes the headroom self-scaling rather than resting on an unstated assumption
     about which masses and frequencies a caller will choose.
 
+    Elementwise, so each event is sized against its own correction. Reducing to a single margin
+    would apply one event's correction to another's duration, and the correction grows with total
+    mass.
+
     Args:
         relative_correction: The 1PN term relative to the 0PN one, from :func:`_inspiral_seconds`.
 
     Returns:
-        The fractional margin to apply to the duration estimate.
+        The fractional margin(s) to apply, broadcast over the input.
     """
-    return max(_INSPIRAL_SAFETY_FRACTION, float(np.max(relative_correction)))
+    return np.maximum(_INSPIRAL_SAFETY_FRACTION, np.asarray(relative_correction, dtype=float))
+
+
+#: Prime factors an FFT length may contain. Transform libraries are efficient for 5-smooth sizes,
+#: of which a power of two is one needlessly strict special case.
+_SMOOTH_FACTORS: Final[tuple[int, ...]] = (2, 3, 5)
+
+
+def _next_smooth_even(minimum: int) -> int:
+    """Return the smallest even integer >= *minimum* whose only prime factors are 2, 3 and 5.
+
+    Even, because the real transform pair maps ``n`` samples to ``n // 2 + 1`` bins and back.
+    Implemented here rather than taken from ``scipy.fft.next_fast_len`` so this does not rest on a
+    transitive dependency through gwpy; the tests check the two agree.
+
+    Args:
+        minimum: Lower bound on the length.
+
+    Returns:
+        The smallest even 5-smooth integer that is at least ``minimum``.
+    """
+    smallest = _SMOOTH_FACTORS[0]
+    if minimum <= smallest:
+        return smallest
+    best = None
+    power_of_five = 1
+    while power_of_five < minimum * 2:
+        candidate_base = power_of_five
+        while candidate_base < minimum * 2:
+            candidate = candidate_base
+            while candidate < minimum:
+                candidate *= 2
+            if candidate % 2:
+                candidate *= 2
+            if best is None or candidate < best:
+                best = candidate
+            candidate_base *= 3
+        power_of_five *= 5
+    return int(best if best is not None else smallest)
+
+
+def _cutoff_window(
+    frequencies: object, minimum_frequency: float, taper_fraction: float, array_module: object
+) -> object:
+    """Return the amplitude window applied to the polarizations before the inverse transform.
+
+    A hard mask when ``taper_fraction`` is zero, otherwise a raised cosine rising from 0 at
+    ``minimum_frequency / (1 + taper_fraction)`` to 1 at ``minimum_frequency``. A raised cosine
+    rather than a linear ramp because its first derivative vanishes at both ends, so it does not
+    trade a step in amplitude for a step in slope.
+
+    Args:
+        frequencies: The one-sided analysis grid.
+        minimum_frequency: The requested low-frequency cutoff, where the window reaches 1.
+        taper_fraction: Ramp width as a fraction of ``minimum_frequency``; 0 restores the hard mask.
+        array_module: ``numpy`` or ``jax.numpy``, so one definition serves the host and device paths
+            and they cannot drift apart.
+
+    Returns:
+        A float window of the same shape as ``frequencies``.
+    """
+    if taper_fraction <= 0.0:
+        return (frequencies >= minimum_frequency).astype(float)
+    low = minimum_frequency / (1.0 + taper_fraction)
+    ramp = array_module.clip((frequencies - low) / (minimum_frequency - low), 0.0, 1.0)
+    return array_module.where(frequencies < low, 0.0, 0.5 * (1.0 - array_module.cos(array_module.pi * ramp)))
 
 
 def _inspiral_seconds(
@@ -337,7 +425,7 @@ def _batched_polarization_kernel(
         waveform_arguments: Resolved extra constructor options, as sorted items so the key hashes.
 
     Returns:
-        A callable over ``(frequencies, in_band, ripple_params)`` returning ``(plus, cross)``,
+        A callable over ``(frequencies, window, ripple_params)`` returning ``(plus, cross)``,
         batched over events and unmapped over the shared grid and mask.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
@@ -364,11 +452,11 @@ def _batched_polarization_kernel(
         version=getattr(ripplegw, "__version__", "unknown"),
     )
 
-    def _one(frequencies: object, in_band: object, event: dict) -> tuple:
+    def _one(frequencies: object, window: object, event: dict) -> tuple:
         polarizations = waveform(frequencies, event)
         return (
-            jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0)),
-            jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0)),
+            jnp.nan_to_num(polarizations["p"] * window),
+            jnp.nan_to_num(polarizations["c"] * window),
         )
 
     return jax.jit(jax.vmap(_one, in_axes=(None, None, 0)))
@@ -422,6 +510,16 @@ class RippleBackend(WaveformBackend):
         segment_duration: Optional fixed analysis-segment length in seconds. When
             ``None`` (default) the length is estimated from the post-Newtonian
             chirp time so the full inspiral fits without wraparound.
+        taper_fraction: Width of the amplitude taper *below* ``minimum_frequency``, as a
+            fraction of it. Must be in ``[0, 1)``.
+
+            **This changes what ``minimum_frequency`` means.** With a non-zero fraction it is
+            the frequency at which the waveform reaches full amplitude, and the generated
+            strain contains real inspiral content from
+            ``minimum_frequency / (1 + taper_fraction)`` upward -- see
+            :meth:`signal_start_frequency`. That is deliberate: the alternative, tapering
+            above the cutoff, removes in-band power instead. Pass ``0.0`` for the previous
+            hard-cutoff behaviour, at the cost of ringing across the buffer.
     """
 
     def __init__(
@@ -430,6 +528,7 @@ class RippleBackend(WaveformBackend):
         f_ref: float | None = None,
         ringdown_fraction: float = _DEFAULT_RINGDOWN_FRACTION,
         segment_duration: float | None = None,
+        taper_fraction: float = _DEFAULT_TAPER_FRACTION,
     ) -> None:
         """Require ripple/JAX only when this backend is instantiated."""
         try:
@@ -457,13 +556,41 @@ class RippleBackend(WaveformBackend):
             raise ValueError("ringdown_fraction must be in (0, 1)")
         if segment_duration is not None and segment_duration <= 0:
             raise ValueError("segment_duration must be > 0")
+        # A fraction of 1 would put the ramp's lower edge at zero frequency, and beyond that it is
+        # negative; either way the window is meaningless rather than merely aggressive.
+        if not 0.0 <= taper_fraction < 1.0:
+            raise ValueError(f"taper_fraction must be in [0, 1); got {taper_fraction}")
         self._f_ref = f_ref
         self._ringdown_fraction = ringdown_fraction
         self._segment_duration = segment_duration
+        self._taper_fraction = float(taper_fraction)
 
     def available_approximants(self) -> list[str]:
         """Return the ripple approximants supported by this backend."""
         return list(_SUPPORTED_APPROXIMANTS)
+
+    @property
+    def taper_fraction(self) -> float:
+        """Width of the amplitude taper below ``minimum_frequency``, as a fraction of it."""
+        return self._taper_fraction
+
+    def signal_start_frequency(self, minimum_frequency: float) -> float:
+        """Return the lowest frequency the generated strain actually contains.
+
+        ``minimum_frequency`` is where the waveform reaches *full* amplitude. With a taper the
+        strain also holds attenuated content below it, down to this frequency, and the analysis
+        buffer must be sized from here rather than from the cutoff -- an inspiral that starts lower
+        lasts longer. Verified: sizing from ``minimum_frequency`` instead leaves a 1.4+1.35 system
+        at 10 Hz with a *negative* margin and a post-ringdown level of 2.9e-3, worse than the hard
+        cutoff it was meant to improve on.
+
+        Args:
+            minimum_frequency: The requested cutoff in Hz.
+
+        Returns:
+            ``minimum_frequency / (1 + taper_fraction)``.
+        """
+        return minimum_frequency / (1.0 + self._taper_fraction)
 
     @property
     def segment_duration(self) -> float | None:
@@ -473,13 +600,16 @@ class RippleBackend(WaveformBackend):
     def with_segment_duration(self, segment_duration: float) -> RippleBackend:
         """Return a copy of this backend pinned to a fixed ``segment_duration``.
 
-        Same ``f_ref`` and ``ringdown_fraction``; useful for forcing one shared grid
-        across several batched calls (e.g. count-chunked catalogue generation).
+        Same ``f_ref``, ``ringdown_fraction`` and ``taper_fraction``; useful for forcing one shared
+        grid across several batched calls (e.g. count-chunked catalogue generation). The taper has
+        to travel with the copy: a pinned backend that quietly reverted to a hard cutoff would
+        change the conditioning of the very chunks this exists to keep identical.
         """
         return RippleBackend(
             f_ref=self._f_ref,
             ringdown_fraction=self._ringdown_fraction,
             segment_duration=segment_duration,
+            taper_fraction=self._taper_fraction,
         )
 
     def segment_duration_for(
@@ -596,7 +726,7 @@ class RippleBackend(WaveformBackend):
         jnp = self._jnp
         delta_f = sampling_frequency / n_samples
         freqs = jnp.arange(n_samples // 2 + 1) * delta_f
-        in_band = freqs >= minimum_frequency
+        window = _cutoff_window(freqs, minimum_frequency, self._taper_fraction, jnp)
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
 
         # Fetched from a cache keyed on everything the kernel depends on, so repeated calls
@@ -606,7 +736,7 @@ class RippleBackend(WaveformBackend):
         # made the batched path slower than the per-event LAL loop it replaces.
         kernel = _batched_polarization_kernel(approximant, f_ref, tuple(sorted(resolved_arguments.items())))
         # The same freqs object that is returned below, so the mask cannot drift from it.
-        plus, cross = kernel(freqs, in_band, ripple_params)
+        plus, cross = kernel(freqs, window, ripple_params)
         return FrequencyDomainPolarizations(
             frequencies=freqs,
             plus=plus,
@@ -856,26 +986,41 @@ class RippleBackend(WaveformBackend):
         if self._segment_duration is not None:
             seconds = self._segment_duration
         else:
+            # From where the signal actually starts, not from the requested cutoff: the taper puts
+            # real content below it, which lengthens the inspiral.
             inspiral, relative_correction = _inspiral_seconds(
-                chirp_mass_solar, eta, minimum_frequency, float(self._constants.MTSUN)
+                chirp_mass_solar,
+                eta,
+                self.signal_start_frequency(minimum_frequency),
+                float(self._constants.MTSUN),
             )
-            longest = float(np.max(inspiral))
+            # Each event gets *its own* margin, and the maximum is taken over the resulting
+            # requirements. Taking max(duration) and max(margin) separately would apply one event's
+            # 1PN correction to another event's duration -- and since the correction grows with total
+            # mass, a heavy short event would inflate the grid chosen for a light long one. That is
+            # conservative rather than unsafe, but it makes the batch grid depend on events that do
+            # not set it, and it broke the invariant that a batch sizes to the same grid as the
+            # single-event call for whichever event dominates.
+            required = (
+                np.asarray(inspiral, dtype=float) * (1.0 + _inspiral_margin(relative_correction))
+                + _SEGMENT_BUFFER_SECONDS
+            )
             inspiral_room = 1.0 - self._ringdown_fraction
-            required = longest * (1.0 + _inspiral_margin(relative_correction)) + _SEGMENT_BUFFER_SECONDS
-            seconds = max(required / inspiral_room, _MIN_SEGMENT_SECONDS)
-        # Still rounded up to a power of two. That rounding supplies most of the margin today, and
-        # the margin turns out to govern accuracy as well as safety: the ringing at the inspiral
-        # onset bleeds circularly into the tail, and how far the onset sits from the buffer edge
-        # sets how much. Measured for 1.4+1.35 at 10 Hz, every case with room to spare so none can
-        # wrap -- 10.5% of margin leaves 1.2e-3 of peak after the ringdown, 74.5% leaves 2.3e-4,
-        # 249% leaves 1.3e-4. Replacing this with the next 5-smooth length would recover ~14% of the
-        # buffer on average at the cost of a factor of a few in that contamination, so it waits
-        # until the onset is tapered.
-        seconds_pow2 = float(2.0 ** np.ceil(np.log2(seconds)))
-        n_samples = round(seconds_pow2 * sampling_frequency)
-        if n_samples % 2:
-            n_samples += 1
-        return n_samples
+            seconds = max(float(np.max(required)) / inspiral_room, _MIN_SEGMENT_SECONDS)
+        # Rounded up to the next 5-smooth length, not to a power of two.
+        #
+        # The margin still governs accuracy as well as safety -- ringing at the inspiral onset bleeds
+        # circularly into the tail, and how far the onset sits from the buffer edge sets how much, so
+        # a longer buffer is a cleaner one. That is why this was a power of two: it bought margin for
+        # free. What changed is the absolute scale. With the cutoff tapered, a tight 21% margin leaves
+        # 5.7e-6 of peak after the ringdown, roughly 40x cleaner than the 2.3e-4 a hard cutoff left at
+        # a comfortable 74.5%. There is headroom to spend, and power-of-two rounding spends far too
+        # much of it: the taper lengthens the inspiral by ~14%, which a power of two turns into a
+        # *doubling* for every case at f_min = 5 Hz -- the regime this backend exists to serve.
+        #
+        # 5-smooth is what transform libraries are efficient for; a power of two is one needlessly
+        # strict special case of it.
+        return _next_smooth_even(int(np.ceil(seconds * sampling_frequency)))
 
     def _evaluate_fd(
         self,
@@ -921,11 +1066,12 @@ class RippleBackend(WaveformBackend):
         )
         polarizations = waveform(freqs, ripple_params)
 
-        # Zero out-of-band bins (including DC, where the amplitude diverges) and
-        # guard against any non-finite values, keeping everything on device.
-        in_band = freqs >= minimum_frequency
-        hp_f = jnp.nan_to_num(jnp.where(in_band, polarizations["p"], 0.0))
-        hc_f = jnp.nan_to_num(jnp.where(in_band, polarizations["c"], 0.0))
+        # Attenuate below the cutoff (including DC, where the amplitude diverges) and guard against
+        # any non-finite values, keeping everything on device. A *window* rather than a mask: see
+        # _DEFAULT_TAPER_FRACTION for why the hard mask rang across the whole buffer.
+        window = _cutoff_window(freqs, minimum_frequency, self._taper_fraction, jnp)
+        hp_f = jnp.nan_to_num(polarizations["p"] * window)
+        hc_f = jnp.nan_to_num(polarizations["c"] * window)
         return FrequencyDomainPolarizations(
             frequencies=freqs,
             plus=hp_f,

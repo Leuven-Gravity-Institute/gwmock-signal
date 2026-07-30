@@ -263,3 +263,31 @@ def test_an_empty_batch_is_rejected_with_a_specific_message() -> None:
         _inspiral_seconds(empty, empty, 10.0, mtsun)
     with pytest.raises(ValueError, match="non-empty"):
         backend._segment_samples(empty, 10.0, _FS, eta=empty)
+
+
+def test_a_batch_sizes_to_the_largest_single_event_requirement() -> None:
+    """A batch's grid must equal the largest grid any of its events would get alone.
+
+    This caught a real defect. Taking ``max(duration)`` and ``max(margin)`` separately applies one
+    event's 1PN correction to another event's duration, and since the correction grows with total
+    mass a heavy short event inflates the grid chosen for a light long one -- 8640 samples where the
+    dominating event alone needs 8192. Conservative rather than unsafe, but it makes the batch grid
+    depend on events that do not set it.
+    """
+    backend = RippleBackend()
+    f_min = 20.0
+    pairs = ((40.0, 31.0), (36.0, 29.0), (55.0, 48.0))
+    chirp_masses = np.array([(m1 * m2) ** 0.6 / (m1 + m2) ** 0.2 for m1, m2 in pairs])
+    etas = np.array([m1 * m2 / (m1 + m2) ** 2 for m1, m2 in pairs])
+
+    alone = [
+        backend._segment_samples(chirp_mass, f_min, _FS, eta=eta)
+        for chirp_mass, eta in zip(chirp_masses, etas, strict=True)
+    ]
+    together = backend._segment_samples(chirp_masses, f_min, _FS, eta=etas)
+    assert together == max(alone), (
+        f"batch sized to {together} samples but the largest single-event requirement is "
+        f"{max(alone)} (per-event: {alone})"
+    )
+    # The premise: the events must genuinely differ, or this cannot distinguish the two reductions.
+    assert len(set(alone)) > 1

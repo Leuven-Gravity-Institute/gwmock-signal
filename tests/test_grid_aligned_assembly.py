@@ -375,14 +375,18 @@ def test_signal_spanning_many_segments() -> None:
     # Coalescence placed inside the span the segments below actually cover: coalescence sits
     # near the end of its buffer, so the buffer occupies roughly [coa - 3.6 s, coa + 0.4 s].
     batch = _aligned_batch(np.array([_T0 + 8.0, _T0 + 9.0]))
-    signal_seconds = np.asarray(batch.strain).shape[2] / _FS
-    # Segments short enough that one buffer genuinely spans several of them.
-    short_segment = signal_seconds / 4.0
+    n_signal = np.asarray(batch.strain).shape[2]
+    # Segments short enough that one buffer genuinely spans several of them, chosen in whole
+    # *samples*. Dividing the duration in seconds happened to be whole-sample only while buffer
+    # lengths were powers of two; the backend now sizes to the next 5-smooth length, and an aligned
+    # batch rightly refuses a fractional-sample segment.
+    short_samples = n_signal // 4
+    short_segment = short_samples / _FS
     starts = [_T0 + k * short_segment for k in range(16)]
     segments = assemble_segments(batch, segment_duration=short_segment, segment_start_times=starts)
     assert len(segments) == len(starts)
     occupied = [int(np.count_nonzero(s.to_dict()["E1"].value)) for s in segments]
-    assert sum(1 for n in occupied if n > 0) >= 4, (signal_seconds, short_segment, occupied)
+    assert sum(1 for n in occupied if n > 0) >= 4, (n_signal, short_samples, occupied)
 
 
 def test_negative_start_index_is_handled() -> None:
