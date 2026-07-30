@@ -450,9 +450,9 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
     # Before generating anything: the estimate includes the waveform-generation buffers, so a
     # check placed after generation could never fire for a batch that exhausts memory *during*
-    # generation -- which is most of the estimate. The grid length does not need the waveform,
-    # only the lightest chirp mass (or a pinned segment duration, which _segment_samples
-    # handles), so it can be sized up front.
+    # generation -- which is most of the estimate. The grid length does not need the waveform, only
+    # the masses (or a pinned segment duration, which _segment_samples handles), so it can be sized
+    # up front.
     _check_batch_fits(
         len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
         len(lookup_keys),

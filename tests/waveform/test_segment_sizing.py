@@ -247,3 +247,19 @@ def test_the_mass_ratio_must_be_supplied() -> None:
         backend._segment_samples(1.2, 10.0, _FS)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         backend.segment_duration_for(1.2, 10.0, _FS)  # type: ignore[call-arg]
+
+
+def test_an_empty_batch_is_rejected_with_a_specific_message() -> None:
+    """Sizing a grid for zero events must say so, not surface a numpy reduction error.
+
+    ``np.all`` and ``np.any`` are vacuously true on an empty array, so the validation above would
+    pass and the caller would see ``zero-size array reduction has no identity`` from the maximum
+    inside ``_segment_samples`` -- which says nothing about the contract that was broken.
+    """
+    backend = RippleBackend()
+    mtsun = float(backend._constants.MTSUN)
+    empty = np.array([])
+    with pytest.raises(ValueError, match="non-empty"):
+        _inspiral_seconds(empty, empty, 10.0, mtsun)
+    with pytest.raises(ValueError, match="non-empty"):
+        backend._segment_samples(empty, 10.0, _FS, eta=empty)

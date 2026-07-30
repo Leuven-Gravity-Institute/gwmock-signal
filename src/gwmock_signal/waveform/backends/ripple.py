@@ -281,6 +281,11 @@ def _inspiral_seconds(
     """
     chirp_mass_solar = np.asarray(chirp_mass_solar, dtype=float)
     eta = np.asarray(eta, dtype=float)
+    # Rejected here, where the message can name the cause. `np.all`/`np.any` are vacuously true on
+    # an empty array, so the checks below would pass and the caller would instead see numpy's
+    # "zero-size array reduction has no identity" from the max in _segment_samples.
+    if chirp_mass_solar.size == 0 or eta.size == 0:
+        raise ValueError("chirp_mass_solar and eta must be non-empty; a grid cannot be sized for no events.")
     if not np.isfinite(minimum_frequency) or minimum_frequency <= 0.0:
         raise ValueError(f"minimum_frequency must be positive and finite; got {minimum_frequency}.")
     if not np.all(np.isfinite(chirp_mass_solar)) or np.any(chirp_mass_solar <= 0.0):
@@ -562,9 +567,10 @@ class RippleBackend(WaveformBackend):
 
         Evaluates ripple under ``jax.vmap`` over the catalogue, so all events share a
         single frequency grid. Because ``vmap`` needs a fixed shape, the grid is sized
-        (worst case) for the longest inspiral in the batch — the smallest chirp mass,
-        via the same post-Newtonian estimate as the per-event path — unless a fixed
-        ``segment_duration`` was set on the backend. This is the on-device entry point
+        (worst case) for the longest inspiral in the batch: the **maximum over every
+        event's** 1PN duration estimate, not the smallest chirp mass, since the mass ratio
+        enters the 1PN term and can reorder two events of nearly equal chirp mass. Unless a
+        fixed ``segment_duration`` was set on the backend, in which case that wins. This is the on-device entry point
         for catalogue-scale (GPU) generation.
 
         Args:
