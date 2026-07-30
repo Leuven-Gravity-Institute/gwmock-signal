@@ -1101,6 +1101,18 @@ def _chirp_mass(parameters: Mapping[str, object]) -> np.ndarray:
     return (mass1 * mass2) ** 0.6 / (mass1 + mass2) ** 0.2
 
 
+def _symmetric_mass_ratio(parameters: Mapping[str, object]) -> np.ndarray:
+    """Return the symmetric mass ratio for every event in ``parameters``.
+
+    Needed alongside the chirp mass because the 1PN term in the inspiral duration depends on the
+    total mass, and at fixed chirp mass a more asymmetric binary is heavier and lasts longer. Sizing
+    a grid from the lightest chirp mass alone therefore does not identify the worst case.
+    """
+    mass1 = np.asarray(_required(parameters, "detector_frame_mass_1"), dtype=float)
+    mass2 = np.asarray(_required(parameters, "detector_frame_mass_2"), dtype=float)
+    return mass1 * mass2 / (mass1 + mass2) ** 2
+
+
 def _chirp_mass_bins(parameters: Mapping[str, object], n_bins: int) -> list[np.ndarray]:
     """Split event indices into ``n_bins`` contiguous chirp-mass groups (lightest first).
 
@@ -1127,8 +1139,14 @@ def _bin_backend(
     """Return a backend pinned to the bin's worst-case grid (or ``backend`` if already pinned)."""
     if backend.segment_duration is not None:
         return backend
-    lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
-    return backend.with_segment_duration(backend.segment_duration_for(lightest, minimum_frequency, sampling_frequency))
+    return backend.with_segment_duration(
+        backend.segment_duration_for(
+            _chirp_mass(parameters)[bin_indices],
+            minimum_frequency,
+            sampling_frequency,
+            eta=_symmetric_mass_ratio(parameters)[bin_indices],
+        )
+    )
 
 
 def _planned_n_samples(
@@ -1139,12 +1157,22 @@ def _planned_n_samples(
 ) -> int:
     """Return the shared grid length the batch will allocate, before generating it.
 
-    The batched ripple path sizes one grid from the smallest chirp mass present (or from a
-    pinned segment duration), so the dominant term in the memory estimate is knowable in
-    advance. That is what lets the preflight run before any large allocation happens.
+    The batched ripple path sizes one grid from the longest inspiral present (or from a pinned
+    segment duration), so the dominant term in the memory estimate is knowable in advance. That is
+    what lets the preflight run before any large allocation happens.
+
+    Every event is passed, exactly as the backend does when it generates: sizing this from a proxy
+    such as the lightest chirp mass could disagree with the grid actually allocated, which would
+    make the preflight estimate wrong in the direction that matters.
     """
-    lightest = float(np.min(_chirp_mass(parameters)))
-    return int(backend._segment_samples(lightest, minimum_frequency, sampling_frequency))
+    return int(
+        backend._segment_samples(
+            _chirp_mass(parameters),
+            minimum_frequency,
+            sampling_frequency,
+            eta=_symmetric_mass_ratio(parameters),
+        )
+    )
 
 
 def _bin_n_samples(
@@ -1160,8 +1188,14 @@ def _bin_n_samples(
     actually be allocated: bins deliberately differ in ``n_samples``, so one
     catalogue-wide chunk size would be wrong for all but one of them.
     """
-    lightest = float(np.min(_chirp_mass(parameters)[bin_indices]))
-    return int(backend._segment_samples(lightest, minimum_frequency, sampling_frequency))
+    return int(
+        backend._segment_samples(
+            _chirp_mass(parameters)[bin_indices],
+            minimum_frequency,
+            sampling_frequency,
+            eta=_symmetric_mass_ratio(parameters)[bin_indices],
+        )
+    )
 
 
 def _required(parameters: Mapping[str, object], name: str) -> object:

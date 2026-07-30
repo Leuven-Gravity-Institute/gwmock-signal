@@ -208,10 +208,53 @@ _SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS + _PRECESSING_MOD
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 _DEFAULT_RINGDOWN_FRACTION = 0.1
-#: Extra inspiral headroom (seconds) beyond the leading-order post-Newtonian chirp-time estimate.
+#: Absolute headroom (seconds) added to the estimated inspiral duration.
 _SEGMENT_BUFFER_SECONDS = 2.0
 #: Floor on the segment length (seconds) for very short signals.
 _MIN_SEGMENT_SECONDS = 1.0
+
+#: Fractional headroom beyond the 1PN chirp time, covering the 2PN and higher terms the estimate
+#: omits and any difference between a model's true starting frequency and ``minimum_frequency``.
+#:
+#: A *proportional* margin, because the omitted terms scale with the duration. The flat
+#: :data:`_SEGMENT_BUFFER_SECONDS` alone left only 2.8% of headroom for a 10+1.4 system at 10 Hz,
+#: less than the 4.9% the 1PN term contributes there, and that case wrapped its inspiral around the
+#: buffer -- measurably, at 1.8% of peak amplitude in the region after the ringdown.
+_INSPIRAL_SAFETY_FRACTION = 0.10
+
+
+def _inspiral_seconds(
+    chirp_mass_solar: np.ndarray | float,
+    eta: np.ndarray | float,
+    minimum_frequency: float,
+    mtsun: float,
+) -> np.ndarray:
+    """Return the inspiral duration from *minimum_frequency* to coalescence, per event.
+
+    The leading-order (Newtonian) chirp time with its 1PN correction,
+    ``tau0 * (1 + (743/252 + 11 eta/3) (pi M f)^(2/3))``. That correction is *positive*, so the 0PN
+    term alone always underestimates the duration, which is why it cannot size a buffer by itself.
+
+    Args:
+        chirp_mass_solar: Detector-frame chirp mass(es) in solar masses.
+        eta: Symmetric mass ratio(es), ``m1 m2 / (m1 + m2)^2``.
+        minimum_frequency: Low-frequency cutoff in Hz.
+        mtsun: Solar mass in seconds, passed in from ``ripplegw.constants`` so this module does not
+            keep a second copy of a physical constant.
+
+    Returns:
+        Duration(s) in seconds, broadcast over the inputs.
+    """
+    chirp_mass_solar = np.asarray(chirp_mass_solar, dtype=float)
+    eta = np.asarray(eta, dtype=float)
+    chirp_mass_seconds = chirp_mass_solar * mtsun
+    tau0 = (5.0 / 256.0) * (np.pi * minimum_frequency) ** (-8.0 / 3.0) * chirp_mass_seconds ** (-5.0 / 3.0)
+    # M = Mc * eta^(-3/5): at fixed chirp mass a more asymmetric binary is heavier and so carries a
+    # larger 1PN correction. That is why eta cannot be assumed equal-mass here, and why the
+    # lightest chirp mass in a batch is not necessarily its longest inspiral.
+    total_mass_seconds = chirp_mass_seconds * eta ** (-3.0 / 5.0)
+    x = (np.pi * total_mass_seconds * minimum_frequency) ** (2.0 / 3.0)
+    return tau0 * (1.0 + (743.0 / 252.0 + 11.0 * eta / 3.0) * x)
 
 
 #: Distinct batched-kernel configurations kept compiled. Each entry holds one XLA
@@ -391,10 +434,27 @@ class RippleBackend(WaveformBackend):
         )
 
     def segment_duration_for(
-        self, chirp_mass_solar: float, minimum_frequency: float, sampling_frequency: float
+        self,
+        chirp_mass_solar: float | np.ndarray,
+        minimum_frequency: float,
+        sampling_frequency: float,
+        eta: float | np.ndarray = 0.25,
     ) -> float:
-        """Worst-case segment duration (seconds) the batch path uses for this chirp mass."""
-        return self._segment_samples(chirp_mass_solar, minimum_frequency, sampling_frequency) / sampling_frequency
+        """Worst-case segment duration (seconds) the batch path uses for these masses.
+
+        Args:
+            chirp_mass_solar: Detector-frame chirp mass(es) in solar masses.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            sampling_frequency: Sample rate in Hz.
+            eta: Symmetric mass ratio(es), aligned with ``chirp_mass_solar``. The equal-mass default
+                underestimates the duration for asymmetric binaries.
+
+        Returns:
+            Duration in seconds.
+        """
+        return (
+            self._segment_samples(chirp_mass_solar, minimum_frequency, sampling_frequency, eta=eta) / sampling_frequency
+        )
 
     def generate_td_waveform(
         self,
@@ -559,7 +619,14 @@ class RippleBackend(WaveformBackend):
             raise ValueError("lambda_1 and lambda_2 must be >= 0")
 
         chirp_mass, eta = self._jax.vmap(self._conversions.ms_to_Mc_eta)(jnp.stack([mass1, mass2], axis=-1))
-        n_samples = self._segment_samples(float(jnp.min(chirp_mass)), minimum_frequency, sampling_frequency)
+        # Every event's duration is considered rather than the lightest chirp mass: eta enters the
+        # 1PN term, so the longest inspiral is not necessarily the lightest binary.
+        n_samples = self._segment_samples(
+            np.asarray(chirp_mass, dtype=float),
+            minimum_frequency,
+            sampling_frequency,
+            eta=np.asarray(eta, dtype=float),
+        )
 
         ripple_params = {
             "M_c": chirp_mass,
@@ -700,21 +767,57 @@ class RippleBackend(WaveformBackend):
             waveform_arguments=waveform_arguments,
         )
 
-    def _segment_samples(self, chirp_mass_solar: float, minimum_frequency: float, sampling_frequency: float) -> int:
-        """Return an even sample count whose duration contains the full inspiral.
+    def _segment_samples(
+        self,
+        chirp_mass_solar: float | np.ndarray,
+        minimum_frequency: float,
+        sampling_frequency: float,
+        eta: float | np.ndarray = 0.25,
+    ) -> int:
+        """Return an even sample count whose duration contains the longest inspiral given.
 
-        The duration is rounded up to a power of two seconds so the inspiral
-        (estimated from the leading-order post-Newtonian chirp time) fits in the pre-coalescence
-        portion of the buffer without cyclic wraparound.
+        Sized from the 1PN chirp time (:func:`_inspiral_seconds`) plus a proportional margin, then
+        rounded up to a power of two seconds.
+
+        Previously the estimate was the *0PN* chirp time with a flat 2 s pad, which left the real
+        safety margin to be whatever the power-of-two rounding happened to supply -- between 2.8%
+        and 256% across ordinary parameters. Where that fell below the 1PN correction the inspiral
+        wrapped around the buffer: a 10+1.4 system at 10 Hz had 2.8% of room against a 4.9%
+        correction, and 1.8% of peak amplitude appeared in its post-ringdown region. Including the
+        1PN term and requiring a proportional margin makes the headroom a property of the estimate
+        rather than of where the rounding lands.
+
+        Arrays are accepted and the **longest** duration wins. A caller cannot identify the
+        worst-case event from chirp mass alone: at fixed chirp mass a more asymmetric binary is
+        heavier and lasts longer, so the lightest event is not necessarily the longest.
+
+        Args:
+            chirp_mass_solar: Detector-frame chirp mass(es) in solar masses.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            sampling_frequency: Sample rate in Hz.
+            eta: Symmetric mass ratio(es), aligned with ``chirp_mass_solar``. The equal-mass default
+                *underestimates* the correction for asymmetric binaries; callers that know the mass
+                ratio should pass it.
+
+        Returns:
+            An even sample count, a power of two in duration.
         """
         if self._segment_duration is not None:
             seconds = self._segment_duration
         else:
-            mc_seconds = chirp_mass_solar * self._constants.MTSUN
-            # Leading-order (Newtonian) chirp time from minimum_frequency to merger.
-            tau0 = (5.0 / 256.0) * (np.pi * minimum_frequency) ** (-8.0 / 3.0) * mc_seconds ** (-5.0 / 3.0)
+            inspiral = _inspiral_seconds(chirp_mass_solar, eta, minimum_frequency, float(self._constants.MTSUN))
+            longest = float(np.max(inspiral))
             inspiral_room = 1.0 - self._ringdown_fraction
-            seconds = max((tau0 + _SEGMENT_BUFFER_SECONDS) / inspiral_room, _MIN_SEGMENT_SECONDS)
+            required = longest * (1.0 + _INSPIRAL_SAFETY_FRACTION) + _SEGMENT_BUFFER_SECONDS
+            seconds = max(required / inspiral_room, _MIN_SEGMENT_SECONDS)
+        # Still rounded up to a power of two. That rounding supplies most of the margin today, and
+        # the margin turns out to govern accuracy as well as safety: the ringing at the inspiral
+        # onset bleeds circularly into the tail, and how far the onset sits from the buffer edge
+        # sets how much. Measured for 1.4+1.35 at 10 Hz, every case with room to spare so none can
+        # wrap -- 10.5% of margin leaves 1.2e-3 of peak after the ringdown, 74.5% leaves 2.3e-4,
+        # 249% leaves 1.3e-4. Replacing this with the next 5-smooth length would recover ~14% of the
+        # buffer on average at the cost of a factor of a few in that contamination, so it waits
+        # until the onset is tapered.
         seconds_pow2 = float(2.0 ** np.ceil(np.log2(seconds)))
         n_samples = round(seconds_pow2 * sampling_frequency)
         if n_samples % 2:
@@ -733,7 +836,7 @@ class RippleBackend(WaveformBackend):
         spins = resolved.spins
         chirp_mass, eta = self._conversions.ms_to_Mc_eta(jnp.array([resolved.mass1, resolved.mass2]))
 
-        n_samples = self._segment_samples(float(chirp_mass), minimum_frequency, sampling_frequency)
+        n_samples = self._segment_samples(float(chirp_mass), minimum_frequency, sampling_frequency, eta=float(eta))
         delta_f = sampling_frequency / n_samples
         freqs = jnp.arange(n_samples // 2 + 1) * delta_f
 
