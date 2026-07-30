@@ -249,7 +249,7 @@ _DEFAULT_TAPER_FRACTION = 0.05
 _INSPIRAL_SAFETY_FRACTION = 0.10
 
 
-def _inspiral_margin(relative_correction: np.ndarray | float) -> np.ndarray:
+def _inspiral_margin(relative_correction: np.ndarray | float) -> np.ndarray | float:
     """Return the fractional headroom to add to the 1PN duration estimate, per event.
 
     At least :data:`_INSPIRAL_SAFETY_FRACTION`, and never smaller than the 1PN term itself.
@@ -268,9 +268,13 @@ def _inspiral_margin(relative_correction: np.ndarray | float) -> np.ndarray:
         relative_correction: The 1PN term relative to the 0PN one, from :func:`_inspiral_seconds`.
 
     Returns:
-        The fractional margin(s) to apply, broadcast over the input.
+        The fractional margin(s), broadcast over the input: a plain ``float`` for a scalar or 0-d
+        input, an array otherwise. Scalar input returns a ``float`` so callers can format the value
+        into a message; a bare ndarray raises ``TypeError`` on ``:.1%``, which is a poor way to
+        discover the return type.
     """
-    return np.maximum(_INSPIRAL_SAFETY_FRACTION, np.asarray(relative_correction, dtype=float))
+    margin = np.maximum(_INSPIRAL_SAFETY_FRACTION, np.asarray(relative_correction, dtype=float))
+    return float(margin) if margin.ndim == 0 else margin
 
 
 #: Prime factors an FFT length may contain. Transform libraries are efficient for 5-smooth sizes,
@@ -409,10 +413,10 @@ def _batched_polarization_kernel(
 ) -> Callable[..., tuple]:
     """Return a cached, jitted, vmapped ripple evaluation for one waveform configuration.
 
-    Keyed only on what builds the ripple waveform. The frequency grid and its in-band mask are
+    Keyed only on what builds the ripple waveform. The frequency grid and its cutoff window are
     *arguments*, not part of the key: the caller already computes the grid and returns that
     same array to its own caller, so rebuilding it here would derive one quantity in two
-    places -- and if the two ever diverged, the in-band mask would silently misalign with the
+    places -- and if the two ever diverged, the window would silently misalign with the
     frequencies the caller reports. Passing it also keeps the key smaller, so a run that
     varies only the grid still reuses this kernel.
 
@@ -426,7 +430,7 @@ def _batched_polarization_kernel(
 
     Returns:
         A callable over ``(frequencies, window, ripple_params)`` returning ``(plus, cross)``,
-        batched over events and unmapped over the shared grid and mask.
+        batched over events and unmapped over the shared grid and cutoff window.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
     import jax.numpy as jnp  # noqa: PLC0415
@@ -589,7 +593,15 @@ class RippleBackend(WaveformBackend):
 
         Returns:
             ``minimum_frequency / (1 + taper_fraction)``.
+
+        Raises:
+            ValueError: If ``minimum_frequency`` is not positive and finite. Validated here as well
+                as on the generation paths, because this is public and can be called on its own --
+                and without the check a non-positive cutoff returns a plausible-looking number that
+                would go on to size a buffer.
         """
+        if not np.isfinite(minimum_frequency) or minimum_frequency <= 0.0:
+            raise ValueError(f"minimum_frequency must be positive and finite; got {minimum_frequency}.")
         return minimum_frequency / (1.0 + self._taper_fraction)
 
     @property
@@ -735,7 +747,7 @@ class RippleBackend(WaveformBackend):
         # compilation each time -- about 121 s per call for IMRPhenomXPHM on an A100, which
         # made the batched path slower than the per-event LAL loop it replaces.
         kernel = _batched_polarization_kernel(approximant, f_ref, tuple(sorted(resolved_arguments.items())))
-        # The same freqs object that is returned below, so the mask cannot drift from it.
+        # The same freqs object that is returned below, so the window cannot drift from it.
         plus, cross = kernel(freqs, window, ripple_params)
         return FrequencyDomainPolarizations(
             frequencies=freqs,
