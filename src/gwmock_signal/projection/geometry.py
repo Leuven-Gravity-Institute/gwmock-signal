@@ -22,13 +22,61 @@ constants instead of re-deriving them (a single source of truth).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import lal
 import numpy as np
 from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
+
+if TYPE_CHECKING:
+    from gwmock_signal.detector import CustomDetector
+
+#: A detector named either by built-in LAL interferometer code or given explicitly.
+DetectorSpec = "str | CustomDetector"
+
+
+def resolve_detectors(detector_specs: Sequence[str | CustomDetector]) -> list[tuple[str, str]]:
+    """Resolve detector specifications to ``(output_name, lal_lookup_key)`` pairs.
+
+    Both the NumPy and the device projection paths need the same split, because the two are not
+    interchangeable: a :class:`~gwmock_signal.detector.CustomDetector` is *looked up* by the
+    two-character prefix it registers with LAL, but its output channel must be keyed by its own
+    ``name``. Using one string for both -- as the device path did -- silently restricts that path
+    to built-in interferometer codes, which is why ET presets could not reach it at all.
+
+    Lives here rather than in either projection module so both derive the mapping from one
+    implementation, consistent with this module being the single point of contact with LAL's
+    registry.
+
+    Args:
+        detector_specs: Built-in LAL interferometer codes and/or ``CustomDetector`` instances.
+
+    Returns:
+        One ``(output_name, lal_lookup_key)`` pair per entry, in the order given. For a built-in
+        code the two are the same string.
+
+    Raises:
+        TypeError: If an entry is neither a string nor a ``CustomDetector``.
+        ValueError: If a string is not a detector LAL knows about.
+    """
+    from gwmock_signal.detector import CustomDetector  # noqa: PLC0415 — avoids an import cycle
+
+    resolved: list[tuple[str, str]] = []
+    for raw in detector_specs:
+        if isinstance(raw, str):
+            name = str(raw)
+            # Resolved eagerly so an unknown code fails here, with the other detectors' names
+            # still available for the message, rather than deep inside a jitted kernel.
+            get_lal_detector(name)
+            resolved.append((name, name))
+        elif isinstance(raw, CustomDetector):
+            resolved.append((raw.name, raw.to_lal().frDetector.prefix))
+        else:
+            raise TypeError(f"Unsupported detector specification type: {type(raw).__name__}")
+    return resolved
 
 
 def get_lal_detector(prefix: str) -> lal.Detector:
