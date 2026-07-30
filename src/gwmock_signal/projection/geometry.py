@@ -34,11 +34,12 @@ from astropy.coordinates.matrix_utilities import rotation_matrix
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
 
-#: A detector named either by built-in LAL interferometer code or given explicitly.
-DetectorSpec = "str | CustomDetector"
+#: How a caller names a detector: a built-in LAL interferometer code, or an explicit geometry.
+#: Defined here rather than in either projection module, so both paths mean the same thing by it.
+type DetectorSpec = str | CustomDetector
 
 
-def resolve_detectors(detector_specs: Sequence[str | CustomDetector]) -> list[tuple[str, str]]:
+def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
     """Resolve detector specifications to ``(output_name, lal_lookup_key)`` pairs.
 
     Both the NumPy and the device projection paths need the same split, because the two are not
@@ -60,7 +61,8 @@ def resolve_detectors(detector_specs: Sequence[str | CustomDetector]) -> list[tu
 
     Raises:
         TypeError: If an entry is neither a string nor a ``CustomDetector``.
-        ValueError: If a string is not a detector LAL knows about.
+        ValueError: If a string is not a detector LAL knows about, or if two entries resolve to
+            the same LAL detector.
     """
     from gwmock_signal.detector import CustomDetector  # noqa: PLC0415 — avoids an import cycle
 
@@ -120,9 +122,9 @@ def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
     # Cached on the geometry itself rather than on the prefix. LAL's registry is process-global
     # and mutable, so a prefix is not a stable identity: freeing one and re-registering it for a
     # detector elsewhere on Earth would otherwise return the first detector's tensor for the
-    # second, silently and in a way that still looks like a plausible network. ``tests/conftest.py``
-    # already clears this cache between tests for exactly that reason -- a workaround that says
-    # the hazard is real, and that production had no equivalent.
+    # second, silently and in a way that still looks like a plausible network. The test harness
+    # used to clear this cache after any test that registered a detector, which is how the hazard
+    # is known to be real; that hook is gone because keying on the geometry removes the need.
     return _geometry_from_fields(_defining_fields(get_lal_detector(prefix).frDetector))
 
 

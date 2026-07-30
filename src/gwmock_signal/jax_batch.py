@@ -36,7 +36,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.injection import inject_strains_sequential
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.geometry import reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
     project_polarizations_fd,
@@ -53,8 +53,6 @@ from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations,
 
 if TYPE_CHECKING:
     from jax import Array
-
-    from gwmock_signal.detector import CustomDetector
 
 
 @dataclass(frozen=True)
@@ -130,7 +128,7 @@ _KERNEL_CACHE_SIZE = 32
 
 
 def _resolve_detector_specs(
-    detector_names: Sequence[str | CustomDetector],
+    detector_names: Sequence[DetectorSpec],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Split detector specifications into output channel names and LAL lookup keys.
 
@@ -386,7 +384,7 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
 
 def simulate_cbc_batch(  # noqa: PLR0913
     approximant: str,
-    detector_names: Sequence[str | CustomDetector],
+    detector_names: Sequence[DetectorSpec],
     *,
     sampling_frequency: float,
     minimum_frequency: float,
@@ -941,7 +939,7 @@ def _superpose_on_lattice(
 
 def simulate_cbc_catalogue(  # noqa: PLR0913
     approximant: str,
-    detector_names: Sequence[str | CustomDetector],
+    detector_names: Sequence[DetectorSpec],
     *,
     sampling_frequency: float,
     minimum_frequency: float,

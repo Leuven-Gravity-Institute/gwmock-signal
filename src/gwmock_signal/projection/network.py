@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import cast
 
 import numpy as np
 from astropy import constants
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-from gwmock_signal.projection.geometry import reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
@@ -31,13 +31,6 @@ from gwmock_signal.projection.resampling import (
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy
-
-if TYPE_CHECKING:
-    from gwmock_signal.detector import CustomDetector
-else:
-    CustomDetector = Any
-
-DetectorSpec = str | CustomDetector
 
 
 def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tuple[GWpyTimeSeries, GWpyTimeSeries]:
