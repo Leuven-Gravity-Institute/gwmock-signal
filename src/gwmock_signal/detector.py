@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import string
+import threading
 import uuid
 from dataclasses import dataclass, field
 
@@ -31,8 +32,23 @@ _PREFIX_ALPHABET = string.ascii_uppercase + string.digits
 _LAL_PREFIX_LENGTH = 2
 
 
+#: Serialises prefix allocation and registration against LAL's registry.
+#:
+#: ``lal.cached_detector_by_prefix`` is process-global and mutable, and registering a detector is a
+#: check-then-act: read the registry to find a free prefix, then write to it. Two threads doing that
+#: concurrently can settle on the same prefix, both register, and the last write win -- after which
+#: ``resolve_detectors`` hands both channels the same lookup key and, with it, the same geometry. A
+#: module-level lock rather than a per-instance one, because the contended state belongs to LAL, not
+#: to any one detector.
+_REGISTRY_LOCK = threading.Lock()
+
+
 def _generate_detector_prefix() -> str:
-    """Generate one unused two-character detector prefix for LAL registration."""
+    """Generate one unused two-character detector prefix for LAL registration.
+
+    Callers must hold :data:`_REGISTRY_LOCK`, since the search reads the registry that another
+    thread may be writing to.
+    """
     max_prefixes = len(_PREFIX_ALPHABET) ** 2
     seed = uuid.uuid4().int % max_prefixes
 
@@ -116,7 +132,11 @@ class CustomDetector:
             raise ValueError(f"longitude_rad must be in [-pi, pi]; got {self.longitude_rad!r}.")
         if not (_elev_min <= self.elevation_m <= _elev_max):
             raise ValueError(f"elevation_m must be in [-1e4, 1e5] m; got {self.elevation_m!r}.")
-        object.__setattr__(self, "_lal_prefix", self.prefix or _generate_detector_prefix())
+        if self.prefix:
+            object.__setattr__(self, "_lal_prefix", self.prefix)
+        else:
+            with _REGISTRY_LOCK:
+                object.__setattr__(self, "_lal_prefix", _generate_detector_prefix())
 
     def to_lal(self) -> lal.Detector:
         """Return a cached :class:`lal.Detector` for this geometry.
@@ -126,11 +146,23 @@ class CustomDetector:
         layer can resolve built-in and custom detectors through one lookup
         path. Subsequent calls return the cached object.
 
+        Thread-safe: allocation, the clash check and registration happen together under
+        :data:`_REGISTRY_LOCK`. Without that, two threads could each find the same prefix free and
+        both register it, leaving one geometry reachable under a key two detectors believe they own.
+
         Returns:
             A :class:`lal.Detector` instance configured with
             this detector's geodetic coordinates and arm orientations.
         """
-        if self._lal_detector is None:
+        # Unlocked fast path for the common case of repeated calls on a registered detector. Safe
+        # because _lal_detector is only ever set once, under the lock, and never cleared.
+        if self._lal_detector is not None:
+            return self._lal_detector
+
+        with _REGISTRY_LOCK:
+            # Re-checked: another thread may have finished registering while this one waited.
+            if self._lal_detector is not None:
+                return self._lal_detector
             detector_prefix = self._lal_prefix
             if detector_prefix in lal.cached_detector_by_prefix:
                 if self.prefix:
