@@ -6,8 +6,9 @@ silently restricts it to built-in interferometer codes: a
 two-character prefix, so looking it up by its ``name`` fails. gwmock's ET presets are custom
 detectors, so before this the device path could not simulate the configuration it exists for.
 
-The load-bearing test here is agreement with the NumPy path, which already supported custom
-detectors: it checks the device path resolves the *same geometry*, not merely that it runs.
+These tests check the device path resolves the *right geometry*, not merely that it runs. The
+load-bearing anchor is LAL's own response tensor, computed in C from the same ``FrDetector``:
+agreement with our other code path would only show the two agree, which bounds neither.
 """
 
 from __future__ import annotations
@@ -106,11 +107,11 @@ def test_custom_and_builtin_detectors_can_be_mixed() -> None:
 
 
 def test_two_custom_detectors_get_distinct_geometry() -> None:
-    """Separately constructed custom detectors must not collide in the geometry cache.
+    """Separately constructed custom detectors must get distinct prefixes and geometry.
 
-    ``reconstructed_geometry`` is cached by prefix, so two custom detectors sharing a prefix
-    would silently return one geometry for both. They are auto-assigned distinct prefixes; this
-    pins that, since the failure is silent and looks like a physically plausible network.
+    Prefixes are auto-assigned against LAL's registry as it stands, so siblings must not collide.
+    A collision would be silent and would look like a physically plausible network.
+    See ``tests/projection/test_geometry.py`` for the cache-identity hazard itself.
     """
     first = _et_like("ET1", longitude=0.1833)
     second = _et_like("ET2", longitude=-1.2)
@@ -145,10 +146,27 @@ def test_an_unsupported_specification_type_is_rejected() -> None:
         _batch([object()])
 
 
-def test_an_unknown_detector_code_fails_before_generation() -> None:
-    """An unusable detector must be reported without first generating a catalogue."""
+def test_an_unknown_detector_code_fails_before_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unusable detector must be reported *before* a catalogue is generated.
+
+    Asserting only that ``ValueError`` is raised does not test this: with the eager resolution
+    removed, generation runs to completion and the later geometry lookup raises the same
+    exception, so the test stays green while the claim is false. The backend is therefore spied
+    on, and the assertion is that it was never called.
+    """
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    calls: list[str] = []
+    original = RippleBackend.generate_fd_polarizations_batch
+
+    def _spy(self: RippleBackend, *args: object, **kwargs: object) -> object:
+        calls.append("generated")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", _spy)
     with pytest.raises(ValueError, match="Unknown or unsupported detector"):
         _batch(["ZZ"])
+    assert calls == [], "waveform generation ran before the detector was rejected"
 
 
 def test_bundled_et_preset_reaches_the_device_path() -> None:
@@ -171,24 +189,39 @@ def test_bundled_et_preset_reaches_the_device_path() -> None:
         assert np.any(strain[0, detector] != 0.0)
 
 
-def test_et_preset_geometry_matches_the_published_design() -> None:
-    """Anchor the resolved geometry against ET's design, not against our own other code path.
+def test_et_preset_geometry_matches_lal_and_the_published_design() -> None:
+    """Anchor the resolved geometry outside this repository, three ways.
 
-    Two properties that do not depend on anything in this repository:
+    Comparing against our own other code path would prove nothing, so:
 
-    * The three vertices sit 10 km apart -- ET's design arm length.
-    * A closed triangle has a null stream: the three response tensors sum to zero. The residual
-      here is not zero but ~5e-3 of a single tensor, which is the size Earth's curvature over a
-      10 km triangle predicts (10 km / 6371 km ~ 1.6e-3), so it is checked as a bound rather
-      than asserted to vanish.
+    * **LAL's own response tensor.** ``lal.Detector.response`` is computed in C from the same
+      ``FrDetector``, independently of the astropy rotation-matrix reconstruction here. This is a
+      reference implementation rather than a peer -- LAL *defines* the geometry -- so agreement is
+      a check on the reconstruction, not a mutual-consistency argument. It also rules out a
+      wrongly assigned arm azimuth, which would differ at O(1) rather than at 1e-7.
+    * **The design arm length.** The vertices sit 10 km apart, which is ET's design value.
+    * **The null stream.** A closed triangle's three response tensors sum to zero. The residual
+      is ~5e-3 of a single tensor, the size Earth's curvature over a 10 km triangle implies
+      (10 km / 6371 km ~ 1.6e-3). On its own that is only order-of-magnitude evidence and could
+      accept a wrong orientation; it is retained as a cheap sanity check *because* the LAL
+      comparison above independently pins the orientation.
     """
     import itertools
+
+    import lal
 
     from gwmock_signal.network import Network
 
     keys = [key for _, key in resolve_detectors(list(Network.from_preset("ET-Sardinia").detector_names))]
     responses = [reconstructed_geometry(key)[0] for key in keys]
     locations = [reconstructed_geometry(key)[1] for key in keys]
+
+    for key, response, location in zip(keys, responses, locations, strict=True):
+        detector = lal.cached_detector_by_prefix[key]
+        # LAL stores the response as REAL4, so ~1e-7 of the tensor scale is its own precision
+        # and not slack chosen to make this pass.
+        assert np.max(np.abs(np.array(detector.response) - response)) < 1e-6
+        assert np.max(np.abs(np.array(detector.location) - location)) < 1e-2
 
     for first, second in itertools.combinations(locations, 2):
         separation_km = float(np.linalg.norm(first - second)) / 1e3
@@ -197,7 +230,3 @@ def test_et_preset_geometry_matches_the_published_design() -> None:
     scale = max(float(np.max(np.abs(response))) for response in responses)
     residual = float(np.max(np.abs(sum(responses)))) / scale
     assert residual < 2e-2, f"null-stream residual {residual:.2e} is too large for a closed triangle"
-    assert residual > 1e-4, (
-        f"null-stream residual {residual:.2e} is suspiciously small; the vertices are 10 km apart "
-        f"on a curved Earth, so an exactly vanishing sum would suggest co-located geometry"
-    )
