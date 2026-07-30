@@ -36,7 +36,7 @@ _LAL_PREFIX_LENGTH = 2
 #:
 #: ``lal.cached_detector_by_prefix`` is process-global and mutable, and registering a detector is a
 #: check-then-act: read the registry to find a free prefix, then write to it. Two threads doing that
-#: concurrently can settle on the same prefix, both register, and the last write win -- after which
+#: concurrently can settle on the same prefix, both register, and the last write wins. After that,
 #: ``resolve_detectors`` hands both channels the same lookup key and, with it, the same geometry. A
 #: module-level lock rather than a per-instance one, because the contended state belongs to LAL, not
 #: to any one detector.

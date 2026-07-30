@@ -72,16 +72,16 @@ def slow_registration(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(lal, "CreateDetector", _slow_create)
 
 
-def _register_concurrently(detectors: list[CustomDetector]) -> list[BaseException | str]:
+def _register_concurrently(detectors: list[CustomDetector]) -> list[Exception | str]:
     """Call ``to_lal`` on every detector at once; return each prefix or the exception raised."""
-    outcomes: list[BaseException | str | None] = [None] * len(detectors)
+    outcomes: list[Exception | str | None] = [None] * len(detectors)
     barrier = threading.Barrier(len(detectors))
 
     def _worker(index: int) -> None:
         barrier.wait()
         try:
             outcomes[index] = detectors[index].to_lal().frDetector.prefix
-        except BaseException as exc:  # noqa: BLE001 - the failure mode is the measurement
+        except Exception as exc:  # noqa: BLE001 - recording the failure *is* the measurement
             outcomes[index] = exc
 
     threads = [threading.Thread(target=_worker, args=(index,)) for index in range(len(detectors))]
@@ -102,7 +102,7 @@ def test_concurrent_registration_gives_every_detector_its_own_prefix(
     detectors = [_detector(f"THREADED{index}", -1.5 + 0.2 * index) for index in range(_THREADS)]
     outcomes = _register_concurrently(detectors)
 
-    failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+    failures = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
     assert not failures, f"registration raised under contention: {failures}"
     prefixes = sorted(outcomes)
     assert len(set(prefixes)) == _THREADS, f"prefixes collided under contention: {prefixes}"
@@ -146,32 +146,56 @@ def test_an_explicit_prefix_clash_still_raises_under_contention(slow_registratio
     ]
     outcomes = _register_concurrently(detectors)
 
-    succeeded = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
-    failed = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+    succeeded = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+    failed = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
     assert len(succeeded) == 1, f"{len(succeeded)} detectors claimed the same explicit prefix"
     assert all(isinstance(exc, ValueError) for exc in failed), f"unexpected exception types: {failed}"
 
 
-def test_prefix_allocation_holds_the_lock() -> None:
-    """``_generate_detector_prefix`` documents that callers hold the lock; check both callers do.
+def test_every_prefix_allocation_is_inside_the_lock() -> None:
+    """Every call to ``_generate_detector_prefix`` must be lexically inside a ``with`` on the lock.
 
-    It searches the registry another thread may be writing, so calling it unlocked reintroduces the
-    race one level down. Asserted by reading the source rather than by timing, because a missing lock
-    here is a code property, not a probabilistic one.
+    It searches the registry another thread may be writing, so an unlocked call reintroduces the race
+    one level down. Checked structurally rather than by timing, because a missing lock here is a code
+    property, not a probabilistic one.
+
+    Via the AST, not a substring search. An earlier version asked whether ``_REGISTRY_LOCK`` appeared
+    anywhere earlier in the enclosing function, which a mere docstring mention would satisfy -- a
+    check that cannot fail for the reason it claims to.
     """
+    import ast
     import inspect
 
     from gwmock_signal import detector as detector_module
 
-    source = inspect.getsource(detector_module)
-    for line in source.splitlines():
-        stripped = line.strip()
-        if "_generate_detector_prefix()" in stripped and not stripped.startswith(("#", '"', "*")):
-            # Every call site must be inside a `with _REGISTRY_LOCK` block; the two that exist are
-            # in __post_init__ and to_lal, both of which take it.
-            index = source.index(line)
-            preceding = source[:index]
-            assert "_REGISTRY_LOCK" in preceding.rsplit("def ", 1)[-1], (
-                f"unlocked call to _generate_detector_prefix: {stripped}"
-            )
+    tree = ast.parse(inspect.getsource(detector_module))
+
+    def _calls_to_allocator(node: ast.AST) -> list[ast.Call]:
+        return [
+            child
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "_generate_detector_prefix"
+        ]
+
+    def _guards_the_lock(with_node: ast.With) -> bool:
+        return any(
+            isinstance(item.context_expr, ast.Name) and item.context_expr.id == "_REGISTRY_LOCK"
+            for item in with_node.items
+        )
+
+    every_call = _calls_to_allocator(tree)
+    assert every_call, "no call to _generate_detector_prefix found; this test is watching nothing"
+
+    guarded = {
+        id(call)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.With) and _guards_the_lock(node)
+        for call in _calls_to_allocator(node)
+    }
+    unguarded = [call for call in every_call if id(call) not in guarded]
+    assert not unguarded, (
+        f"unlocked call(s) to _generate_detector_prefix at line(s) {sorted(call.lineno for call in unguarded)}"
+    )
     assert callable(_generate_detector_prefix)
