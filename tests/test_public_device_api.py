@@ -140,3 +140,26 @@ def test_the_missing_extra_failure_names_the_install_command(monkeypatch: pytest
         RippleBackend()
     message = str(raised.value)
     assert "gwmock-signal[jax]" in message, f"the error does not name the install command: {message}"
+
+
+def test_sampling_grid_is_usable_without_the_jax_extra() -> None:
+    """``SamplingGrid`` is pure NumPy, so it must work in a base installation.
+
+    The API documentation says so, and a claim about optional dependencies is worth pinning rather
+    than trusting: an earlier version of that note lumped this type in with the batched entry points
+    and stated it needed the ``[jax]`` extra to run, which is wrong on both counts -- it resolves from
+    ``gwmock_signal.sampling_grid``, not ``jax_batch``, and it imports only ``numpy``.
+
+    Run in a subprocess so the check is against a fresh interpreter rather than this one, which has
+    already imported JAX.
+    """
+    code = (
+        "import sys\n"
+        "from gwmock_signal import SamplingGrid\n"
+        "grid = SamplingGrid(epoch=1400000000.0, sampling_frequency=2048.0)\n"
+        "assert grid.index_of(1400000001.0) == 2048.0\n"
+        "print('jax' in sys.modules)\n"
+    )
+
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)  # noqa: S603
+    assert result.stdout.strip() == "False", "using SamplingGrid imported JAX, so it is not extra-free"

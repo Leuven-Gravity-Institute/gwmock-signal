@@ -61,10 +61,15 @@ tree (`src/gwmock_signal/`).
 `gwmock_signal.__init__`. Prefer these imports in application code; submodule
 paths are stable but longer.
 
-Resolution is lazy, so importing the package does not import JAX. Only touching
-one of the **On device** symbols loads
-[`gwmock_signal.jax_batch`](../user_guide/gpu-batched-simulation.md), and those
-require the `[jax]` extra to _run_.
+Resolution is lazy: each symbol imports its own implementation module on first
+access, so `import gwmock_signal` does not import JAX.
+
+The **Batched** symbols come from
+[`gwmock_signal.jax_batch`](../user_guide/gpu-batched-simulation.md) and need
+the `[jax]` extra to _run_, as does `RippleBackend`; without it, generating a
+waveform raises an `ImportError` naming the install command. `SamplingGrid` is
+pure NumPy — it is the lattice contract the batched path aligns to, and it is
+usable on its own without the extra.
 
 | Symbol                          | Category     | Reference                         |
 | ------------------------------- | ------------ | --------------------------------- |
@@ -79,11 +84,11 @@ require the `[jax]` extra to _run_.
 | `WaveformBackend`               | Waveform     | [Waveform API](waveform/)         |
 | `LALSimulationBackend`          | Waveform     | [Waveform API](waveform/)         |
 | `RippleBackend`                 | Waveform     | [Waveform API](waveform/)         |
-| `simulate_cbc_catalogue`        | On device    | [Waveform API](waveform/)         |
-| `simulate_cbc_batch`            | On device    | [Waveform API](waveform/)         |
-| `assemble_segments`             | On device    | [Waveform API](waveform/)         |
-| `BatchedDetectorStrain`         | On device    | [Waveform API](waveform/)         |
-| `SamplingGrid`                  | On device    | [Waveform API](waveform/)         |
+| `simulate_cbc_catalogue`        | Batched      | [Waveform API](waveform/)         |
+| `simulate_cbc_batch`            | Batched      | [Waveform API](waveform/)         |
+| `assemble_segments`             | Batched      | [Waveform API](waveform/)         |
+| `BatchedDetectorStrain`         | Batched      | [Waveform API](waveform/)         |
+| `SamplingGrid`                  | Grid         | [Waveform API](waveform/)         |
 | `resolve_simulator_backend`     | Registry     | [Registry API](registry/)         |
 | `register_simulator_backend`    | Registry     | [Registry API](registry/)         |
 | `list_registered_source_types`  | Registry     | [Registry API](registry/)         |
