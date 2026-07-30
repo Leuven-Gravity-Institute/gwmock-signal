@@ -70,6 +70,26 @@ _REQUIRED_RIPPLE_INTERFACE: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+def _optional_module(name: str) -> object | None:
+    """Import *name*, returning ``None`` if it is absent.
+
+    Submodules are imported through this rather than inside the "is ripple installed?" try block.
+    Otherwise a ripple that exists but has renamed or moved ``conversions``/``constants`` raises
+    ``ImportError`` there, is reported as *not installed*, and never reaches the interface guard --
+    which defeats the guard on exactly the kind of change it exists to describe.
+
+    Args:
+        name: Dotted module path.
+
+    Returns:
+        The imported module, or ``None`` if it could not be imported.
+    """
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return None
+
+
 def _require_ripple_interface(modules: Mapping[str, object]) -> None:
     """Reject an installed ripple that does not expose what this backend calls.
 
@@ -108,36 +128,44 @@ def _build_ripple_waveform(
     *,
     f_ref: float,
     options: Mapping[str, object],
+    version: str = "unknown",
 ) -> object:
-    """Construct a ripple waveform, turning a rejected option into a compatibility error.
+    """Construct a ripple waveform, adding context if the installed ripple refuses the arguments.
 
     ``_ALLOWED_WAVEFORM_ARGUMENTS`` is a static whitelist, and the ripple dependency is
     deliberately unbounded above, so a release that renames or drops an option would let it pass
     validation here and then raise a bare ``TypeError`` from inside ripple. The real construction
-    is wrapped instead of inspecting a signature: inspection needs a throwaway instance, and would
-    have to skip the check silently whenever that instance could not be built.
+    is wrapped rather than the signature inspected: inspection needs a throwaway instance, and
+    would have to skip the check silently whenever that instance could not be built.
+
+    The wording deliberately says the construction *failed* rather than that the arguments were
+    rejected. ``TypeError`` is not exclusively an argument-mismatch signal -- a model's
+    ``__init__`` can raise it for unrelated reasons -- so the message reports what was attempted
+    and leaves the chained original to say why.
 
     Args:
         waveform_factory: ``ripplegw.waveform``.
         approximant: The model to construct.
         f_ref: Reference frequency.
         options: Extra constructor options, already whitelisted for this approximant.
+        version: Installed ripple version, quoted in the error because it is the actionable part.
 
     Returns:
         The constructed waveform, callable as ``wf(frequencies, params)``.
 
     Raises:
-        RuntimeError: If the installed ripple rejects the arguments.
+        RuntimeError: If constructing the model raises ``TypeError``.
     """
     try:
         return waveform_factory(approximant, f_ref=f_ref, **dict(options))
     except TypeError as exc:
+        listed = sorted(options) or "no extra options"
         raise RuntimeError(
-            f"The installed ripplegw rejected the constructor arguments for {approximant} "
-            f"(f_ref plus {sorted(options) or 'no extra options'}): {exc}. This backend "
-            f"whitelists those options statically and the ripplegw dependency is intentionally "
-            f"unbounded above, so an option renamed or removed upstream surfaces here rather than "
-            f"as a bare TypeError inside ripple."
+            f"ripplegw {version} failed to construct {approximant} with f_ref plus {listed}: "
+            f"{exc}. This backend whitelists those options statically and the ripplegw dependency "
+            f"is intentionally unbounded above, so an option renamed or removed upstream surfaces "
+            f"here rather than as a bare TypeError inside ripple. If the chained error is "
+            f"unrelated to the arguments, it comes from the model itself."
         ) from exc
 
 
@@ -232,11 +260,17 @@ def _batched_polarization_kernel(
     _require_ripple_interface(
         {
             "ripplegw": ripplegw,
-            "ripplegw.conversions": importlib.import_module("ripplegw.conversions"),
-            "ripplegw.constants": importlib.import_module("ripplegw.constants"),
+            "ripplegw.conversions": _optional_module("ripplegw.conversions"),
+            "ripplegw.constants": _optional_module("ripplegw.constants"),
         }
     )
-    waveform = _build_ripple_waveform(ripplegw.waveform, approximant, f_ref=f_ref, options=dict(waveform_arguments))
+    waveform = _build_ripple_waveform(
+        ripplegw.waveform,
+        approximant,
+        f_ref=f_ref,
+        options=dict(waveform_arguments),
+        version=getattr(ripplegw, "__version__", "unknown"),
+    )
 
     def _one(frequencies: object, in_band: object, event: dict) -> tuple:
         polarizations = waveform(frequencies, event)
@@ -310,10 +344,12 @@ class RippleBackend(WaveformBackend):
             self._jax = importlib.import_module("jax")
             self._jnp = importlib.import_module("jax.numpy")
             self._ripplegw = importlib.import_module("ripplegw")
-            self._conversions = importlib.import_module("ripplegw.conversions")
-            self._constants = importlib.import_module("ripplegw.constants")
         except ImportError as exc:
             raise ImportError(_RIPPLE_IMPORT_ERROR) from exc
+        # Not in the try above: a missing submodule means ripple is installed but *different*,
+        # which is the guard's message to give, not "ripple is not installed".
+        self._conversions = _optional_module("ripplegw.conversions")
+        self._constants = _optional_module("ripplegw.constants")
         _require_ripple_interface(
             {
                 "ripplegw": self._ripplegw,
@@ -725,6 +761,7 @@ class RippleBackend(WaveformBackend):
             approximant,
             f_ref=resolved.f_ref,
             options=resolved.waveform_arguments,
+            version=getattr(self._ripplegw, "__version__", "unknown"),
         )
         polarizations = waveform(freqs, ripple_params)
 

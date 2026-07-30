@@ -452,7 +452,6 @@ def test_ripple_exposes_the_interface_the_backend_calls() -> None:
     opposite of the point of leaving the dependency unbounded above.
     """
     pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
-    import importlib
 
     from gwmock_signal.waveform.backends.ripple import _REQUIRED_RIPPLE_INTERFACE
 
@@ -481,7 +480,6 @@ def test_incompatible_ripple_is_rejected_when_the_backend_is_constructed(monkeyp
     The module is patched so construction itself has to raise.
     """
     pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
-    import importlib
 
     from gwmock_signal.waveform.backends import ripple as ripple_module
 
@@ -504,6 +502,32 @@ def test_incompatible_ripple_is_rejected_when_the_backend_is_constructed(monkeyp
     with pytest.raises(RuntimeError, match=r"9\.9\.9") as raised:
         ripple_module.RippleBackend()
     assert "ripplegw.waveform" in str(raised.value)
+
+
+def test_a_renamed_submodule_reaches_the_guard_not_the_not_installed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ripple that exists but has moved ``conversions`` must be described by the guard.
+
+    The submodule imports used to sit inside the same ``try`` that turns any ``ImportError`` into
+    "ripple is not installed". A release that renamed or relocated ``ripplegw.conversions`` was
+    therefore reported as a missing installation, and the guard never ran -- defeating it on
+    exactly the kind of change it exists to describe.
+    """
+    pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
+
+    from gwmock_signal.waveform.backends import ripple as ripple_module
+
+    real_import = importlib.import_module
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "ripplegw.conversions":
+            raise ImportError("No module named 'ripplegw.conversions'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(ripple_module.importlib, "import_module", _fake_import)
+    with pytest.raises(RuntimeError, match=r"ripplegw\.conversions\.ms_to_Mc_eta"):
+        ripple_module.RippleBackend()
 
 
 def test_the_guard_lists_only_what_is_actually_missing() -> None:
@@ -534,38 +558,79 @@ def test_a_rejected_constructor_option_becomes_a_compatibility_error() -> None:
     """A whitelisted option the installed ripple refuses must not surface as a bare TypeError.
 
     The whitelist is static and the dependency is unbounded above, so this is the path a renamed
-    upstream option takes.
+    upstream option takes. The installed version is asserted to appear, since that is the
+    actionable part of the message; the wording says the construction *failed* rather than that
+    the arguments were rejected, because ``TypeError`` is not exclusively an argument-mismatch
+    signal.
     """
     from gwmock_signal.waveform.backends.ripple import _build_ripple_waveform
 
     def _factory(name: str, **config: object) -> object:
         raise TypeError(f"__init__() got an unexpected keyword argument 'no_taper' for {name}")
 
-    with pytest.raises(RuntimeError, match="rejected the constructor arguments") as raised:
-        _build_ripple_waveform(_factory, "IMRPhenomD_NRTidalv2", f_ref=20.0, options={"no_taper": True})
+    with pytest.raises(RuntimeError, match="failed to construct") as raised:
+        _build_ripple_waveform(
+            _factory,
+            "IMRPhenomD_NRTidalv2",
+            f_ref=20.0,
+            options={"no_taper": True},
+            version="9.9.9",
+        )
     message = str(raised.value)
+    assert "9.9.9" in message
     assert "IMRPhenomD_NRTidalv2" in message
     assert "no_taper" in message
+
+
+def test_a_construction_failure_reports_the_version_even_without_options() -> None:
+    """The no-extra-options path must still name the version and the approximant.
+
+    Both call sites forward the installed version, and most calls carry no extra options at all,
+    so the common case needs the same context as the whitelisted-option case.
+    """
+    from gwmock_signal.waveform.backends.ripple import _build_ripple_waveform
+
+    def _factory(name: str, **config: object) -> object:
+        raise TypeError("f_ref is no longer a constructor argument")
+
+    with pytest.raises(RuntimeError, match="failed to construct") as raised:
+        _build_ripple_waveform(_factory, "IMRPhenomD", f_ref=20.0, options={}, version="9.9.9")
+    message = str(raised.value)
+    assert "9.9.9" in message
+    assert "IMRPhenomD" in message
+    assert "no extra options" in message
 
 
 def test_ripple_waveform_factory_accepts_the_name_positionally_and_forwards_config() -> None:
     """``waveform(name, f_ref=...)`` is the exact call shape both call sites use.
 
-    Checked by *calling* it rather than only inspecting parameter kinds, and by confirming the
-    configuration reaches the constructed object -- a factory that accepted ``f_ref`` and dropped
-    it would pass a signature-only check while silently ignoring the reference frequency.
+    ``f_ref`` is checked by its *effect* rather than by looking for it on the constructed object.
+    An earlier version scanned ``vars()`` for a Python float, which a compatible ripple could fail
+    merely by storing the value as a JAX scalar or under a different attribute name. Two different
+    reference frequencies must give different phasing; if the factory silently ignored ``f_ref``,
+    the two evaluations would agree.
     """
     ripplegw = pytest.importorskip("ripplegw", reason="ripple (JAX) not installed")
     pytest.importorskip("jax", reason="jax not installed")
 
-    constructed = ripplegw.waveform("IMRPhenomD", f_ref=31.0)
-    assert constructed is not None
-    stored = [
-        value
-        for value in vars(constructed).values()
-        if isinstance(value, (int, float)) and float(value) == pytest.approx(31.0)
-    ]
-    assert stored, f"f_ref=31.0 was accepted but is not stored on the waveform: {sorted(vars(constructed))}"
+    frequencies = np.arange(20.0, 60.0, 1.0)
+    parameters = {
+        "M_c": 25.0,
+        "eta": 0.24,
+        "s1_z": 0.1,
+        "s2_z": -0.05,
+        "d_L": 400.0,
+        "phase_c": 0.3,
+        "iota": 0.6,
+    }
+    at_20 = np.asarray(ripplegw.waveform("IMRPhenomD", f_ref=20.0)(frequencies, parameters)["p"])
+    at_50 = np.asarray(ripplegw.waveform("IMRPhenomD", f_ref=50.0)(frequencies, parameters)["p"])
+
+    assert at_20.shape == frequencies.shape
+    # atol=0: strain is ~1e-23, so the default atol would call any two of these arrays equal.
+    assert not np.allclose(at_20, at_50, rtol=1e-9, atol=0.0), (
+        "f_ref was accepted but had no effect on the waveform, so configuration is not forwarded"
+    )
 
 
 @pytest.mark.parametrize(
