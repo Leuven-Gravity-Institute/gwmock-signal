@@ -36,7 +36,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.injection import inject_strains_sequential
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.geometry import reconstructed_geometry
+from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
     project_polarizations_fd,
@@ -125,6 +125,39 @@ _WHOLE_SAMPLE_TOLERANCE = 1e-6
 
 #: Distinct projection-kernel configurations kept compiled. Each holds one XLA executable.
 _KERNEL_CACHE_SIZE = 32
+
+
+def _resolve_detector_specs(
+    detector_names: Sequence[DetectorSpec],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split detector specifications into output channel names and LAL lookup keys.
+
+    Thin wrapper over :func:`~gwmock_signal.projection.geometry.resolve_detectors` that returns
+    tuples, because the keys are used as ``lru_cache`` arguments for the compiled kernels and the
+    names go into a frozen dataclass -- both need to be hashable.
+
+    Args:
+        detector_names: Built-in LAL interferometer codes and/or ``CustomDetector`` instances.
+
+    Returns:
+        ``(output_names, lookup_keys)``, parallel and in the order given.
+
+    Raises:
+        ValueError: If no detectors are given, or a name is duplicated -- either would silently
+            produce a strain array whose detector axis does not correspond to the requested
+            channels.
+    """
+    resolved = resolve_detectors(detector_names)
+    if not resolved:
+        raise ValueError("At least one detector is required.")
+    output_names = tuple(name for name, _ in resolved)
+    if len(set(output_names)) != len(output_names):
+        duplicated = sorted({name for name in output_names if output_names.count(name) > 1})
+        raise ValueError(
+            f"Detector names must be unique; got duplicates {duplicated}. Two CustomDetector "
+            f"instances may share a geometry but not a name, since the name keys the output."
+        )
+    return output_names, tuple(key for _, key in resolved)
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
@@ -351,7 +384,7 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
 
 def simulate_cbc_batch(  # noqa: PLR0913
     approximant: str,
-    detector_names: Sequence[str],
+    detector_names: Sequence[DetectorSpec],
     *,
     sampling_frequency: float,
     minimum_frequency: float,
@@ -372,7 +405,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
     Args:
         approximant: A supported ripple approximant name.
-        detector_names: Detector codes (e.g. ``"H1"``, ``"L1"``).
+        detector_names: Built-in LAL interferometer codes (e.g. ``"H1"``, ``"L1"``) and/or
+            :class:`~gwmock_signal.detector.CustomDetector` instances. A custom detector is
+            resolved through the prefix it registers with LAL, but its output channel is keyed
+            by its own ``name``.
         sampling_frequency: Sample rate in Hz.
         minimum_frequency: Low-frequency cutoff in Hz.
         parameters: Mapping of **canonical** gwmock-pop parameter names (no aliases)
@@ -406,6 +442,11 @@ def simulate_cbc_batch(  # noqa: PLR0913
     import jax.numpy as jnp  # noqa: PLC0415
 
     backend = backend or RippleBackend()
+    # Resolved before anything expensive: an unknown detector should fail here, not after a
+    # catalogue has been generated. The two halves are used for different things -- lookup_keys
+    # index LAL's registry, output_names key the result -- and conflating them is what limited
+    # this path to built-in interferometer codes.
+    output_names, lookup_keys = _resolve_detector_specs(detector_names)
 
     # Before generating anything: the estimate includes the waveform-generation buffers, so a
     # check placed after generation could never fire for a batch that exhausts memory *during*
@@ -414,7 +455,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     # handles), so it can be sized up front.
     _check_batch_fits(
         len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
-        len(tuple(detector_names)),
+        len(lookup_keys),
         _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency),
         earth_rotation=earth_rotation,
     )
@@ -451,7 +492,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     if earth_rotation:
         strain = _project_rotating(
             fd,
-            detector_names,
+            lookup_keys,
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
@@ -466,7 +507,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
         )
         return BatchedDetectorStrain(
             strain=strain,
-            detector_names=tuple(detector_names),
+            detector_names=output_names,
             coa_time=coa_time,
             epoch=epoch,
             sampling_frequency=sampling_frequency,
@@ -485,8 +526,8 @@ def simulate_cbc_batch(  # noqa: PLR0913
     project_batch = _static_projection_kernel(n_samples, sampling_frequency, merger_index)
 
     per_detector = []
-    for name in detector_names:
-        response, location = reconstructed_geometry(name)
+    for key in lookup_keys:
+        response, location = reconstructed_geometry(key)
         f_plus, f_cross = antenna_pattern(
             response,
             gmst,
@@ -511,7 +552,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples)
     return BatchedDetectorStrain(
         strain=strain,
-        detector_names=tuple(detector_names),
+        detector_names=output_names,
         coa_time=coa_time,
         epoch=epoch,
         sampling_frequency=sampling_frequency,
@@ -522,7 +563,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
 def _project_rotating(  # noqa: PLR0913
     fd: FrequencyDomainPolarizations,
-    detector_names: Sequence[str],
+    lookup_keys: Sequence[str],
     *,
     n_samples: int,
     sampling_frequency: float,
@@ -542,7 +583,9 @@ def _project_rotating(  # noqa: PLR0913
 
     Args:
         fd: Frequency-domain polarizations from the ripple backend.
-        detector_names: LAL detector prefixes.
+        lookup_keys: LAL registry keys, one per detector -- a built-in interferometer code, or
+            the prefix a ``CustomDetector`` registered itself under. Not the output channel
+            names, which for a custom detector differ.
         n_samples: Samples per event segment.
         sampling_frequency: Sample rate in Hz.
         merger_index: Sample index coalescence is rolled to.
@@ -569,8 +612,8 @@ def _project_rotating(  # noqa: PLR0913
     # Checked on the host, where these are concrete: inside the jitted kernel the geometry and
     # the shift are traced, so the padding assumptions cannot be validated there.
     require_shift_within_padding(alignment_shift, name="alignment_shift")
-    for detector in detector_names:
-        require_terrestrial_location(reconstructed_geometry(detector)[1], name=f"location of {detector}")
+    for key in lookup_keys:
+        require_terrestrial_location(reconstructed_geometry(key)[1], name=f"location of {key}")
 
     gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
     gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
@@ -583,8 +626,8 @@ def _project_rotating(  # noqa: PLR0913
     project_batch = _rotating_projection_kernel(n_samples, sampling_frequency)
 
     per_detector = []
-    for name in detector_names:
-        response, location = reconstructed_geometry(name)
+    for key in lookup_keys:
+        response, location = reconstructed_geometry(key)
         per_detector.append(
             project_batch(
                 plus_td,
@@ -896,7 +939,7 @@ def _superpose_on_lattice(
 
 def simulate_cbc_catalogue(  # noqa: PLR0913
     approximant: str,
-    detector_names: Sequence[str],
+    detector_names: Sequence[DetectorSpec],
     *,
     sampling_frequency: float,
     minimum_frequency: float,
@@ -933,7 +976,9 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
 
     Args:
         approximant: A supported ripple approximant name.
-        detector_names: Detector codes (e.g. ``"H1"``, ``"L1"``).
+        detector_names: Built-in LAL interferometer codes (e.g. ``"H1"``, ``"L1"``) and/or
+            :class:`~gwmock_signal.detector.CustomDetector` instances, as for
+            :func:`simulate_cbc_batch`.
         sampling_frequency: Sample rate in Hz.
         minimum_frequency: Low-frequency cutoff in Hz.
         parameters: Canonical catalogue parameters as struct-of-arrays (see
@@ -983,6 +1028,10 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         raise ValueError("chunk_size must be >= 1")
 
     backend = backend or RippleBackend()
+    # Resolved once here purely so an unusable detector is reported before any generation. Each
+    # chunk resolves again inside simulate_cbc_batch, which is cheap: a CustomDetector caches its
+    # LAL detector on first use, and a built-in code is a dictionary lookup.
+    _resolve_detector_specs(detector_names)
     n_segments = int(np.ceil((end_time - start_time) / segment_duration))
     segment_start_times = start_time + np.arange(n_segments) * segment_duration
 

@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import cast
 
 import numpy as np
 from astropy import constants
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-from gwmock_signal.projection.geometry import get_lal_detector, reconstructed_geometry
+from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
@@ -31,13 +31,6 @@ from gwmock_signal.projection.resampling import (
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy
-
-if TYPE_CHECKING:
-    from gwmock_signal.detector import CustomDetector
-else:
-    CustomDetector = Any
-
-DetectorSpec = str | CustomDetector
 
 
 def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tuple[GWpyTimeSeries, GWpyTimeSeries]:
@@ -140,24 +133,10 @@ def _antenna_pattern_lal(
 def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
     """Resolve detector names to one LAL lookup key per output channel.
 
-    Accepts either built-in LAL IFO code strings or
-    :class:`~gwmock_signal.detector.CustomDetector` instances.
+    Delegates to :func:`~gwmock_signal.projection.geometry.resolve_detectors` so this path and
+    the device path cannot diverge on what a detector specification means.
     """
-    out: list[tuple[str, str]] = []
-
-    for raw in detector_specs:
-        if isinstance(raw, str):
-            name = str(raw)
-            get_lal_detector(name)
-            out.append((name, name))
-        else:
-            from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
-
-            if not isinstance(raw, CustomDetector):
-                raise TypeError(f"Unsupported detector specification type: {type(raw).__name__}")
-            detector = raw.to_lal()
-            out.append((raw.name, detector.frDetector.prefix))
-    return out
+    return resolve_detectors(detector_specs)
 
 
 def project_polarizations_to_network(  # noqa: PLR0913

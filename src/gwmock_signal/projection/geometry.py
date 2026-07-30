@@ -22,6 +22,7 @@ constants instead of re-deriving them (a single source of truth).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
 from typing import cast
 
@@ -29,6 +30,70 @@ import lal
 import numpy as np
 from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
+
+from gwmock_signal.detector import CustomDetector
+
+#: How a caller names a detector: a built-in LAL interferometer code, or an explicit geometry.
+#: Defined here rather than in either projection module, so both paths mean the same thing by it.
+#: ``CustomDetector`` is imported at runtime, not under ``TYPE_CHECKING``: a PEP 695 alias is
+#: lazily evaluated, so a type-only import leaves ``DetectorSpec.__value__`` raising NameError for
+#: anything that introspects it. ``gwmock_signal.detector`` imports only stdlib and lal, and the
+#: package ``__init__`` resolves submodules lazily, so there is no cycle in either direction.
+type DetectorSpec = str | CustomDetector
+
+
+def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
+    """Resolve detector specifications to ``(output_name, lal_lookup_key)`` pairs.
+
+    Both the NumPy and the device projection paths need the same split, because the two are not
+    interchangeable: a :class:`~gwmock_signal.detector.CustomDetector` is *looked up* by the
+    two-character prefix it registers with LAL, but its output channel must be keyed by its own
+    ``name``. Using one string for both -- as the device path did -- silently restricts that path
+    to built-in interferometer codes, which is why ET presets could not reach it at all.
+
+    Lives here rather than in either projection module so both derive the mapping from one
+    implementation, consistent with this module being the single point of contact with LAL's
+    registry.
+
+    Args:
+        detector_specs: Built-in LAL interferometer codes and/or ``CustomDetector`` instances.
+
+    Returns:
+        One ``(output_name, lal_lookup_key)`` pair per entry, in the order given. For a built-in
+        code the two are the same string.
+
+    Raises:
+        TypeError: If an entry is neither a string nor a ``CustomDetector``.
+        ValueError: If a string is not a detector LAL knows about, or if two entries resolve to
+            the same LAL detector.
+    """
+    resolved: list[tuple[str, str]] = []
+    for raw in detector_specs:
+        if isinstance(raw, str):
+            name = str(raw)
+            # Resolved eagerly so an unknown code fails here, with the other detectors' names
+            # still available for the message, rather than deep inside a jitted kernel.
+            get_lal_detector(name)
+            resolved.append((name, name))
+        elif isinstance(raw, CustomDetector):
+            resolved.append((raw.name, raw.to_lal().frDetector.prefix))
+        else:
+            raise TypeError(f"Unsupported detector specification type: {type(raw).__name__}")
+
+    # Distinct channels must not share a lookup key: the network would then hold one detector
+    # twice under two names. This is also the observable form of a prefix-registration race --
+    # ``CustomDetector.to_lal`` checks and registers without synchronisation, so two threads can
+    # both claim one explicit prefix -- which would otherwise give two channels the same geometry
+    # with no error at all.
+    keys = [key for _, key in resolved]
+    duplicated = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicated:
+        colliding = {key: [name for name, other in resolved if other == key] for key in duplicated}
+        raise ValueError(
+            f"Detectors resolve to the same LAL detector: {colliding}. Each channel must be a "
+            f"distinct detector; a CustomDetector and its own registered prefix are the same one."
+        )
+    return resolved
 
 
 def get_lal_detector(prefix: str) -> lal.Detector:
@@ -41,34 +106,69 @@ def get_lal_detector(prefix: str) -> lal.Detector:
         ) from exc
 
 
-@cache
 def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
     """Return detector response and location reconstructed from one LAL detector.
+
+    Args:
+        prefix: LAL registry key -- a built-in interferometer code, or the prefix a
+            :class:`~gwmock_signal.detector.CustomDetector` registered itself under.
 
     Returns:
         A ``(response, location)`` tuple where ``response`` is the 3x3 detector
         response tensor and ``location`` is the Earth-fixed position (metres).
-        Results are cached per detector prefix.
+
+    Raises:
+        ValueError: If LAL does not know the prefix.
     """
-    fr_detector = get_lal_detector(prefix).frDetector
+    # Cached on the geometry itself rather than on the prefix. LAL's registry is process-global
+    # and mutable, so a prefix is not a stable identity: freeing one and re-registering it for a
+    # detector elsewhere on Earth would otherwise return the first detector's tensor for the
+    # second, silently and in a way that still looks like a plausible network. The test harness
+    # used to clear this cache after any test that registered a detector, which is how the hazard
+    # is known to be real; that hook is gone because keying on the geometry removes the need.
+    return _geometry_from_fields(_defining_fields(get_lal_detector(prefix).frDetector))
+
+
+def _defining_fields(fr_detector: object) -> tuple[float, ...]:
+    """Return the values that fully determine a detector's response and location."""
+    return (
+        float(fr_detector.vertexLongitudeRadians),
+        float(fr_detector.vertexLatitudeRadians),
+        float(fr_detector.vertexElevation),
+        float(fr_detector.xArmAzimuthRadians),
+        float(fr_detector.yArmAzimuthRadians),
+        float(fr_detector.xArmAltitudeRadians),
+        float(fr_detector.yArmAltitudeRadians),
+    )
+
+
+@cache
+def _geometry_from_fields(fields: tuple[float, ...]) -> tuple[np.ndarray, np.ndarray]:
+    """Reconstruct ``(response, location)`` from the defining geodetic fields.
+
+    Args:
+        fields: The tuple returned by :func:`_defining_fields`.
+
+    Returns:
+        A ``(response, location)`` tuple where ``response`` is the 3x3 detector response
+        tensor and ``location`` is the Earth-fixed position in metres.
+    """
+    longitude, latitude, elevation, x_azimuth, y_azimuth, x_altitude, y_altitude = fields
 
     arm_response = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
-    rotation_longitude = rotation_matrix(-fr_detector.vertexLongitudeRadians * units.rad, "z")
-    rotation_latitude = rotation_matrix(-(np.pi / 2.0 - fr_detector.vertexLatitudeRadians) * units.rad, "y")
+    rotation_longitude = rotation_matrix(-longitude * units.rad, "z")
+    rotation_latitude = rotation_matrix(-(np.pi / 2.0 - latitude) * units.rad, "y")
 
     responses: list[np.ndarray] = []
-    for azimuth, altitude in (
-        (fr_detector.yArmAzimuthRadians, fr_detector.yArmAltitudeRadians),
-        (fr_detector.xArmAzimuthRadians, fr_detector.xArmAltitudeRadians),
-    ):
+    for azimuth, altitude in ((y_azimuth, y_altitude), (x_azimuth, x_altitude)):
         rotation_azimuth = rotation_matrix(azimuth * units.rad, "z")
         rotation_altitude = rotation_matrix(-altitude * units.rad, "y")
         rotation = rotation_longitude @ rotation_latitude @ rotation_azimuth @ rotation_altitude
         responses.append(np.asarray(rotation @ arm_response @ rotation.T / 2.0, dtype=float))
 
     location = coordinates.EarthLocation.from_geodetic(
-        fr_detector.vertexLongitudeRadians * units.rad,
-        fr_detector.vertexLatitudeRadians * units.rad,
-        height=fr_detector.vertexElevation * units.meter,
+        longitude * units.rad,
+        latitude * units.rad,
+        height=elevation * units.meter,
     )
     return responses[0] - responses[1], np.array([location.x.value, location.y.value, location.z.value], dtype=float)
