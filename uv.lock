@@ -754,7 +754,7 @@ requires-dist = [
     { name = "lalsuite", specifier = ">=7.23" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.2.1,<0.3" },
+    { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.3" },
     { name = "typer", specifier = ">=0.16.0" },
 ]
 provides-extras = ["jax", "pycbc", "sgwb"]
@@ -2354,15 +2354,15 @@ wheels = [
 
 [[package]]
 name = "ripplegw"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jax" },
     { name = "jaxtyping" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2e/ec/e6f6a67c5af1f1ba7f227d73377a1b7ef51441c9ee35fb584b2836a0cc58/ripplegw-0.2.1.tar.gz", hash = "sha256:37cd84f30be7a8cf71a6229a1e198d33976ac77c12d79fb06fdbba962e2fd429", size = 473283, upload-time = "2026-06-26T17:48:46.753Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/4b/0497feefa9e502e717be8ac797a401eac2c9eb916bc682d98aeef3a97d91/ripplegw-0.3.0.tar.gz", hash = "sha256:9e2a415a94bf4aaa3d90a2426298cda4c0c1feaaecd8468745dcabc54abfb3d2", size = 479776, upload-time = "2026-07-29T10:33:36.347Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/7e/e41edb149a71d7b6a978acf7d333ccee9c09d629e5d1f28c125ee8d68eda/ripplegw-0.2.1-py3-none-any.whl", hash = "sha256:d653bcf1158d49d9213df0a646e32f0c842ff1cecf23966da2a96cf3415671e2", size = 184577, upload-time = "2026-06-26T17:48:45.406Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/cb/b9573f0ceae67274946ab633060053d7509d0d2f833f5f306aa593c13d4b/ripplegw-0.3.0-py3-none-any.whl", hash = "sha256:2aa86258b3b1714a92602d02c5edb58e7305b73bcd4136f5121345414cb7e302", size = 224968, upload-time = "2026-07-29T10:33:34.881Z" },
 ]
 
 [[package]]
