@@ -20,7 +20,11 @@ from typing import Any
 
 from gwmock_signal.version import __version__
 
+#: Public name -> (module, attribute). Resolved lazily by ``__getattr__`` so the optional ``[jax]``
+#: dependency stays optional: importing this package must not import JAX, only touching one of the
+#: device symbols may.
 _PUBLIC_SYMBOLS = {
+    "BatchedDetectorStrain": ("gwmock_signal.jax_batch", "BatchedDetectorStrain"),
     "CBCSimulator": ("gwmock_signal.simulator", "CBCSimulator"),
     "CustomDetector": ("gwmock_signal.detector", "CustomDetector"),
     "DetectorStrainStack": ("gwmock_signal.multichannel.stack", "DetectorStrainStack"),
@@ -37,6 +41,14 @@ _PUBLIC_SYMBOLS = {
     "optimal_snr": ("gwmock_signal.snr._pycbc", "optimal_snr"),
     "register_simulator_backend": ("gwmock_signal.registry", "register_simulator_backend"),
     "resolve_simulator_backend": ("gwmock_signal.registry", "resolve_simulator_backend"),
+    # The on-device (GPU) entry points. Exported so a consumer -- gwmock's orchestration in
+    # particular -- can reach the batched path without importing a submodule, which would tie it to
+    # an internal layout rather than to an advertised API.
+    "SamplingGrid": ("gwmock_signal.sampling_grid", "SamplingGrid"),
+    "assemble_segments": ("gwmock_signal.jax_batch", "assemble_segments"),
+    "recommend_chunk_size": ("gwmock_signal.jax_batch", "recommend_chunk_size"),
+    "simulate_cbc_batch": ("gwmock_signal.jax_batch", "simulate_cbc_batch"),
+    "simulate_cbc_catalogue": ("gwmock_signal.jax_batch", "simulate_cbc_catalogue"),
 }
 
 
