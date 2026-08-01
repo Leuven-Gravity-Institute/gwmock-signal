@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -31,6 +32,33 @@ from gwmock_signal.projection.resampling import (
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy
+
+logger = logging.getLogger("gwmock_signal")
+
+#: Conservative fractional strain error per second of signal, for ``earth_rotation=False``.
+#:
+#: The constant-pattern branch evaluates the antenna pattern once, at the midpoint of the span it
+#: is given, so its error grows with how far Earth turns across that span.
+#:
+#: Measured against the rotating branch over 48 combinations of detector (H1, L1), sky position,
+#: polarization angle and frequency at a 300 s span, interior samples only: the worst per-sample
+#: deviation relative to peak grew at between 1.1e-5 and 2.9e-4 per second, median 5.9e-5. The
+#: spread is a factor of five, because how fast the antenna pattern turns depends on where the
+#: source sits relative to the detector's response. This is the **maximum** observed, so what it
+#: produces is an upper bound for a typical source rather than a prediction for a given one.
+_CONSTANT_PATTERN_ERROR_PER_SECOND = 2.9e-4
+
+#: Span beyond which ``earth_rotation=False`` is worth warning about, in seconds.
+#:
+#: Where the conservative rate above reaches one percent. That separates the cases cleanly in
+#: practice: a few-second compact-binary merger stays silent, a minutes-long inspiral does not.
+_CONSTANT_PATTERN_WARN_SECONDS = 30.0
+
+#: Estimated error above which a percentage stops meaning anything and saturation is named instead.
+#:
+#: The linear rate is a local model near the threshold. Extrapolated to a day it would claim more
+#: than 1000%, when the real deviation saturates around the signal amplitude itself.
+_CONSTANT_PATTERN_SATURATION = 0.3
 
 
 def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tuple[GWpyTimeSeries, GWpyTimeSeries]:
@@ -139,7 +167,43 @@ def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, s
     return resolve_detectors(detector_specs)
 
 
-def project_polarizations_to_network(  # noqa: PLR0913
+def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rotation: bool) -> None:
+    """Warn when ``earth_rotation=False`` is applied to a span long enough to matter.
+
+    Args:
+        time_array: Sample times of the polarizations being projected, in GPS seconds.
+        earth_rotation: The caller's setting; nothing is warned about when it is ``True``.
+    """
+    if earth_rotation:
+        return
+    span = float(time_array[-1] - time_array[0])
+    if span <= _CONSTANT_PATTERN_WARN_SECONDS:
+        return
+
+    estimate = span * _CONSTANT_PATTERN_ERROR_PER_SECOND
+    scale = (
+        f"up to about {100.0 * estimate:.0f}% of peak strain"
+        if estimate <= _CONSTANT_PATTERN_SATURATION
+        else "of order the signal amplitude itself"
+    )
+    logger.warning(
+        "earth_rotation=False evaluates the antenna pattern once, at the midpoint of the %.1f s "
+        "span given here, so the error grows with how far Earth turns across it -- %s. The "
+        "approximation is intended for signals short enough that the pattern is effectively "
+        "constant (below ~%.0f s). Two further consequences worth knowing: the result depends on "
+        "how the data was split into segments, because the midpoint does; and nothing in the "
+        "output reveals either effect. Use earth_rotation=True for a signal this long.",
+        span,
+        scale,
+        _CONSTANT_PATTERN_WARN_SECONDS,
+    )
+
+
+# PLR0915: this function was already at the 50-statement limit before the one-line call to
+# `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
+# the two projection branches that the compact-binary path depends on, which is not worth
+# the risk for a diagnostic; the warning body itself already lives in its own function.
+def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     polarizations: Mapping[str, GWpyTimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
@@ -194,6 +258,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
 
     time_array = cast(np.ndarray, hp.times.to_value())
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
+
+    _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
     hp_vals = hp.to_value()
     hc_vals = hc.to_value()
 
