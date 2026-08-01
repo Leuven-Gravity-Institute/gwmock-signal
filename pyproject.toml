@@ -140,6 +140,25 @@ convention = "google"
 # PLC0415: allow import statements not at the top level
 # PLR2004: allow magic values in the unit tests
 
+# TEMPORARY development pin. Remove when a ripplegw release contains the geocentre fix.
+#
+# `jax = ["ripplegw>=0.3"]` above is deliberately unbounded and stays that way: this table is
+# development-only and is NOT carried into the published wheel, so nobody installing
+# `gwmock-signal[jax]` from PyPI inherits a git dependency. (uv: "Sources are only respected by
+# uv. If another tool is used, only the definitions in the standard project tables will be used."
+# Build with `uv build --no-sources` to confirm that stays true.)
+#
+# Why it is needed: the continuous-wave backend generates polarizations at the *geocentre*, so the
+# existing projection route can add the detector delay and antenna pattern -- one projection
+# implementation for every source type rather than two. Released ripplegw returns NaN for every
+# sample at `det_location_m = (0, 0, 0)`; `arccos(lz / rd)` is 0/0 there. Fixed upstream in
+# GW-JAX-Team/ripple#141 (issue #140), pinned here to that commit until it is released.
+#
+# Removal: delete this table, run `uv lock`, and raise the floor in the `jax` extra to whichever
+# release carries the fix. The CW backend's own version guard should be updated in the same change.
+[tool.uv.sources]
+ripplegw = { git = "https://github.com/GW-JAX-Team/ripple.git", rev = "400afb4" }
+
 [[tool.uv.index]]
 name = "testpypi"
 url = "https://test.pypi.org/simple/"
