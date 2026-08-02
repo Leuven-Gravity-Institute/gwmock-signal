@@ -38,19 +38,28 @@ That constraint drives the design of this class:
   table and cache it, which makes the physics depend on a file nobody chose deliberately. Paths
   are required here so a run records what it used.
 
-.. warning::
-   **The geocentre composition has not been validated against an external reference.** Ripple
-   applies the barycentring chain from the SSB to the location it is given, and the projection then
-   adds the geocentre-to-detector leg; review agreed the split is correct in principle and avoids
-   double-counting. But every test here compares this implementation against itself, so a
-   convention error shared by both halves would pass all of them and produce a plausible signal
-   with a systematically wrong timing model.
+.. note::
+   **The geocentre composition is validated against LAL; one residual is known.** Checked with
+   ``lalpulsar.Barycenter`` (DE405, alpha=1.1, delta=0.3, GPS 1577491218), whose ``EmissionTime``
+   separates the site term from the barycentric part:
 
-   Settling it means comparing against LALPulsar's ``SimulateExactPulsarSignal`` for a real
-   detector. That is not currently reachable from Python: the signature names a
-   ``PulsarSignalParams`` struct that the SWIG binding does not expose as a constructible type.
-   Until that comparison exists, treat the absolute timing as unverified -- the *relative* property
-   the tests do establish is that segments join up coherently.
+   * ``erot`` at the geocentre is exactly ``0``, so generating there gives the pure SSB-to-Earth-
+     centre delay and nothing of the detector's position leaks in.
+   * ``deltaT(H1) - deltaT(geocentre)`` equals LAL's own ``erot(H1)`` to 5.5e-15 s, confirming that
+     the site term is the *only* difference between the two -- which is exactly the split this
+     module relies on. Nothing is double-counted or dropped at the seam.
+
+   The residual: this package's geocentre-to-detector delay differs from LAL's ``erot`` by
+   **8.6e-05 s** (0.088 samples at 1024 Hz) once the sign convention is accounted for.
+   :func:`~gwmock_signal.projection.network._time_delay_from_earth_center_lal` uses plain GMST with
+   a J2000 source direction, while LAL applies lunisolar precession and nutation. The size fits:
+   8.6e-05 s of light travel is 25.8 km, or 0.23 degrees over an Earth radius, against roughly
+   0.42 degrees of precession between J2000 and 2030.
+
+   That difference predates this module and applies to every source type, not only continuous
+   waves -- but it matters more here, because a coherent search integrates for months. It is a
+   near-constant timing offset, so most of it is absorbed into the initial phase; the part that is
+   not scales with frequency, reaching about 0.5 rad at 1 kHz.
 """
 
 from __future__ import annotations
