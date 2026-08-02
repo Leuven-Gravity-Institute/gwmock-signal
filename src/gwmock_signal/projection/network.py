@@ -201,6 +201,96 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     )
 
 
+def _project_rotating_on_device(  # noqa: PLR0913
+    hp: GWpyTimeSeries,
+    hc: GWpyTimeSeries,
+    detectors: Sequence[tuple[str, str]],
+    *,
+    time_array: np.ndarray,
+    right_ascension: float,
+    declination: float,
+    polarization_angle: float,
+    sinc_taps: int,
+    kaiser_beta: float,
+) -> dict[str, GWpyTimeSeries]:
+    """Run the rotating projection through the JAX primitive, one detector at a time.
+
+    The device function is the same algorithm step for step -- per-sample delay, per-sample
+    antenna pattern, one resampling of the polarizations at the delayed times -- and both call
+    :func:`~gwmock_signal.projection.resampling.edge_padding` and the same kernel constants, so
+    neither can pad or window differently from the other.
+
+    Sidereal time is the one place the two differ in form rather than arithmetic. The host path
+    asks Astropy for GMST at every sample; the device path takes a host-computed anchor and rate
+    and extrapolates linearly, because Astropy cannot be traced. That is not an approximation at
+    these lengths: the linear model deviates by 6.4e-14 rad over 2048 s and 5.6e-14 rad over
+    8192 s, worth 1.2e-15 s of geocenter delay, which is orders below the kernel's own error.
+    See :mod:`~gwmock_signal.projection.sidereal` for the table.
+
+    Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,
+    where the arrays are per-event and independent; here there is one pair of polarizations and
+    a handful of detectors, so a vmap would add a compiled kernel per network size for a saving
+    on three iterations of a loop whose body is already the whole cost.
+    """
+    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    from gwmock_signal.projection.jax_projection import (  # noqa: PLC0415
+        project_polarizations_td_rotating,
+    )
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate  # noqa: PLC0415
+
+    # Refused rather than allowed to degrade. Without x64 every `jnp.asarray(..., float64)` in
+    # the device path truncates to float32 and the projection still returns a plausible-looking
+    # series -- measured 2.7e-03 of peak over 256 s and 1.8e-02 over 1024 s against this
+    # function's own host path, growing with the span because GPS times lose precision first.
+    # A warning would not do: nothing downstream can tell such a series from a correct one.
+    # Importing `ripplegw` happens to enable x64, which is why the compact-binary and
+    # continuous-wave paths have never hit this; that is an accident of an unrelated import.
+    if not jax.config.jax_enable_x64:
+        raise RuntimeError(
+            "backend='jax' requires JAX in 64-bit mode; call "
+            'jax.config.update("jax_enable_x64", True) before projecting. In 32-bit mode the '
+            "delays and sidereal angles lose the precision this projection depends on and the "
+            "result is wrong by of order a percent of peak while still looking like strain."
+        )
+
+    hp_vals = np.asarray(hp.value, dtype=float)
+    hc_vals = np.asarray(hc.value, dtype=float)
+    sampling_frequency = float(hp.sample_rate.value)
+    n_samples = len(hp_vals)
+    anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
+
+    strains: dict[str, GWpyTimeSeries] = {}
+    for name, prefix in detectors:
+        response, location = reconstructed_geometry(prefix)
+        # Same precondition the host path asserts, and for the same reason: the padding width
+        # assumes a terrestrial delay bound. Checked here too, because on the device `location`
+        # is a traced argument and the check could not run there.
+        require_terrestrial_location(location, name=f"location of {prefix}")
+        projected = project_polarizations_td_rotating(
+            hp_vals,
+            hc_vals,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            right_ascension=right_ascension,
+            declination=declination,
+            polarization_angle=polarization_angle,
+            gmst_start=float(np.atleast_1d(anchors)[0]),
+            gmst_rate=float(rate),
+            sinc_taps=sinc_taps,
+            kaiser_beta=kaiser_beta,
+        )
+        strains[name] = GWpyTimeSeries(
+            np.asarray(projected, dtype=float),
+            t0=float(time_array[0]),
+            sample_rate=hp.sample_rate,
+            name=name,
+        )
+    return strains
+
+
 # PLR0915: this function was already at the 50-statement limit before the one-line call to
 # `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
 # the two projection branches that the compact-binary path depends on, which is not worth
@@ -213,6 +303,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     declination: float,
     polarization_angle: float,
     earth_rotation: bool = True,
+    backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
 ) -> dict[str, GWpyTimeSeries]:
@@ -239,6 +330,15 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
         earth_rotation: If ``True``, evaluate antenna patterns at time-dependent
             GPS times (recommended for longer signals). If ``False``, use a single
             reference time at the segment midpoint for patterns and delays.
+        backend: Which implementation evaluates the ``earth_rotation=True`` branch.
+            ``"numpy"`` (the default) runs on the host. ``"jax"`` delegates to
+            :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating`,
+            which runs on whatever JAX backend is configured and is several times faster even
+            on a CPU because the whole per-sample kernel fuses into one compiled loop. The two
+            agree to 1e-10 of peak, pinned by ``test_rotating_projection_matches_numpy_path``;
+            the difference is floating-point reassociation, not a different model. Selected
+            rather than automatic: an implicit switch on whether JAX imports would make the
+            numerical output depend on what happens to be installed.
         sinc_taps: Taps in the band-limited resampling kernel used by the
             ``earth_rotation=True`` branch. More taps cost arithmetic and buy accuracy.
         kaiser_beta: Kaiser window shape parameter for that kernel.
@@ -249,9 +349,21 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     Raises:
         TypeError: If ``polarizations`` is not a mapping of GWpy series as required.
-        ValueError: If keys are missing, time grids disagree, or a detector name
-            is not recognized.
+        ValueError: If keys are missing, time grids disagree, a detector name is not
+            recognized, ``backend`` is unknown, or ``backend="jax"`` is combined with
+            ``earth_rotation=False``.
     """
+    if backend not in {"numpy", "jax"}:
+        raise ValueError(f"backend must be 'numpy' or 'jax', got {backend!r}.")
+    if backend == "jax" and not earth_rotation:
+        # The constant-pattern branch is a frequency-domain phase shift, and no device
+        # counterpart exists. Refused rather than silently served from the host path, which
+        # would report a backend that did not run.
+        raise ValueError(
+            "backend='jax' is only available with earth_rotation=True. The constant-pattern "
+            "branch applies one frequency-domain phase shift for the whole span and has no "
+            "device implementation; it is also cheap, being the branch that skips the resampler."
+        )
     hp, hc = _validate_polarizations(polarizations)
     normalized_names = [d if isinstance(d, str) else d.name for d in detector_names]
     if len(set(normalized_names)) != len(normalized_names):
@@ -282,6 +394,19 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     gha_array = gmst_array - right_ascension
     cosgha = np.cos(gha_array)
     singha = np.sin(gha_array)
+
+    if backend == "jax":
+        return _project_rotating_on_device(
+            hp,
+            hc,
+            detectors,
+            time_array=time_array,
+            right_ascension=right_ascension,
+            declination=declination,
+            polarization_angle=polarization_angle,
+            sinc_taps=sinc_taps,
+            kaiser_beta=kaiser_beta,
+        )
 
     for name, prefix in detectors:
         if earth_rotation:

@@ -423,3 +423,171 @@ class TestConstantPatternDurationWarning:
             self._project(4 * _CONSTANT_PATTERN_WARN_SECONDS, earth_rotation=True)
 
         assert "earth_rotation" not in caplog.text
+
+
+class TestTheDeviceBackend:
+    """``backend="jax"`` must be the same projection, and must refuse what it cannot serve."""
+
+    @pytest.fixture(autouse=True)
+    def _sixty_four_bit(self):
+        """Enable x64, which the device path requires and this module does not otherwise need.
+
+        Set here rather than at module import, the convention in the JAX-only test modules,
+        because most of this file tests the host path and should not depend on JAX being
+        installed at all. The flag is process-global and cannot be restored -- JAX rejects
+        flipping it once arrays exist -- but every other module that touches JAX enables it too,
+        so the suite is consistent either way.
+        """
+        jax = pytest.importorskip("jax")
+        jax.config.update("jax_enable_x64", True)
+
+    @staticmethod
+    def _polarizations(duration: float, sampling_frequency: float = 512.0):
+        n = int(duration * sampling_frequency)
+        t = np.arange(n) / sampling_frequency
+        return {
+            "plus": TimeSeries(1e-24 * np.cos(2 * np.pi * 20.0 * t), t0=1.4e9, sample_rate=sampling_frequency),
+            "cross": TimeSeries(1e-24 * np.sin(2 * np.pi * 20.0 * t), t0=1.4e9, sample_rate=sampling_frequency),
+        }
+
+    def test_it_reproduces_the_host_path(self):
+        """Same algorithm, so the two may differ only by floating-point reassociation.
+
+        Checked through this function rather than the primitive underneath, which
+        ``test_rotating_projection_matches_numpy_path`` already covers -- what is new here is the
+        dispatch: the geometry lookup, the sidereal anchor, and the series that comes back.
+
+        The span is 64 s, long enough that the linear sidereal model and the per-sample Astropy
+        one have somewhere to disagree, and short enough to keep the host reference affordable.
+        """
+        pytest.importorskip("jax")
+        polarizations = self._polarizations(64.0)
+        sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+        detectors = ["H1", "L1"]
+
+        host = project_polarizations_to_network(polarizations, detectors, earth_rotation=True, **sky)
+        device = project_polarizations_to_network(polarizations, detectors, earth_rotation=True, backend="jax", **sky)
+
+        for name in detectors:
+            peak = float(np.max(np.abs(host[name].value)))
+            assert peak > 0.0, "a null response would make the comparison below vacuous"
+            worst = float(np.max(np.abs(device[name].value - host[name].value))) / peak
+            assert worst < 1e-10, f"{name} differs from the host path by {worst:.3e} of peak"
+
+    def test_the_epoch_and_rate_survive_the_round_trip(self):
+        """A device path returning bare arrays could lose the time coordinate silently."""
+        pytest.importorskip("jax")
+        polarizations = self._polarizations(8.0)
+
+        device = project_polarizations_to_network(
+            polarizations,
+            ["H1"],
+            earth_rotation=True,
+            backend="jax",
+            right_ascension=1.3,
+            declination=-0.4,
+            polarization_angle=0.7,
+        )["H1"]
+
+        assert float(device.t0.value) == 1.4e9
+        assert float(device.sample_rate.value) == 512.0
+        assert len(device.value) == len(polarizations["plus"].value)
+
+    def test_the_device_primitive_is_the_thing_that_runs(self):
+        """Asserted directly, because no comparison can establish it.
+
+        A ``backend="jax"`` that quietly fell through to the host path would satisfy every
+        equivalence check in this class -- the two sides would be the same code. Mutating the
+        dispatch away leaves only this test failing, which is why it exists separately from the
+        agreement test rather than being folded into it.
+        """
+        pytest.importorskip("jax")
+        from gwmock_signal.projection import jax_projection
+
+        calls = []
+        original = jax_projection.project_polarizations_td_rotating
+
+        def _spy(*args, **kwargs):
+            calls.append(kwargs.get("n_samples"))
+            return original(*args, **kwargs)
+
+        with patch.object(jax_projection, "project_polarizations_td_rotating", _spy):
+            project_polarizations_to_network(
+                self._polarizations(4.0),
+                ["H1", "L1"],
+                earth_rotation=True,
+                backend="jax",
+                right_ascension=1.3,
+                declination=-0.4,
+                polarization_angle=0.7,
+            )
+
+        assert len(calls) == 2, f"expected one device call per detector, got {len(calls)}"
+        assert set(calls) == {int(4.0 * 512.0)}
+
+    def test_the_host_backend_does_not_reach_the_device(self):
+        """The default must stay on the host, or installing JAX would change existing output."""
+        pytest.importorskip("jax")
+        from gwmock_signal.projection import jax_projection
+
+        with patch.object(jax_projection, "project_polarizations_td_rotating") as device:
+            project_polarizations_to_network(
+                self._polarizations(4.0),
+                ["H1"],
+                earth_rotation=True,
+                right_ascension=1.3,
+                declination=-0.4,
+                polarization_angle=0.7,
+            )
+
+        device.assert_not_called()
+
+    def test_an_unknown_backend_is_refused(self):
+        """A typo must not fall through to the host path while the caller believes otherwise."""
+        with pytest.raises(ValueError, match="backend must be 'numpy' or 'jax'"):
+            project_polarizations_to_network(
+                self._polarizations(1.0),
+                ["H1"],
+                right_ascension=1.3,
+                declination=-0.4,
+                polarization_angle=0.7,
+                backend="cuda",
+            )
+
+    def test_the_constant_pattern_branch_has_no_device_path(self):
+        """Serving it from the host would report a backend that did not run."""
+        with pytest.raises(ValueError, match="backend='jax' is only available with earth_rotation=True"):
+            project_polarizations_to_network(
+                self._polarizations(1.0),
+                ["H1"],
+                right_ascension=1.3,
+                declination=-0.4,
+                polarization_angle=0.7,
+                earth_rotation=False,
+                backend="jax",
+            )
+
+    def test_thirty_two_bit_jax_is_refused_rather_than_degraded(self, monkeypatch):
+        """In 32-bit mode the device path returns plausible strain that is wrong by ~1% of peak.
+
+        Measured against the host path while writing this: 2.7e-03 over 256 s and 1.8e-02 over
+        1024 s, growing with the span as the GPS times lose precision. Nothing downstream can
+        distinguish such a series from a correct one, so it has to fail here. It has not bitten
+        anyone yet only because importing ``ripplegw`` happens to enable x64 -- an accident of an
+        unrelated import, which is exactly the kind of thing that stops being true.
+        """
+        jax = pytest.importorskip("jax")
+        # `jax.config.jax_enable_x64` is a read-only property, and flipping the real flag after
+        # arrays exist is rejected by JAX. Patching the property on the class is what is left;
+        # the guard reads exactly this attribute, which is the thing under test.
+        monkeypatch.setattr(type(jax.config), "jax_enable_x64", property(lambda _self: False))
+
+        with pytest.raises(RuntimeError, match="requires JAX in 64-bit mode"):
+            project_polarizations_to_network(
+                self._polarizations(1.0),
+                ["H1"],
+                right_ascension=1.3,
+                declination=-0.4,
+                polarization_angle=0.7,
+                backend="jax",
+            )
