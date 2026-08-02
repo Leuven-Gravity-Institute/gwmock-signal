@@ -48,9 +48,11 @@ logger = logging.getLogger("gwmock_signal")
 #: produces is an upper bound for a typical source rather than a prediction for a given one.
 _CONSTANT_PATTERN_ERROR_PER_SECOND = 2.9e-4
 
-#: Span beyond which ``earth_rotation=False`` is worth warning about, in seconds.
+#: Span at or beyond which ``earth_rotation=False`` is worth warning about, in seconds.
 #:
-#: Where the conservative rate above reaches one percent. That separates the cases cleanly in
+#: Where the conservative rate above reaches one percent. The boundary is inclusive: a span of
+#: exactly this length warns. That is the safer way round for a guard against an error nothing else
+#: reveals, and it costs only a message on a span already at the one-percent mark. That separates the cases cleanly in
 #: practice: a few-second compact-binary merger stays silent, a minutes-long inspiral does not.
 _CONSTANT_PATTERN_WARN_SECONDS = 30.0
 
@@ -177,7 +179,7 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     if earth_rotation:
         return
     span = float(time_array[-1] - time_array[0])
-    if span <= _CONSTANT_PATTERN_WARN_SECONDS:
+    if span < _CONSTANT_PATTERN_WARN_SECONDS:
         return
 
     estimate = span * _CONSTANT_PATTERN_ERROR_PER_SECOND

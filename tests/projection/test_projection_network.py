@@ -380,6 +380,36 @@ class TestConstantPatternDurationWarning:
             "a percentage was quoted past the point where the linear model holds"
         )
 
+    def test_a_span_exactly_at_the_threshold_warns(self, caplog):
+        """The boundary is inclusive, and pinned here because it is otherwise a coin toss.
+
+        A span of exactly the threshold sits at the one-percent mark. Warning there is the safer
+        way round for a guard against an error nothing else reveals, and an off-by-one in the
+        comparison would otherwise go unnoticed.
+        """
+        rate = 16.0
+        # span = (n - 1) / rate, so this lands on the threshold exactly rather than near it.
+        samples = int(_CONSTANT_PATTERN_WARN_SECONDS * rate) + 1
+        t = np.arange(samples) / rate
+        polarizations = {
+            "plus": TimeSeries(np.cos(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=rate, unit="strain"),
+            "cross": TimeSeries(np.sin(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=rate, unit="strain"),
+        }
+        span = float(np.asarray(polarizations["plus"].times.to_value())[-1] - 1577491218.0)
+        assert span == _CONSTANT_PATTERN_WARN_SECONDS, f"test setup gave a span of {span}, not the threshold"
+
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            project_polarizations_to_network(
+                polarizations,
+                ["H1"],
+                right_ascension=1.1,
+                declination=0.3,
+                polarization_angle=0.2,
+                earth_rotation=False,
+            )
+
+        assert "earth_rotation=False" in caplog.text
+
     def test_a_short_span_is_silent(self, caplog):
         """Otherwise every compact-binary projection would warn and the message would be ignored."""
         with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
