@@ -136,6 +136,13 @@ class ContinuousWaveSimulator(GWSimulator):
                 misconfigured, or a backend can have a defect, and in any of those the host path
                 still works and the caller needs to be able to reach it.
 
+                One limit comes with the default. The device path extrapolates sidereal time
+                linearly across the span it is given and accepts up to 86400 s; a *single*
+                segment longer than that is refused and needs ``"numpy"``. The span it measures
+                is the padded one -- ``edge_padding`` adds samples at both ends, 0.11 s to 0.56 s
+                depending on sample rate -- so the usable background is that much shorter. A run
+                of any length made of ordinary segments is unaffected, since each re-anchors.
+
         Raises:
             ValueError: If ``reference_time_ssb`` or any spindown term is not finite, or
                 ``projection_backend`` is not one of the two names.
@@ -143,6 +150,17 @@ class ContinuousWaveSimulator(GWSimulator):
         if projection_backend not in {"numpy", "jax"}:
             raise ValueError(f"projection_backend must be 'numpy' or 'jax', got {projection_backend!r}.")
         self.projection_backend = projection_backend
+        if projection_backend == "jax":
+            # Enabled here rather than relied upon. The device projection refuses to run without
+            # x64, and it has always happened to be on because importing ``ripplegw`` sets it --
+            # which this class does, for the polarizations. Depending on an unrelated package's
+            # import side effect for a correctness precondition is a latent break: if ripple
+            # stopped doing it, every default-configured call would raise instead of quietly
+            # degrading, but it would still be a needless failure. Idempotent, and the same value
+            # ripple sets, so nothing changes for callers who already have it on.
+            import jax  # noqa: PLC0415 — optional [jax] dep, and only needed for this backend
+
+            jax.config.update("jax_enable_x64", True)
         if not np.isfinite(reference_time_ssb):
             raise ValueError("reference_time_ssb must be a finite GPS-scale time in seconds.")
         spindown_terms = tuple(float(term) for term in spindowns)

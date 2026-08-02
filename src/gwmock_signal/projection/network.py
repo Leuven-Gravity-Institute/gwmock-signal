@@ -208,13 +208,19 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
 #: so a long-lived worker projecting varied lengths would accumulate kernels without end.
 _KERNEL_CACHE_SIZE = 32
 
-#: Longest span the device path's linear sidereal model is validated for, in seconds.
+#: Longest span the device path's linear sidereal model is accepted for, in seconds.
 #:
-#: ``sidereal`` tabulates the linear model's deviation from Astropy at 256 s, 2048 s and 8192 s
-#: (worst 6.4e-14 rad, i.e. 1.4e-15 s of geocenter delay) and at 86400 s, where it has grown to
-#: 8.6e-10 rad. The validated ceiling is where the table stops, not where the error becomes
-#: intolerable, because the point is to refuse what has not been checked.
-_MAX_LINEAR_SIDEREAL_SPAN_SECONDS = 8192.0
+#: Set by an error budget rather than by where the validation table ends. The linear model's
+#: deviation from Astropy, converted to the quantity that actually enters the projection -- a
+#: geocenter delay -- is 1.2e-15 s over 8192 s, 6.2e-11 s over a day, and 1.2e-7 s over 90 days.
+#: The projection already carries a known 8.6e-05 s offset from using plain GMST with a J2000
+#: source direction where LAL applies precession and nutation, so a day-long span sits six orders
+#: of magnitude below a systematic this code knowingly accepts.
+#:
+#: One day is therefore not a physical limit but the point beyond which nothing has been measured
+#: and a single segment stops being a plausible way to use this. Consecutive segments are
+#: unaffected at any run length: each one re-anchors against Astropy.
+_MAX_LINEAR_SIDEREAL_SPAN_SECONDS = 86400.0
 
 
 @functools.lru_cache(maxsize=_KERNEL_CACHE_SIZE)
@@ -236,7 +242,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
 
     Cached on the shape rather than rebuilt per call because ``jax.jit`` re-traces a fresh wrapper
     every time one is constructed, which would reintroduce the cost this exists to remove. The
-    cache is unbounded, keyed on four scalars, and a run uses one or two segment shapes.
+    cache is keyed on four scalars and bounded at ``_KERNEL_CACHE_SIZE``, because a long-lived
+    process projecting varied shapes would otherwise retain XLA executables for its lifetime.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
@@ -337,7 +344,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     span = float(time_array[-1] - time_array[0])
     if span > _MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
         raise ValueError(
-            f"backend='jax' is validated for spans up to {_MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
+            f"backend='jax' accepts spans up to {_MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
             f"and this one is {span:.0f} s. The device path extrapolates sidereal time linearly "
             f"from one anchor, which is exact to 1.2e-15 s of delay over the validated range and "
             f"degrades beyond it. Project in segments, or use backend='numpy', which asks Astropy "

@@ -639,14 +639,30 @@ class TestTheDeviceBackend:
     def test_a_span_beyond_the_validated_sidereal_range_is_refused(self):
         """The device path extrapolates sidereal time linearly from a single anchor.
 
-        Validated to 8192 s. Beyond that the model is simply unchecked -- 2.9e-9 rad over a day,
-        5.8e-6 rad over 90 days -- and a long single segment would get a quietly degraded answer
-        rather than an error. Consecutive short segments are unaffected: each re-anchors.
+        Accepted to 86400 s, a ceiling set by an error budget: at a day the model costs 6.2e-11 s
+        of geocenter delay, six orders below the 8.6e-05 s precession offset the projection
+        already carries. Beyond that nothing has been measured, and a single segment that long
+        would get a quietly degraded answer rather than an error. Consecutive segments are
+        unaffected at any run length, because each re-anchors against Astropy.
         """
-        with pytest.raises(ValueError, match="validated for spans up to"):
+        with pytest.raises(ValueError, match="accepts spans up to"):
             project_polarizations_to_network(
-                self._polarizations(9000.0, 16.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+                self._polarizations(90000.0, 1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
             )
+
+    def test_a_day_long_segment_is_accepted(self):
+        """The ceiling must not refuse spans the error budget says are fine.
+
+        An earlier version set it at 8192 s, where the *validation table* stopped rather than
+        where the error mattered, which made this simulator reject day-long segments that had
+        worked before. Pins the boundary from the accepting side so tightening it silently is a
+        test failure.
+        """
+        result = project_polarizations_to_network(
+            self._polarizations(80000.0, 1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+        )
+
+        assert np.all(np.isfinite(result["H1"].value))
 
     def test_thirty_two_bit_jax_is_refused(self):
         """In 32-bit mode the device path returns plausible strain that is materially wrong.
