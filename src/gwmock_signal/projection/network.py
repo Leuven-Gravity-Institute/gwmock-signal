@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Mapping, Sequence
 from typing import cast
@@ -201,6 +202,63 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     )
 
 
+@functools.cache
+def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sinc_taps: int, kaiser_beta: float):
+    """Return a jitted rotating projection for one segment shape, compiled once and reused.
+
+    Without this the device path runs **eagerly**, dispatching every operation in the per-sample
+    kernel separately, and the cost is dominated by that dispatch rather than by the arithmetic.
+    Measured on an A100 before this wrapper existed, fitting device time to ``a + b * n``: 3.7 s
+    fixed against 3.3e-6 s per sample, so a 256 s segment spent 90% of its time in dispatch. Two
+    machines confirmed the cause rather than merely the size -- an A30 node whose CPU was 2.6x
+    faster than the A100 node's showed a fixed cost 2.6x smaller, tracking the *host* speed, which
+    device work would not do.
+
+    Detector geometry stays traced, so one compilation serves every detector in a network. Making
+    ``response`` and ``location`` static would specialise the kernel per detector and pay the
+    compile again for each; :mod:`~gwmock_signal.projection.jax_batch` avoids that the same way
+    and for the same reason.
+
+    Cached on the shape rather than rebuilt per call because ``jax.jit`` re-traces a fresh wrapper
+    every time one is constructed, which would reintroduce the cost this exists to remove. The
+    cache is unbounded, keyed on four scalars, and a run uses one or two segment shapes.
+    """
+    import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    from gwmock_signal.projection.jax_projection import (  # noqa: PLC0415
+        project_polarizations_td_rotating,
+    )
+
+    def _project(  # noqa: PLR0913, PLR0917
+        plus,
+        cross,
+        response,
+        location,
+        right_ascension,
+        declination,
+        polarization_angle,
+        gmst_start,
+        gmst_rate,
+    ):
+        return project_polarizations_td_rotating(
+            plus,
+            cross,
+            response=response,
+            location=location,
+            sampling_frequency=sampling_frequency,
+            n_samples=n_samples,
+            right_ascension=right_ascension,
+            declination=declination,
+            polarization_angle=polarization_angle,
+            gmst_start=gmst_start,
+            gmst_rate=gmst_rate,
+            sinc_taps=sinc_taps,
+            kaiser_beta=kaiser_beta,
+        )
+
+    return jax.jit(_project)
+
+
 def _project_rotating_on_device(  # noqa: PLR0913
     hp: GWpyTimeSeries,
     hc: GWpyTimeSeries,
@@ -234,9 +292,6 @@ def _project_rotating_on_device(  # noqa: PLR0913
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
-    from gwmock_signal.projection.jax_projection import (  # noqa: PLC0415
-        project_polarizations_td_rotating,
-    )
     from gwmock_signal.projection.sidereal import gmst_anchor_and_rate  # noqa: PLC0415
 
     # Refused rather than allowed to degrade. Without x64 every `jnp.asarray(..., float64)` in
@@ -260,6 +315,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
     n_samples = len(hp_vals)
     anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
 
+    compiled = _compiled_rotating_projection(sampling_frequency, n_samples, sinc_taps, kaiser_beta)
+
     strains: dict[str, GWpyTimeSeries] = {}
     for name, prefix in detectors:
         response, location = reconstructed_geometry(prefix)
@@ -267,20 +324,16 @@ def _project_rotating_on_device(  # noqa: PLR0913
         # assumes a terrestrial delay bound. Checked here too, because on the device `location`
         # is a traced argument and the check could not run there.
         require_terrestrial_location(location, name=f"location of {prefix}")
-        projected = project_polarizations_td_rotating(
+        projected = compiled(
             hp_vals,
             hc_vals,
-            response=response,
-            location=location,
-            sampling_frequency=sampling_frequency,
-            n_samples=n_samples,
-            right_ascension=right_ascension,
-            declination=declination,
-            polarization_angle=polarization_angle,
-            gmst_start=float(np.atleast_1d(anchors)[0]),
-            gmst_rate=float(rate),
-            sinc_taps=sinc_taps,
-            kaiser_beta=kaiser_beta,
+            response,
+            location,
+            right_ascension,
+            declination,
+            polarization_angle,
+            float(np.atleast_1d(anchors)[0]),
+            float(rate),
         )
         strains[name] = GWpyTimeSeries(
             np.asarray(projected, dtype=float),

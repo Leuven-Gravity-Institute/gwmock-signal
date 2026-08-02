@@ -493,26 +493,38 @@ class TestTheDeviceBackend:
         assert float(device.sample_rate.value) == 512.0
         assert len(device.value) == len(polarizations["plus"].value)
 
-    def test_the_device_primitive_is_the_thing_that_runs(self):
+    def test_the_device_kernel_is_what_runs_and_is_compiled_once(self):
         """Asserted directly, because no comparison can establish it.
 
         A ``backend="jax"`` that quietly fell through to the host path would satisfy every
         equivalence check in this class -- the two sides would be the same code. Mutating the
-        dispatch away leaves only this test failing, which is why it exists separately from the
-        agreement test rather than being folded into it.
+        dispatch away leaves this test failing and the agreement tests passing, which is why it
+        is separate.
+
+        It also pins the compilation contract. The kernel takes the detector response and
+        location as traced arguments, so one compiled kernel serves a whole network; making them
+        static would specialise per detector and pay a compile for each. Two detectors here, one
+        compilation, two invocations.
         """
         pytest.importorskip("jax")
-        from gwmock_signal.projection import jax_projection
+        from gwmock_signal.projection import network
 
-        calls = []
-        original = jax_projection.project_polarizations_td_rotating
+        network._compiled_rotating_projection.cache_clear()
+        compilations, invocations = [], []
+        original = network._compiled_rotating_projection
 
-        def _spy(*args, **kwargs):
-            calls.append(kwargs.get("n_samples"))
-            return original(*args, **kwargs)
+        def _spy_factory(*args, **kwargs):
+            compilations.append(args)
+            kernel = original(*args, **kwargs)
 
-        with patch.object(jax_projection, "project_polarizations_td_rotating", _spy):
-            project_polarizations_to_network(
+            def _counted(*call_args, **call_kwargs):
+                invocations.append(len(call_args))
+                return kernel(*call_args, **call_kwargs)
+
+            return _counted
+
+        with patch.object(network, "_compiled_rotating_projection", _spy_factory):
+            network.project_polarizations_to_network(
                 self._polarizations(4.0),
                 ["H1", "L1"],
                 earth_rotation=True,
@@ -522,8 +534,10 @@ class TestTheDeviceBackend:
                 polarization_angle=0.7,
             )
 
-        assert len(calls) == 2, f"expected one device call per detector, got {len(calls)}"
-        assert set(calls) == {int(4.0 * 512.0)}
+        assert len(invocations) == 2, f"expected one device call per detector, got {len(invocations)}"
+        assert len(compilations) == 1, (
+            f"the kernel should be built once for the whole network, not per detector; built {len(compilations)} times"
+        )
 
     def test_the_host_backend_does_not_reach_the_device(self):
         """The default must stay on the host, or installing JAX would change existing output."""
