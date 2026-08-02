@@ -238,7 +238,32 @@ class ContinuousWaveSimulator(GWSimulator):
             fkdot=self.spindowns,
             ref_time_ssb=self.reference_time_ssb,
         )
-        return np.asarray(plus, dtype=float), np.asarray(cross, dtype=float)
+        plus_values = np.asarray(plus, dtype=float)
+        cross_values = np.asarray(cross, dtype=float)
+
+        # Released ripplegw cannot generate at the geocentre, and fails by returning NaN rather
+        # than raising. `barycenter.py` computes the detector latitude as `arccos(lz / rd)`, which
+        # is 0/0 when the location is the Earth centre -- exactly what this class asks for, so the
+        # projection can own the geocentre-to-detector leg instead of a second implementation
+        # duplicating it. Fixed in GW-JAX-Team/ripple#141; unfixed versions produce an all-NaN
+        # signal that propagates into written frames with nothing anywhere reporting it.
+        #
+        # Checked on the output rather than by probing the library, so it also catches any other
+        # route to a non-finite signal, and costs one pass over an array this function has just
+        # spent far longer generating. The source parameters are already known finite by
+        # `_validate_source`, so a NaN here is the library, not the caller.
+        if not np.all(np.isfinite(plus_values)) or not np.all(np.isfinite(cross_values)):
+            import ripplegw  # noqa: PLC0415
+
+            raise RuntimeError(
+                f"ripplegw {getattr(ripplegw, '__version__', 'unknown')} returned a non-finite "
+                f"signal at the geocentre, which is where this simulator generates. Released "
+                f"versions evaluate the detector latitude as arccos(lz / rd) and that is 0/0 at "
+                f"the Earth centre, so every sample is NaN. Fixed by GW-JAX-Team/ripple#141; "
+                f"until a release carries it, install ripplegw from a revision that has the fix. "
+                f"Refused here rather than written out, because NaN frames look like data."
+            )
+        return plus_values, cross_values
 
     def _validate_source(self, params: Mapping[str, Any], sampling_frequency: float) -> None:
         """Reject source values that would produce a silently wrong or all-NaN signal.

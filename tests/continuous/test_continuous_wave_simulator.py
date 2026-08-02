@@ -342,3 +342,84 @@ class TestOutput:
 
         peak = float(np.max(np.abs(strain)))
         assert 0.0 < peak <= float(_SOURCE["amplitude_plus"]), f"peak {peak:.3e} is not a projected amplitude"
+
+
+class TestAnUnfixedRippleIsRefused:
+    """Released ripplegw returns NaN at the geocentre; that must not reach a frame.
+
+    The pin in ``pyproject.toml`` is development-only and is not carried into the published
+    wheel, so anyone installing ``gwmock-signal[jax]`` from PyPI resolves a ripplegw without
+    GW-JAX-Team/ripple#141. Verified against the real released version: every sample of both
+    polarizations is NaN, and nothing raises. Without this guard those NaNs are written out.
+    """
+
+    @pytest.mark.parametrize("spoiled", ["both", "plus", "cross"])
+    def test_a_non_finite_geocentre_signal_raises(self, spoiled, monkeypatch):
+        """Simulated by forcing the library's return, so the test does not need an old ripple.
+
+        Parametrised over which polarization goes bad. The real failure spoils both, but a guard
+        written to check only ``plus`` passes a both-NaN test while letting a cross-only failure
+        through -- and cross carries half the signal, so that output would be wrong rather than
+        obviously broken.
+        """
+        pytest.importorskip("ripplegw")
+        import gwmock_signal.continuous.simulator as simulator_module
+
+        simulator = _simulator()
+        n = 64
+
+        def _all_nan(**kwargs):
+            length = len(kwargs["dt_rel"])
+            good = np.ones(length)
+            bad = np.full(length, np.nan)
+            return (bad, bad) if spoiled == "both" else (bad, good) if spoiled == "plus" else (good, bad)
+
+        monkeypatch.setattr(
+            "ripplegw.waveforms.cw.PulsarSignal.generate_pulsar_polarizations",
+            _all_nan,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "ripplegw.waveforms.cw.pulsar_signal.generate_pulsar_polarizations",
+            _all_nan,
+            raising=False,
+        )
+        _ = simulator_module
+
+        with pytest.raises(RuntimeError, match="non-finite signal at the geocentre"):
+            simulator._geocentre_polarizations(
+                {
+                    "right_ascension": 1.1,
+                    "declination": 0.3,
+                    "frequency": 20.0,
+                    "initial_phase": 0.4,
+                    "amplitude_plus": 1e-24,
+                    "amplitude_cross": 7e-25,
+                },
+                epoch=_EPOCH,
+                n_samples=n,
+                sampling_frequency=64.0,
+            )
+
+    def test_a_finite_signal_is_returned_unchanged(self):
+        """The guard must not reject the working library it is meant to let through."""
+        pytest.importorskip("ripplegw")
+
+        simulator = _simulator()
+        plus, cross = simulator._geocentre_polarizations(
+            {
+                "right_ascension": 1.1,
+                "declination": 0.3,
+                "frequency": 20.0,
+                "initial_phase": 0.4,
+                "amplitude_plus": 1e-24,
+                "amplitude_cross": 7e-25,
+            },
+            epoch=_EPOCH,
+            n_samples=64,
+            sampling_frequency=64.0,
+        )
+
+        assert np.all(np.isfinite(plus))
+        assert np.all(np.isfinite(cross))
+        assert np.max(np.abs(plus)) > 0.0
