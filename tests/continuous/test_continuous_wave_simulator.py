@@ -107,6 +107,48 @@ class TestPhaseCoherenceAcrossSegments:
         worst = float(np.max(np.abs(stitched - whole))) / peak
         assert worst < 1e-9, f"segments disagree with the continuous signal by {worst:.3e} of peak"
 
+    def test_a_fractional_epoch_changes_the_signal(self):
+        """The sub-second part of the epoch must reach the generator.
+
+        The epoch is split into an integer GPS second and a remainder folded into the sample
+        offsets, because ripple takes ``start_gps`` as an integer. Every other test starts on a
+        whole second, so that remainder is always 0.0 and the path is never exercised.
+
+        Comparing segments against a long call cannot catch this: dropping the remainder shifts
+        both by the same amount, so they still agree with each other. What does catch it is that
+        two epochs inside the *same* second must give different output -- if the fraction is
+        discarded, ``floor`` maps them to the same start and the outputs are identical.
+        """
+        simulator = _simulator()
+        n_samples = int(60 * _FS)
+
+        # Deliberately against the private generator rather than `simulate`. The epoch also sets
+        # `t0` on the polarizations, and the projection evaluates antenna patterns at those absolute
+        # times -- so the *projected* output differs between two epochs even when the fraction never
+        # reaches ripple at all. Going through the public path would pass either way and prove
+        # nothing; this is the only place the split is observable.
+        kwargs = {"n_samples": n_samples, "sampling_frequency": _FS}
+        on_the_second, _ = simulator._geocentre_polarizations(_SOURCE, epoch=_EPOCH, **kwargs)
+        part_way_through, _ = simulator._geocentre_polarizations(_SOURCE, epoch=_EPOCH + 0.375, **kwargs)
+
+        assert not np.array_equal(on_the_second, part_way_through), (
+            "epochs 0.375 s apart within the same GPS second produced identical polarizations, so "
+            "the sub-second part of the epoch is being discarded"
+        )
+
+    def test_segments_join_up_on_a_fractional_epoch_too(self):
+        """The seam property must hold when the run does not start on a whole second."""
+        segment_samples = int(600 * _FS)
+        epoch = _EPOCH + 0.375
+        simulator = _simulator()
+
+        whole = _generate(simulator, epoch, segment_samples * 2)
+        stitched = np.concatenate([_generate(simulator, epoch + 600.0 * index, segment_samples) for index in range(2)])
+
+        peak = float(np.max(np.abs(whole)))
+        worst = float(np.max(np.abs(stitched - whole))) / peak
+        assert worst < 1e-9, f"fractional-epoch segments disagree by {worst:.3e} of peak"
+
     def test_a_later_segment_is_not_a_repeat_of_the_first(self):
         """Guards the opposite failure: agreement achieved by generating the same thing twice.
 
@@ -194,6 +236,54 @@ class TestConstruction:
         background[_DETECTORS[1]] = TimeSeries(np.zeros(640), t0=_EPOCH + 100.0, sample_rate=_FS, unit="strain")
 
         with pytest.raises(ValueError, match="must share an epoch"):
+            simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
+
+    def test_a_sampling_frequency_disagreeing_with_the_background_is_refused(self):
+        """The argument drives generation; the background defines the grid it is added to.
+
+        A mismatch generates the wave at one rate and adds it to another elementwise, with no
+        complaint from gwpy -- the signal comes out time-stretched by the ratio while every channel
+        still looks individually plausible.
+        """
+        simulator = _simulator()
+
+        with pytest.raises(ValueError, match="but the background is at"):
+            simulator.simulate(
+                _SOURCE,
+                _DETECTORS,
+                _zeros(_EPOCH, 640),
+                sampling_frequency=_FS * 2,
+                minimum_frequency=0.0,
+            )
+
+    @pytest.mark.parametrize("key", sorted(_SOURCE.keys() - {"polarization_angle"}))
+    def test_non_finite_source_parameters_are_refused(self, key: str):
+        """A NaN anywhere in the source returns an all-NaN series with nothing naming the cause."""
+        simulator = _simulator()
+        params = dict(_SOURCE)
+        params[key] = float("nan")
+
+        with pytest.raises(ValueError, match=f"{key} must be finite"):
+            simulator.simulate(params, _DETECTORS, _zeros(_EPOCH, 64), sampling_frequency=_FS, minimum_frequency=0.0)
+
+    @pytest.mark.parametrize(
+        ("frequency", "expected"),
+        [(0.0, "must be positive"), (-20.0, "must be positive"), (_FS / 2, "Nyquist"), (_FS, "Nyquist")],
+    )
+    def test_unrepresentable_frequencies_are_refused(self, frequency: float, expected: str):
+        """Zero and negative are not signals; at or above Nyquist the tone aliases silently."""
+        simulator = _simulator()
+        params = dict(_SOURCE, frequency=frequency)
+
+        with pytest.raises(ValueError, match=expected):
+            simulator.simulate(params, _DETECTORS, _zeros(_EPOCH, 64), sampling_frequency=_FS, minimum_frequency=0.0)
+
+    def test_a_background_of_plain_arrays_is_refused_clearly(self):
+        """Otherwise it dies later with an AttributeError about `t0`, which names nothing useful."""
+        simulator = _simulator()
+        background = {name: np.zeros(64) for name in _DETECTORS}
+
+        with pytest.raises(TypeError, match="must be gwpy TimeSeries"):
             simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
 
     def test_a_background_is_required(self):

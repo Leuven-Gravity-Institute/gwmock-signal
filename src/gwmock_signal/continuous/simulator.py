@@ -199,6 +199,87 @@ class ContinuousWaveSimulator(GWSimulator):
         )
         return np.asarray(plus, dtype=float), np.asarray(cross, dtype=float)
 
+    def _validate_source(self, params: Mapping[str, Any], sampling_frequency: float) -> None:
+        """Reject source values that would produce a silently wrong or all-NaN signal.
+
+        Args:
+            params: Source parameters, already checked for presence by the base class.
+            sampling_frequency: Sample rate in Hz, needed for the Nyquist check.
+
+        Raises:
+            ValueError: If any required value is not finite, or the frequency is non-positive or
+                at/above Nyquist.
+        """
+        for key in sorted(_REQUIRED_PARAMETERS):
+            value = float(params[key])
+            if not np.isfinite(value):
+                raise ValueError(f"{key} must be finite, got {value!r}.")
+        frequency = float(params["frequency"])
+        if frequency <= 0.0:
+            raise ValueError(f"frequency must be positive, got {frequency!r} Hz.")
+        if frequency >= 0.5 * sampling_frequency:
+            raise ValueError(
+                f"frequency {frequency!r} Hz is at or above the Nyquist frequency "
+                f"{0.5 * sampling_frequency!r} Hz for this sample rate, so it would alias."
+            )
+
+    @staticmethod
+    def _resolve_segment(
+        background: Mapping[str, TimeSeries], names: Sequence[str], sampling_frequency: float
+    ) -> tuple[float, int]:
+        """Return the (epoch, sample count) the background defines, checking every channel agrees.
+
+        Args:
+            background: Existing strain, one channel per detector.
+            names: Detector names, in output order.
+            sampling_frequency: The rate the caller asked to generate at.
+
+        Returns:
+            The segment's epoch in GPS seconds and its length in samples.
+
+        Raises:
+            TypeError: If a background value is not a GWpy time series.
+            ValueError: If the channels disagree, or the caller's rate differs from theirs.
+        """
+        reference = background[names[0]]
+        if not hasattr(reference, "t0") or not hasattr(reference, "sample_rate"):
+            raise TypeError(f"background values must be gwpy TimeSeries; {names[0]!r} is a {type(reference).__name__}.")
+        epoch = float(reference.t0.value)
+        n_samples = len(reference)
+        rate = float(reference.sample_rate.value)
+
+        # The argument drives generation while the background defines the grid the result is added
+        # to, so a disagreement produces a signal sampled at one rate and labelled at another --
+        # added elementwise, with no complaint, and time-stretched by the ratio.
+        if rate != sampling_frequency:
+            raise ValueError(
+                f"sampling_frequency is {sampling_frequency!r} Hz but the background is at "
+                f"{rate!r} Hz. The signal would be generated on one time grid and added to "
+                f"another, stretching it by a factor of {sampling_frequency / rate:.6g}."
+            )
+
+        # Every channel must describe the same stretch of time. The polarizations are generated
+        # once, for one epoch and length, and added to all of them -- so a channel that disagreed
+        # would silently receive a signal from the wrong interval rather than failing.
+        for name in names[1:]:
+            channel = background[name]
+            if len(channel) != n_samples:
+                raise ValueError(
+                    f"background channels must share a length; {name!r} has {len(channel)} samples "
+                    f"against {n_samples} for {names[0]!r}."
+                )
+            if float(channel.t0.value) != epoch:
+                raise ValueError(
+                    f"background channels must share an epoch; {name!r} starts at "
+                    f"{float(channel.t0.value)!r} against {epoch!r} for {names[0]!r}."
+                )
+            if float(channel.sample_rate.value) != rate:
+                raise ValueError(
+                    f"background channels must share a sample rate; {name!r} is at "
+                    f"{float(channel.sample_rate.value)!r} Hz against {rate!r} for {names[0]!r}."
+                )
+        return epoch, n_samples
+
     def simulate(  # noqa: PLR0913
         self,
         params: Mapping[str, Any],
@@ -239,6 +320,7 @@ class ContinuousWaveSimulator(GWSimulator):
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")
+
         if not earth_rotation:
             raise ValueError(
                 "earth_rotation=False is not available for continuous waves. That branch holds the "
@@ -248,6 +330,8 @@ class ContinuousWaveSimulator(GWSimulator):
                 "entirely normal while being wrong, and because the error would depend on how the "
                 "run happened to be split into segments."
             )
+        self._validate_source(params, sampling_frequency)
+
         if not background:
             raise ValueError(
                 "ContinuousWaveSimulator requires a background: a continuous wave has no duration "
@@ -264,27 +348,7 @@ class ContinuousWaveSimulator(GWSimulator):
         # Every channel must describe the same stretch of time. The polarizations are generated
         # once, for one epoch and length, and added to all of them -- so a channel that disagreed
         # would silently receive a signal from the wrong interval rather than failing.
-        reference_channel = background[names[0]]
-        epoch = float(reference_channel.t0.value)
-        n_samples = len(reference_channel)
-        rate = float(reference_channel.sample_rate.value)
-        for name in names[1:]:
-            channel = background[name]
-            if len(channel) != n_samples:
-                raise ValueError(
-                    f"background channels must share a length; {name!r} has {len(channel)} samples "
-                    f"against {n_samples} for {names[0]!r}."
-                )
-            if float(channel.t0.value) != epoch:
-                raise ValueError(
-                    f"background channels must share an epoch; {name!r} starts at "
-                    f"{float(channel.t0.value)!r} against {epoch!r} for {names[0]!r}."
-                )
-            if float(channel.sample_rate.value) != rate:
-                raise ValueError(
-                    f"background channels must share a sample rate; {name!r} is at "
-                    f"{float(channel.sample_rate.value)!r} Hz against {rate!r} for {names[0]!r}."
-                )
+        epoch, n_samples = self._resolve_segment(background, names, sampling_frequency)
 
         # Generated with a margin at both ends and trimmed after projecting. The rotating
         # projection resamples at the time-dependent detector delay with a windowed sinc kernel,
