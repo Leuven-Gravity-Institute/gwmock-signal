@@ -169,6 +169,33 @@ class TestConstruction:
                 earth_rotation=False,
             )
 
+    def test_non_finite_spindowns_are_refused(self):
+        """A NaN spindown poisons every sample, with nothing in the output naming the cause."""
+        with pytest.raises(ValueError, match="spindowns must all be finite"):
+            _simulator(spindowns=(-1.0e-10, float("nan")))
+
+    def test_background_channels_must_share_a_grid(self):
+        """The polarizations are generated once, for one epoch and length, and added to all.
+
+        A channel describing a different stretch of time would silently receive a signal from the
+        wrong interval, because only the first channel is consulted for the epoch and length.
+        """
+        simulator = _simulator()
+        background = _zeros(_EPOCH, 640)
+        background[_DETECTORS[1]] = TimeSeries(np.zeros(320), t0=_EPOCH, sample_rate=_FS, unit="strain")
+
+        with pytest.raises(ValueError, match="must share a length"):
+            simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
+
+    def test_background_channels_must_share_an_epoch(self):
+        """Same hazard as the length check, and equally invisible in the output."""
+        simulator = _simulator()
+        background = _zeros(_EPOCH, 640)
+        background[_DETECTORS[1]] = TimeSeries(np.zeros(640), t0=_EPOCH + 100.0, sample_rate=_FS, unit="strain")
+
+        with pytest.raises(ValueError, match="must share an epoch"):
+            simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
+
     def test_a_background_is_required(self):
         """A continuous wave has no duration of its own; the segment comes from the background."""
         simulator = _simulator()

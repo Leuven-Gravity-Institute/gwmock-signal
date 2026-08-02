@@ -37,6 +37,20 @@ That constraint drives the design of this class:
 * **The ephemeris is an explicit input.** ``read_ephemeris_file`` will download a named LALPulsar
   table and cache it, which makes the physics depend on a file nobody chose deliberately. Paths
   are required here so a run records what it used.
+
+.. warning::
+   **The geocentre composition has not been validated against an external reference.** Ripple
+   applies the barycentring chain from the SSB to the location it is given, and the projection then
+   adds the geocentre-to-detector leg; review agreed the split is correct in principle and avoids
+   double-counting. But every test here compares this implementation against itself, so a
+   convention error shared by both halves would pass all of them and produce a plausible signal
+   with a systematically wrong timing model.
+
+   Settling it means comparing against LALPulsar's ``SimulateExactPulsarSignal`` for a real
+   detector. That is not currently reachable from Python: the signature names a
+   ``PulsarSignalParams`` struct that the SWIG binding does not expose as a constructible type.
+   Until that comparison exists, treat the absolute timing as unverified -- the *relative* property
+   the tests do establish is that segments join up coherently.
 """
 
 from __future__ import annotations
@@ -99,10 +113,13 @@ class ContinuousWaveSimulator(GWSimulator):
         """Initialize the continuous-wave simulator."""
         if not np.isfinite(reference_time_ssb):
             raise ValueError("reference_time_ssb must be a finite GPS-scale time in seconds.")
+        spindown_terms = tuple(float(term) for term in spindowns)
+        if not all(np.isfinite(term) for term in spindown_terms):
+            raise ValueError(f"spindowns must all be finite, got {spindown_terms}.")
         self.earth_ephemeris = str(earth_ephemeris)
         self.sun_ephemeris = str(sun_ephemeris)
         self.reference_time_ssb = float(reference_time_ssb)
-        self.spindowns = tuple(float(term) for term in spindowns)
+        self.spindowns = spindown_terms
         self._ephemeris_tables: tuple[Any, Any] | None = None
 
     @property
@@ -229,13 +246,36 @@ class ContinuousWaveSimulator(GWSimulator):
             )
 
         names = [d if isinstance(d, str) else d.name for d in detector_names]
+        if not names:
+            raise ValueError("detector_names must not be empty.")
         for name in names:
             if name not in background:
                 raise KeyError(f"Missing background for detector {name!r}.")
 
+        # Every channel must describe the same stretch of time. The polarizations are generated
+        # once, for one epoch and length, and added to all of them -- so a channel that disagreed
+        # would silently receive a signal from the wrong interval rather than failing.
         reference_channel = background[names[0]]
         epoch = float(reference_channel.t0.value)
         n_samples = len(reference_channel)
+        rate = float(reference_channel.sample_rate.value)
+        for name in names[1:]:
+            channel = background[name]
+            if len(channel) != n_samples:
+                raise ValueError(
+                    f"background channels must share a length; {name!r} has {len(channel)} samples "
+                    f"against {n_samples} for {names[0]!r}."
+                )
+            if float(channel.t0.value) != epoch:
+                raise ValueError(
+                    f"background channels must share an epoch; {name!r} starts at "
+                    f"{float(channel.t0.value)!r} against {epoch!r} for {names[0]!r}."
+                )
+            if float(channel.sample_rate.value) != rate:
+                raise ValueError(
+                    f"background channels must share a sample rate; {name!r} is at "
+                    f"{float(channel.sample_rate.value)!r} Hz against {rate!r} for {names[0]!r}."
+                )
 
         # Generated with a margin at both ends and trimmed after projecting. The rotating
         # projection resamples at the time-dependent detector delay with a windowed sinc kernel,
