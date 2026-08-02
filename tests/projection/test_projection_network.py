@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import (
+    _CONSTANT_PATTERN_ERROR_PER_SECOND,
+    _CONSTANT_PATTERN_SATURATION,
+    _CONSTANT_PATTERN_WARN_SECONDS,
+    project_polarizations_to_network,
+)
 
 
 def _uniform_series(n: int = 128, fs: float = 4096.0, t0: float = 100.0) -> TimeSeries:
@@ -297,3 +303,123 @@ def test_fd_shift_earth_rotation_false_no_circular_wrap_leakage() -> None:
     edge_rms = float(np.sqrt(np.mean(np.concatenate([vals[:5], vals[-5:]]) ** 2)))
     peak_rms = float(np.sqrt(np.mean(vals**2)))
     assert edge_rms < 1e-4 * peak_rms
+
+
+class TestConstantPatternDurationWarning:
+    """`earth_rotation=False` is a good trade for a short signal and wrong for a long one.
+
+    The branch evaluates the antenna pattern once, at the midpoint of the span it is handed, so its
+    error grows with how far Earth turns across that span -- and nothing in the output reveals it.
+    Measured against the rotating branch across 48 detector/sky/polarization/frequency combinations,
+    the worst deviation grows at up to 2.9e-4 of peak per second. The warning exists because the
+    parameter is a bare boolean with no stated domain of validity.
+    """
+
+    @staticmethod
+    def _polarizations(seconds: float, sampling_frequency: float = 16.0):
+        n = int(seconds * sampling_frequency)
+        t = np.arange(n) / sampling_frequency
+        return {
+            "plus": TimeSeries(
+                np.cos(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=sampling_frequency, unit="strain"
+            ),
+            "cross": TimeSeries(
+                np.sin(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=sampling_frequency, unit="strain"
+            ),
+        }
+
+    def _project(self, seconds: float, *, earth_rotation: bool):
+        return project_polarizations_to_network(
+            self._polarizations(seconds),
+            ["H1"],
+            right_ascension=1.1,
+            declination=0.3,
+            polarization_angle=0.2,
+            earth_rotation=earth_rotation,
+        )
+
+    def test_a_long_span_warns(self, caplog):
+        """The warning fires at all, and names the span responsible."""
+        span = 4 * _CONSTANT_PATTERN_WARN_SECONDS
+
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            self._project(span, earth_rotation=False)
+
+        assert "earth_rotation=False" in caplog.text
+        assert f"{span:.1f} s" in caplog.text or f"{span - 1 / 16.0:.1f} s" in caplog.text, (
+            "the message must name the span that triggered it"
+        )
+
+    def test_the_estimate_is_derived_from_the_measured_rate(self, caplog):
+        """A bare 'this may be inaccurate' does not tell the reader whether to care.
+
+        Computed from the constants rather than hard-coded, so revising the measurement updates the
+        test with the code instead of leaving a stale literal behind.
+        """
+        span = 4 * _CONSTANT_PATTERN_WARN_SECONDS
+        expected = 100.0 * span * _CONSTANT_PATTERN_ERROR_PER_SECOND
+
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            self._project(span, earth_rotation=False)
+
+        assert f"up to about {expected:.0f}%" in caplog.text
+
+    def test_a_saturating_span_names_saturation_rather_than_a_percentage(self, caplog):
+        """The linear rate is local. Extrapolated to a day it would claim over 1000% of peak.
+
+        Past the saturation point the honest statement is that the deviation is of order the signal
+        itself, not a number the model cannot support.
+        """
+        span = 10.0 * _CONSTANT_PATTERN_SATURATION / _CONSTANT_PATTERN_ERROR_PER_SECOND
+
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            self._project(span, earth_rotation=False)
+
+        assert "of order the signal amplitude itself" in caplog.text
+        assert "%" not in caplog.text.split("turns across it")[1].split(".")[0], (
+            "a percentage was quoted past the point where the linear model holds"
+        )
+
+    def test_a_span_exactly_at_the_threshold_warns(self, caplog):
+        """The boundary is inclusive, and pinned here because it is otherwise a coin toss.
+
+        A span of exactly the threshold sits at the one-percent mark. Warning there is the safer
+        way round for a guard against an error nothing else reveals, and an off-by-one in the
+        comparison would otherwise go unnoticed.
+        """
+        rate = 16.0
+        # span = (n - 1) / rate, so this lands on the threshold exactly rather than near it.
+        samples = int(_CONSTANT_PATTERN_WARN_SECONDS * rate) + 1
+        t = np.arange(samples) / rate
+        polarizations = {
+            "plus": TimeSeries(np.cos(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=rate, unit="strain"),
+            "cross": TimeSeries(np.sin(2 * np.pi * 4.0 * t), t0=1577491218.0, sample_rate=rate, unit="strain"),
+        }
+        span = float(np.asarray(polarizations["plus"].times.to_value())[-1] - 1577491218.0)
+        assert span == _CONSTANT_PATTERN_WARN_SECONDS, f"test setup gave a span of {span}, not the threshold"
+
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            project_polarizations_to_network(
+                polarizations,
+                ["H1"],
+                right_ascension=1.1,
+                declination=0.3,
+                polarization_angle=0.2,
+                earth_rotation=False,
+            )
+
+        assert "earth_rotation=False" in caplog.text
+
+    def test_a_short_span_is_silent(self, caplog):
+        """Otherwise every compact-binary projection would warn and the message would be ignored."""
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            self._project(_CONSTANT_PATTERN_WARN_SECONDS / 3.0, earth_rotation=False)
+
+        assert "earth_rotation" not in caplog.text
+
+    def test_the_rotating_branch_never_warns(self, caplog):
+        """The warning is about the approximation, not about long signals."""
+        with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
+            self._project(4 * _CONSTANT_PATTERN_WARN_SECONDS, earth_rotation=True)
+
+        assert "earth_rotation" not in caplog.text
