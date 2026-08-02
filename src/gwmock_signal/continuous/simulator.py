@@ -118,8 +118,31 @@ class ContinuousWaveSimulator(GWSimulator):
         sun_ephemeris: str,
         reference_time_ssb: float,
         spindowns: Sequence[float] = (),
+        projection_backend: str = "jax",
     ) -> None:
-        """Initialize the continuous-wave simulator."""
+        """Initialize the continuous-wave simulator.
+
+        Args:
+            earth_ephemeris: Path to the Earth ephemeris table.
+            sun_ephemeris: Path to the Sun ephemeris table.
+            reference_time_ssb: Epoch the source parameters refer to, at the solar-system
+                barycentre. Required; see the class docstring for why it has no default.
+            spindowns: Spindown terms ``f1, f2, ...`` in Hz/s, Hz/s^2, ...
+            projection_backend: Which projection implementation to use, ``"jax"`` (the default)
+                or ``"numpy"``. The device path is the default because the projection is ~99% of
+                a segment's cost here and this class already requires ripple, so JAX is present
+                either way. It is an argument rather than a constant because "JAX imports" and
+                "JAX runs" are different claims: device memory can be exhausted, a driver can be
+                misconfigured, or a backend can have a defect, and in any of those the host path
+                still works and the caller needs to be able to reach it.
+
+        Raises:
+            ValueError: If ``reference_time_ssb`` or any spindown term is not finite, or
+                ``projection_backend`` is not one of the two names.
+        """
+        if projection_backend not in {"numpy", "jax"}:
+            raise ValueError(f"projection_backend must be 'numpy' or 'jax', got {projection_backend!r}.")
+        self.projection_backend = projection_backend
         if not np.isfinite(reference_time_ssb):
             raise ValueError("reference_time_ssb must be a finite GPS-scale time in seconds.")
         spindown_terms = tuple(float(term) for term in spindowns)
@@ -381,10 +404,8 @@ class ContinuousWaveSimulator(GWSimulator):
             # differ only by floating-point reassociation -- but the projection is 99% of a
             # continuous-wave segment's cost, so it is the only part worth moving.
             #
-            # Unconditional rather than optional: this class already requires ripple, which is
-            # the same dependency, and offering both would mean two numerically distinct outputs
-            # for one configuration.
-            backend="jax",
+            # Defaults to the device path; see ``projection_backend`` for why it can be changed.
+            backend=self.projection_backend,
         )
 
         # Rebuilt rather than added directly: the projection returns dimensionless series, and

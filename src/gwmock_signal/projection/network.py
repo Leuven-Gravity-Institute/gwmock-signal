@@ -202,7 +202,22 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     )
 
 
-@functools.cache
+#: Compiled-kernel cache bound, matching ``jax_batch._KERNEL_CACHE_SIZE``. An unbounded cache
+#: is a process-lifetime leak of XLA executables and their device memory: the justification
+#: "a run uses one or two segment shapes" is a per-run claim, and this cache outlives a run,
+#: so a long-lived worker projecting varied lengths would accumulate kernels without end.
+_KERNEL_CACHE_SIZE = 32
+
+#: Longest span the device path's linear sidereal model is validated for, in seconds.
+#:
+#: ``sidereal`` tabulates the linear model's deviation from Astropy at 256 s, 2048 s and 8192 s
+#: (worst 6.4e-14 rad, i.e. 1.4e-15 s of geocenter delay) and at 86400 s, where it has grown to
+#: 8.6e-10 rad. The validated ceiling is where the table stops, not where the error becomes
+#: intolerable, because the point is to refuse what has not been checked.
+_MAX_LINEAR_SIDEREAL_SPAN_SECONDS = 8192.0
+
+
+@functools.lru_cache(maxsize=_KERNEL_CACHE_SIZE)
 def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sinc_taps: int, kaiser_beta: float):
     """Return a jitted rotating projection for one segment shape, compiled once and reused.
 
@@ -313,6 +328,21 @@ def _project_rotating_on_device(  # noqa: PLR0913
     hc_vals = np.asarray(hc.value, dtype=float)
     sampling_frequency = float(hp.sample_rate.value)
     n_samples = len(hp_vals)
+    # The linear sidereal model is fitted per call, so a run of many consecutive segments never
+    # accumulates error -- each gets a fresh Astropy anchor. What it cannot absorb is one
+    # unusually long segment. Measured against Astropy at this epoch: 1.5e-10 rad over 8 hours,
+    # 2.9e-9 over a day, 5.8e-6 over 90 days. The tabulated validation in `sidereal` stops at
+    # 8192 s, which is where this refuses, rather than letting the public API accept a span the
+    # model was never checked against and returning a quietly degraded answer.
+    span = float(time_array[-1] - time_array[0])
+    if span > _MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
+        raise ValueError(
+            f"backend='jax' is validated for spans up to {_MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
+            f"and this one is {span:.0f} s. The device path extrapolates sidereal time linearly "
+            f"from one anchor, which is exact to 1.2e-15 s of delay over the validated range and "
+            f"degrades beyond it. Project in segments, or use backend='numpy', which asks Astropy "
+            f"for every sample."
+        )
     anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
 
     compiled = _compiled_rotating_projection(sampling_frequency, n_samples, sinc_taps, kaiser_beta)
@@ -427,6 +457,26 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
 
     _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
+
+    # Dispatched here, before any of the host branch's preparation. Everything below -- two
+    # rffts, the frequency grid, and per-sample Astropy GMST with its sines and cosines -- serves
+    # only the NumPy branches, and the device path recomputes what it needs from an anchor and a
+    # rate. Left after the dispatch it was pure waste, and not a small one: at 4096 s and 512 Hz
+    # the Astropy call alone is 4.3 s on this machine and the unused arrays are ~120 MiB, so the
+    # device route was neither as fast nor as independent of host scaling as it claimed.
+    if backend == "jax":
+        return _project_rotating_on_device(
+            hp,
+            hc,
+            detectors,
+            time_array=time_array,
+            right_ascension=right_ascension,
+            declination=declination,
+            polarization_angle=polarization_angle,
+            sinc_taps=sinc_taps,
+            kaiser_beta=kaiser_beta,
+        )
+
     hp_vals = hp.to_value()
     hc_vals = hc.to_value()
 
@@ -447,19 +497,6 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     gha_array = gmst_array - right_ascension
     cosgha = np.cos(gha_array)
     singha = np.sin(gha_array)
-
-    if backend == "jax":
-        return _project_rotating_on_device(
-            hp,
-            hc,
-            detectors,
-            time_array=time_array,
-            right_ascension=right_ascension,
-            declination=declination,
-            polarization_angle=polarization_angle,
-            sinc_taps=sinc_taps,
-            kaiser_beta=kaiser_beta,
-        )
 
     for name, prefix in detectors:
         if earth_rotation:
