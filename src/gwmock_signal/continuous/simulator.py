@@ -241,27 +241,35 @@ class ContinuousWaveSimulator(GWSimulator):
         plus_values = np.asarray(plus, dtype=float)
         cross_values = np.asarray(cross, dtype=float)
 
-        # Released ripplegw cannot generate at the geocentre, and fails by returning NaN rather
-        # than raising. `barycenter.py` computes the detector latitude as `arccos(lz / rd)`, which
-        # is 0/0 when the location is the Earth centre -- exactly what this class asks for, so the
-        # projection can own the geocentre-to-detector leg instead of a second implementation
-        # duplicating it. Fixed in GW-JAX-Team/ripple#141; unfixed versions produce an all-NaN
-        # signal that propagates into written frames with nothing anywhere reporting it.
+        # Refuse a non-finite signal rather than writing it. The motivating case is released
+        # ripplegw, which cannot generate at the geocentre -- `barycenter.py` computes the
+        # detector latitude as `arccos(lz / rd)`, which is 0/0 when the location is the Earth
+        # centre, exactly what this class asks for so the projection can own the
+        # geocentre-to-detector leg. Fixed in GW-JAX-Team/ripple#141; unfixed versions return NaN
+        # for every sample and raise nothing, so the NaNs reach written frames.
         #
-        # Checked on the output rather than by probing the library, so it also catches any other
-        # route to a non-finite signal, and costs one pass over an array this function has just
-        # spent far longer generating. The source parameters are already known finite by
-        # `_validate_source`, so a NaN here is the library, not the caller.
+        # The condition is the general one, not a test for that bug, so the message must not
+        # assert the cause. A finite but extreme spindown overflows the phase and produces NaN on
+        # a *fixed* ripple too -- `_validate_source` checks that inputs are finite, not that they
+        # are in range -- and telling that caller to go and install a fix they already have would
+        # send them the wrong way entirely.
+        #
+        # Scope: this covers the polarizations only. Anything the projection, the antenna pattern
+        # or the background introduces downstream is not checked here and nothing else checks it
+        # either.
         if not np.all(np.isfinite(plus_values)) or not np.all(np.isfinite(cross_values)):
             import ripplegw  # noqa: PLC0415
 
             raise RuntimeError(
-                f"ripplegw {getattr(ripplegw, '__version__', 'unknown')} returned a non-finite "
-                f"signal at the geocentre, which is where this simulator generates. Released "
-                f"versions evaluate the detector latitude as arccos(lz / rd) and that is 0/0 at "
-                f"the Earth centre, so every sample is NaN. Fixed by GW-JAX-Team/ripple#141; "
-                f"until a release carries it, install ripplegw from a revision that has the fix. "
-                f"Refused here rather than written out, because NaN frames look like data."
+                f"the continuous-wave polarizations are not all finite, so nothing was written. "
+                f"Two causes are worth checking, in order. First, the source parameters: "
+                f"`_validate_source` requires them finite but not bounded, so an extreme spindown "
+                f"or amplitude can overflow the phase and yield NaN from a perfectly good "
+                f"library. Second, the library itself: releases without GW-JAX-Team/ripple#141 "
+                f"return NaN for *every* sample when generating at the geocentre, which is what "
+                f"this simulator asks for -- if the whole array is NaN that is the likely cause, "
+                f"and this project pins ripplegw to revision 400afb4 for it. "
+                f"Installed ripplegw: {getattr(ripplegw, '__version__', 'unknown')}."
             )
         return plus_values, cross_values
 
@@ -381,6 +389,9 @@ class ContinuousWaveSimulator(GWSimulator):
             ValueError: If ``background`` is absent or empty, or ``sampling_frequency`` is not
                 positive.
             KeyError: If a detector has no background channel.
+            RuntimeError: If the generated polarizations are not all finite -- an out-of-range
+                source parameter, or a ripplegw without GW-JAX-Team/ripple#141, which returns NaN
+                at the geocentre. Refused rather than written; see ``_geocentre_polarizations``.
         """
         del minimum_frequency, interpolate_if_offset
         self._validate_params(params)

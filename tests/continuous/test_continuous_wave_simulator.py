@@ -344,80 +344,106 @@ class TestOutput:
         assert 0.0 < peak <= float(_SOURCE["amplitude_plus"]), f"peak {peak:.3e} is not a projected amplitude"
 
 
-class TestAnUnfixedRippleIsRefused:
-    """Released ripplegw returns NaN at the geocentre; that must not reach a frame.
+class TestANonFinitePolarizationIsRefused:
+    """A non-finite signal must be refused, not written.
 
-    The pin in ``pyproject.toml`` is development-only and is not carried into the published
-    wheel, so anyone installing ``gwmock-signal[jax]`` from PyPI resolves a ripplegw without
-    GW-JAX-Team/ripple#141. Verified against the real released version: every sample of both
-    polarizations is NaN, and nothing raises. Without this guard those NaNs are written out.
+    The motivating case is released ripplegw, which returns NaN at the geocentre and raises
+    nothing. That pin in ``pyproject.toml`` is development-only and is not carried into a
+    published wheel, so anyone installing ``gwmock-signal[jax]`` from PyPI resolves a ripplegw
+    without GW-JAX-Team/ripple#141. Verified against released 0.3.0: every sample of both
+    polarizations is NaN.
+
+    The guard is written for the general condition rather than that one bug, so the tests cover
+    the general condition: either polarization, NaN or infinity, one bad sample as well as all of
+    them.
     """
 
-    @pytest.mark.parametrize("spoiled", ["both", "plus", "cross"])
-    def test_a_non_finite_geocentre_signal_raises(self, spoiled, monkeypatch):
-        """Simulated by forcing the library's return, so the test does not need an old ripple.
+    @staticmethod
+    def _source() -> dict[str, float]:
+        return {
+            "right_ascension": 1.1,
+            "declination": 0.3,
+            "frequency": 20.0,
+            "initial_phase": 0.4,
+            "amplitude_plus": 1e-24,
+            "amplitude_cross": 7e-25,
+        }
 
-        Parametrised over which polarization goes bad. The real failure spoils both, but a guard
-        written to check only ``plus`` passes a both-NaN test while letting a cross-only failure
-        through -- and cross carries half the signal, so that output would be wrong rather than
-        obviously broken.
-        """
-        pytest.importorskip("ripplegw")
-        import gwmock_signal.continuous.simulator as simulator_module
+    @staticmethod
+    def _spoiler(which: str, value: float):
+        """Return a stand-in for ripple's generator that spoils *which* polarization."""
 
-        simulator = _simulator()
-        n = 64
-
-        def _all_nan(**kwargs):
+        def _generate(**kwargs):
             length = len(kwargs["dt_rel"])
             good = np.ones(length)
-            bad = np.full(length, np.nan)
-            return (bad, bad) if spoiled == "both" else (bad, good) if spoiled == "plus" else (good, bad)
+            bad = np.ones(length)
+            bad[length // 2] = value
+            if which == "both":
+                return bad, bad.copy()
+            return (bad, good) if which == "plus" else (good, bad)
 
+        return _generate
+
+    @pytest.mark.parametrize("which", ["both", "plus", "cross"])
+    @pytest.mark.parametrize("value", [np.nan, np.inf])
+    def test_a_non_finite_polarization_raises(self, which, value, monkeypatch):
+        """Parametrised over polarization and over NaN vs infinity.
+
+        Over the polarization because a guard checking only ``plus`` passes an all-NaN test while
+        letting a cross-only failure through, and cross carries half the signal. Over the value
+        because a guard written with ``np.isnan`` instead of ``np.isfinite`` would miss infinity.
+        And a single bad sample rather than a whole bad array, because checking one element or a
+        slice would pass an all-NaN test and still write a corrupted frame.
+
+        Only ``ripplegw.waveforms.cw.PulsarSignal`` is patched. That module binds the name from
+        ``pulsar_signal`` at import, so patching the lower-case module rebinds something the
+        simulator never resolves -- an earlier version of this test patched both, and the second
+        one was inert.
+        """
+        pytest.importorskip("ripplegw")
         monkeypatch.setattr(
             "ripplegw.waveforms.cw.PulsarSignal.generate_pulsar_polarizations",
-            _all_nan,
-            raising=False,
+            self._spoiler(which, value),
         )
-        monkeypatch.setattr(
-            "ripplegw.waveforms.cw.pulsar_signal.generate_pulsar_polarizations",
-            _all_nan,
-            raising=False,
-        )
-        _ = simulator_module
 
-        with pytest.raises(RuntimeError, match="non-finite signal at the geocentre"):
-            simulator._geocentre_polarizations(
-                {
-                    "right_ascension": 1.1,
-                    "declination": 0.3,
-                    "frequency": 20.0,
-                    "initial_phase": 0.4,
-                    "amplitude_plus": 1e-24,
-                    "amplitude_cross": 7e-25,
-                },
-                epoch=_EPOCH,
-                n_samples=n,
+        with pytest.raises(RuntimeError, match="not all finite"):
+            _simulator()._geocentre_polarizations(self._source(), epoch=_EPOCH, n_samples=64, sampling_frequency=64.0)
+
+    def test_it_is_refused_through_the_public_entry_point(self, monkeypatch):
+        """Guards the placement, not just the condition.
+
+        Both other tests call the private helper, so a refactor that moved the check after the
+        projection or the margin trim would keep them passing while frames full of NaN went out
+        of ``simulate``. This is the assertion that says nothing reaches a caller.
+        """
+        pytest.importorskip("ripplegw")
+        monkeypatch.setattr(
+            "ripplegw.waveforms.cw.PulsarSignal.generate_pulsar_polarizations",
+            self._spoiler("both", np.nan),
+        )
+        simulator = _simulator()
+        background = {
+            name: TimeSeries(np.zeros(64), t0=_EPOCH, sample_rate=64.0, unit="strain") for name in ("H1", "L1")
+        }
+
+        with pytest.raises(RuntimeError, match="not all finite"):
+            simulator.simulate(
+                self._source(),
+                ["H1", "L1"],
+                background,
                 sampling_frequency=64.0,
+                minimum_frequency=5.0,
             )
 
     def test_a_finite_signal_is_returned_unchanged(self):
-        """The guard must not reject the working library it is meant to let through."""
+        """The guard must not reject the working library it exists to let through.
+
+        Runs against the real pinned ripple, so it doubles as a check that the pin is in place.
+        """
         pytest.importorskip("ripplegw")
 
-        simulator = _simulator()
-        plus, cross = simulator._geocentre_polarizations(
-            {
-                "right_ascension": 1.1,
-                "declination": 0.3,
-                "frequency": 20.0,
-                "initial_phase": 0.4,
-                "amplitude_plus": 1e-24,
-                "amplitude_cross": 7e-25,
-            },
-            epoch=_EPOCH,
-            n_samples=64,
-            sampling_frequency=64.0,
+        plus, cross = _simulator()._geocentre_polarizations(
+            self._source(), epoch=_EPOCH, n_samples=64, sampling_frequency=64.0
         )
 
         assert np.all(np.isfinite(plus))
