@@ -88,11 +88,15 @@ jobs:
                   path: ${{ github.workspace }}/.ephemeris-cache
                   key: lalpulsar-ephemeris-de405 # gitleaks:allow
 
-            # Warms the cache on a miss. Deliberately non-fatal: a git.ligo.org outage must
-            # not fail a release. When it does fail the continuous-wave tests skip and say
-            # why, which the run summary shows.
+            # Warms the cache on a miss, and fails the job if it cannot. Deliberately fatal:
+            # the alternative is for the continuous-wave tests to skip, and a test that stops
+            # running silently is worse than one that fails -- a release would go out with
+            # nothing having exercised the continuous-wave path and nothing saying so.
+            #
+            # Failing here rather than in pytest is what makes it readable: one named step
+            # reporting a download it retried three times, instead of fifteen tests erroring
+            # with a stack trace ending in urllib.
             - name: Fetch ephemeris tables if not cached
-              continue-on-error: true
               run: |
                   for attempt in 1 2 3; do
                       if uv run --frozen ripplegw-fetch-ephemeris \
@@ -102,7 +106,9 @@ jobs:
                       echo "ephemeris fetch attempt $attempt failed; retrying"
                       sleep $((attempt * 10))
                   done
-                  echo "could not fetch the ephemeris; continuous-wave tests will skip"
+                  echo "::error::could not fetch the LALPulsar ephemeris tables from" \
+                       "git.ligo.org after three attempts; the continuous-wave tests need them"
+                  exit 1
 
             # Unit tests with JAX installed: the importorskip'd ripple/JAX tests now run.
             - name: Run tests with pytest (JAX backend)

@@ -33,36 +33,6 @@ _EARTH = "earth00-40-DE405.dat.gz"
 _SUN = "sun00-40-DE405.dat.gz"
 
 
-def _ephemeris_is_available() -> bool:
-    """Return whether both ephemeris tables can be read without a network fetch.
-
-    ripple resolves a bare LALPulsar name by downloading it from git.ligo.org and caching it,
-    so these tests otherwise depend on an external service being reachable at test time. A
-    scheduled release failed exactly that way: the download timed out on one runner while the
-    identical commit had passed CI an hour earlier.
-
-    Skipping rather than failing is the right trade for a dependency the code under test does
-    not control -- but only because CI caches the tables and warms that cache, so a skip here
-    means the service is down, not that the coverage has quietly evaporated.
-    """
-    from ripplegw.waveforms.cw.ephemeris import read_ephemeris_file
-
-    try:
-        read_ephemeris_file(_EARTH)
-        read_ephemeris_file(_SUN)
-    except (FileNotFoundError, OSError):
-        return False
-    return True
-
-
-pytestmark = pytest.mark.skipif(
-    not _ephemeris_is_available(),
-    reason=(
-        f"{_EARTH} / {_SUN} are neither cached nor downloadable; ripple fetches them from "
-        f"git.ligo.org, so this is an outage or an offline machine rather than a code failure. "
-        f"Run `ripplegw-fetch-ephemeris` on a machine with access."
-    ),
-)
 _EPOCH = 1577491218.0
 _FS = 64.0
 _DETECTORS = ["H1", "L1"]
