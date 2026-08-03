@@ -259,6 +259,35 @@ class LALSimulationBackend(WaveformBackend):
             epoch_shift = 1.0 / hp.deltaF + (hp.epoch.gpsSeconds + hp.epoch.gpsNanoSeconds * 1e-9)
         return np.asarray(hp.data.data), np.asarray(hc.data.data), epoch_shift
 
+    def pre_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return the seconds before ``tc`` this backend's buffer starts.
+
+        Computed from the same two helpers ``generate_td_waveform`` uses --
+        :func:`~gwmock_signal.waveform.backends.conditioning.segment_sample_count` for the length
+        and :func:`~gwmock_signal.waveform.backends.conditioning.coalescence_placement` for where
+        coalescence sits in it -- so the answer cannot drift from what generation actually does.
+        Reproducing the arithmetic here instead would be a second implementation of it.
+        """
+        del approximant
+        p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
+        chirp_mass = (p.mass1 * p.mass2) ** 0.6 / (p.mass1 + p.mass2) ** 0.2
+        n_samples = conditioning.segment_sample_count(
+            chirp_mass,
+            minimum_frequency,
+            sampling_frequency,
+            ringdown_fraction=self._ringdown_fraction,
+            segment_duration=self._segment_duration,
+        )
+        _, epoch = conditioning.coalescence_placement(n_samples, sampling_frequency, self._ringdown_fraction)
+        # `epoch` is the first sample's time relative to coalescence, so it is negative.
+        return -float(epoch)
+
     def generate_td_waveform(
         self,
         approximant: str,

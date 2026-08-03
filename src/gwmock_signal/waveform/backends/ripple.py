@@ -647,6 +647,36 @@ class RippleBackend(WaveformBackend):
             self._segment_samples(chirp_mass_solar, minimum_frequency, sampling_frequency, eta=eta) / sampling_frequency
         )
 
+    def pre_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return the seconds before ``tc`` this backend's buffer starts.
+
+        Built from the same two steps generation uses -- ``_segment_samples`` for the length and
+        ``coalescence_placement`` for where coalescence sits in it -- so the answer cannot drift
+        from what ``generate_td_waveform`` actually produces. Ripple sizes differently from the
+        frequency-domain conditioning shared with the LAL backend (5-smooth lengths rather than
+        powers of two, and eta enters its 1PN term), which is exactly why this is asked of the
+        backend rather than computed once by the caller.
+        """
+        resolved = self._resolve_parameters(approximant, sampling_frequency, minimum_frequency, **params)
+        chirp_mass, eta = self._jax.vmap(self._conversions.ms_to_Mc_eta)(
+            self._jnp.stack([self._jnp.atleast_1d(resolved.mass1), self._jnp.atleast_1d(resolved.mass2)], axis=-1)
+        )
+        n_samples = self._segment_samples(
+            np.asarray(chirp_mass, dtype=float),
+            minimum_frequency,
+            sampling_frequency,
+            eta=np.asarray(eta, dtype=float),
+        )
+        _, epoch = self.coalescence_placement(n_samples, sampling_frequency)
+        # `epoch` is the first sample's time relative to coalescence, so it is negative.
+        return -float(epoch)
+
     def generate_td_waveform(
         self,
         approximant: str,
