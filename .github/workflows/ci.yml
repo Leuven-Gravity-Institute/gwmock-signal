@@ -63,8 +63,14 @@ jobs:
         # platform-dependent -- ~/Library/Caches on macOS, $XDG_CACHE_HOME or ~/.cache
         # elsewhere -- so caching a single hard-coded path would silently miss on the macOS
         # jobs while appearing to work.
+        #
+        # RIPPLEGW_CACHE_DIR is a *base*: ripple appends `ripplegw/ephemeris` to it, so the
+        # tables land in `.ephemeris-cache/ripplegw/ephemeris/`. The cached path is the base,
+        # which covers the subdirectory -- narrowing it to the leaf would still restore, then
+        # break the next time ripple changed its layout.
         env:
             RIPPLEGW_CACHE_DIR: ${{ github.workspace }}/.ephemeris-cache
+            EPHEMERIS_FILES: earth00-40-DE405.dat.gz sun00-40-DE405.dat.gz
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -80,13 +86,26 @@ jobs:
             # The continuous-wave tests need LALPulsar ephemeris tables. ripple fetches them
             # from git.ligo.org on first use and caches them, so without this every job on
             # every run pulled ~16 MB from an external service -- and a scheduled release
-            # failed when that download timed out. Cached under a fixed name, since the
-            # tables are static data, so there is nothing to invalidate.
+            # failed when that download timed out.
+            #
+            # The identifier carries the ripple revision and the file list, so it is not a
+            # permanent one. `actions/cache` does not re-save on an exact hit, so a fixed name
+            # would mean a newly added table downloading on every job forever without ever
+            # joining the cache. It would also survive a ripple bump that changed the default
+            # names or the table format. Note the tables are NOT immutable: ripple fetches
+            # them from lalsuite `master`, unpinned, so "static data" would be wrong.
+            - name: Resolve the ephemeris cache identifier
+              id: eph
+              run: |
+                  ripple=$(uv run --frozen python -c \
+                      "import importlib.metadata as m; print(m.version('ripplegw'))")
+                  echo "id=lalpulsar-${EPHEMERIS_FILES// /-}-ripple-${ripple}" >>"$GITHUB_OUTPUT"
+
             - name: Cache LALPulsar ephemeris tables
               uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
               with:
                   path: ${{ github.workspace }}/.ephemeris-cache
-                  key: lalpulsar-ephemeris-de405 # gitleaks:allow
+                  key: ${{ steps.eph.outputs.id }}
 
             # Warms the cache on a miss, and fails the job if it cannot. Deliberately fatal:
             # the alternative is for the continuous-wave tests to skip, and a test that stops
@@ -96,15 +115,24 @@ jobs:
             # Failing here rather than in pytest is what makes it readable: one named step
             # reporting a download it retried three times, instead of fifteen tests erroring
             # with a stack trace ending in urllib.
+            #
+            # What the cache does not cover, so nobody reads it as a guarantee: GitHub evicts
+            # a cache after 7 days without access, and the scheduled release runs weekly, so a
+            # quiet week can leave the release run as the first access -- a miss, a download,
+            # and the original incident if the service is down just then. Fork pull requests
+            # never restore this repository's cache at all and always download. The cache makes
+            # that outage rare; it does not make it impossible.
             - name: Fetch ephemeris tables if not cached
               run: |
                   for attempt in 1 2 3; do
-                      if uv run --frozen ripplegw-fetch-ephemeris \
-                          earth00-40-DE405.dat.gz sun00-40-DE405.dat.gz; then
+                      # shellcheck disable=SC2086 -- word splitting is the point here.
+                      if uv run --frozen ripplegw-fetch-ephemeris $EPHEMERIS_FILES; then
                           exit 0
                       fi
-                      echo "ephemeris fetch attempt $attempt failed; retrying"
-                      sleep $((attempt * 10))
+                      if [ "$attempt" -lt 3 ]; then
+                          echo "ephemeris fetch attempt $attempt failed; retrying"
+                          sleep $((attempt * 10))
+                      fi
                   done
                   echo "::error::could not fetch the LALPulsar ephemeris tables from" \
                        "git.ligo.org after three attempts; the continuous-wave tests need them"

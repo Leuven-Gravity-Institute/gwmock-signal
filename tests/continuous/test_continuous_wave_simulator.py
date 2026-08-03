@@ -31,8 +31,6 @@ from gwmock_signal.continuous import ContinuousWaveSimulator
 
 _EARTH = "earth00-40-DE405.dat.gz"
 _SUN = "sun00-40-DE405.dat.gz"
-
-
 _EPOCH = 1577491218.0
 _FS = 64.0
 _DETECTORS = ["H1", "L1"]
