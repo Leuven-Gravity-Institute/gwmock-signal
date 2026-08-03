@@ -134,3 +134,6 @@ dmypy.json
 # Node.js
 node_modules/
 .codegraph/
+
+# Local ephemeris cache when RIPPLEGW_CACHE_DIR points here (two ~16 MB tables).
+.ephemeris-cache/
