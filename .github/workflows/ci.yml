@@ -88,24 +88,19 @@ jobs:
             # every run pulled ~16 MB from an external service -- and a scheduled release
             # failed when that download timed out.
             #
-            # The identifier carries the ripple revision and the file list, so it is not a
-            # permanent one. `actions/cache` does not re-save on an exact hit, so a fixed name
-            # would mean a newly added table downloading on every job forever without ever
-            # joining the cache. It would also survive a ripple bump that changed the default
-            # names or the table format. Note the tables are NOT immutable: ripple fetches
-            # them from lalsuite `master`, unpinned, so "static data" would be wrong.
-            - name: Resolve the ephemeris cache identifier
-              id: eph
-              run: |
-                  ripple=$(uv run --frozen python -c \
-                      "import importlib.metadata as m; print(m.version('ripplegw'))")
-                  echo "id=lalpulsar-${EPHEMERIS_FILES// /-}-ripple-${ripple}" >>"$GITHUB_OUTPUT"
-
+            # The identifier is derived from `tests/data/ephemeris.sha256`, which records what
+            # the tables should contain. That is not a permanent name: `actions/cache` does not
+            # re-save on an exact hit, so a fixed one would mean a newly added table downloading
+            # on every job forever without ever joining the cache. Deriving it from the manifest
+            # means adding a table, or accepting new upstream content, invalidates the cache in
+            # the same commit that records the change.
             - name: Cache LALPulsar ephemeris tables
               uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
               with:
                   path: ${{ github.workspace }}/.ephemeris-cache
-                  key: ${{ steps.eph.outputs.id }}
+                  key:
+                      lalpulsar-ephemeris-${{
+                      hashFiles('tests/data/ephemeris.sha256') }}
 
             # Warms the cache on a miss, and fails the job if it cannot. Deliberately fatal:
             # the alternative is for the continuous-wave tests to skip, and a test that stops
@@ -137,6 +132,43 @@ jobs:
                   echo "::error::could not fetch the LALPulsar ephemeris tables from" \
                        "git.ligo.org after three attempts; the continuous-wave tests need them"
                   exit 1
+
+            # The tables are physics inputs -- they define the trajectories the barycentring
+            # uses -- and ripple takes them from lalsuite `master`, unpinned, keyed by name
+            # alone. So a changed upstream table or a corrupted cached copy would otherwise be
+            # used silently: ripple's fetch is satisfied by the file merely existing, and a bad
+            # copy surfaces only as a parse error deep inside a test, attributed to nothing.
+            - name: Verify the ephemeris tables against their recorded hashes
+              run: |
+                  uv run --frozen python - <<'CHECK'
+                  import hashlib, os, pathlib, sys
+
+                  manifest = pathlib.Path("tests/data/ephemeris.sha256")
+                  cache = pathlib.Path(os.environ["RIPPLEGW_CACHE_DIR"]) / "ripplegw" / "ephemeris"
+                  failures = []
+                  for line in manifest.read_text().splitlines():
+                      if not line.strip() or line.startswith("#"):
+                          continue
+                      expected, name = line.split()
+                      path = cache / name
+                      if not path.is_file():
+                          failures.append(f"{name}: missing from {cache}")
+                          continue
+                      actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                      if actual != expected:
+                          failures.append(f"{name}: expected {expected}, got {actual}")
+                  if failures:
+                      print("::error::ephemeris tables do not match tests/data/ephemeris.sha256")
+                      for failure in failures:
+                          print(f"::error::{failure}")
+                      print(
+                          "::error::either the cache holds a corrupt copy, or lalsuite master "
+                          "changed the tables -- the second means the reference trajectories "
+                          "moved and is worth understanding before updating the manifest"
+                      )
+                      sys.exit(1)
+                  print(f"verified {len(manifest.read_text().splitlines())} manifest entries")
+                  CHECK
 
             # Unit tests with JAX installed: the importorskip'd ripple/JAX tests now run.
             - name: Run tests with pytest (JAX backend)
