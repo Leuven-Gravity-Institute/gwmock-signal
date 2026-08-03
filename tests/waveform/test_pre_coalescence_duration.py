@@ -112,6 +112,64 @@ def test_a_longer_signal_starts_earlier():
     assert lower_cutoff > bbh
 
 
+def test_the_gwsignal_backend_inherits_a_correct_answer():
+    """It subclasses the LAL backend and overrides only the frequency-domain evaluation.
+
+    Pinned because the first version of this change documented gwsignal as unable to answer. It
+    inherits the sizing, so it answers correctly -- and a caller following that documentation would
+    have discarded a good number in favour of conservative placement. Untested claims about which
+    backends can answer are exactly the kind that rot.
+    """
+    gwsignal = pytest.importorskip("lalsimulation.gwsignal", reason="gwsignal is not available in this lalsuite build")
+    del gwsignal
+    from gwmock_signal.waveform.backends.gwsignal import GWSignalBackend
+
+    backend = GWSignalBackend()
+
+    predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _TC - float(generated["plus"].t0.value)
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+@pytest.mark.parametrize("segment_duration", [8.0, 64.0])
+def test_a_pinned_segment_duration_is_honoured(segment_duration):
+    """A pinned duration bypasses the chirp-time estimate, and must reach both paths.
+
+    Untested until a review pointed it out, and it is the same shape as the ringdown-fraction bug:
+    the default is ``None`` and the sizing helper's default is also ``None``, so dropping the
+    argument is invisible at the default and wrong for every caller who pins one.
+    """
+    from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+    backend = LALSimulationBackend(segment_duration=segment_duration)
+
+    predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _TC - float(generated["plus"].t0.value)
+
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+    # The pin must actually bind, or this test would pass against an implementation ignoring it.
+    assert predicted < segment_duration
+
+
+@pytest.mark.parametrize("ringdown_fraction", [0.05, 0.25])
+def test_a_non_default_ripple_ringdown_fraction_is_honoured(ringdown_fraction):
+    """Ripple reads its own fraction too, and had no non-default coverage."""
+    pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    backend = RippleBackend(ringdown_fraction=ringdown_fraction)
+
+    predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _TC - float(generated["plus"].t0.value)
+
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
 @pytest.mark.parametrize("ringdown_fraction", [0.05, 0.25])
 def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
     """The backend's own fraction must reach the answer, not the module default.
@@ -132,3 +190,35 @@ def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
     actual = _TC - float(generated["plus"].t0.value)
 
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"mass1": 60.0, "mass2": 3.0, "distance": 400.0, "inclination": 0.0}],
+    ids=["asymmetric-60+3"],
+)
+def test_ripple_honours_the_mass_ratio(params):
+    """Ripple carries eta in a 1PN term, and only an asymmetric binary can show it.
+
+    Added after a mutation survived: replacing the computed eta with the equal-mass 0.25 changed
+    nothing for 30+25 or 1.4+1.35, because the rounded buffer length came out the same. Both of
+    those are near-equal-mass, so the term they were supposed to exercise was invisible -- the
+    fourth instance in this change of a test that could not fail because its inputs sat at a
+    convenient value.
+    """
+    pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    backend = RippleBackend()
+
+    predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **params)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **params)
+    actual = _TC - float(generated["plus"].t0.value)
+
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+    # And the mass ratio must change the answer, or eta is not reaching the sizing at all.
+    equal_mass = backend.pre_coalescence_duration(
+        "IMRPhenomD", 1024.0, 20.0, mass1=31.5, mass2=31.5, distance=400.0, inclination=0.0
+    )
+    assert predicted != equal_mass
