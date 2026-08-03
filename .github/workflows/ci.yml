@@ -59,6 +59,12 @@ jobs:
                 python-version: ['3.12', '3.13', '3.14']
                 os: [ubuntu-latest, macos-latest]
         runs-on: ${{ matrix.os }}
+        # Pins ripple's ephemeris cache to one path on every runner. Its default location is
+        # platform-dependent -- ~/Library/Caches on macOS, $XDG_CACHE_HOME or ~/.cache
+        # elsewhere -- so caching a single hard-coded path would silently miss on the macOS
+        # jobs while appearing to work.
+        env:
+            RIPPLEGW_CACHE_DIR: ${{ github.workspace }}/.ephemeris-cache
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -70,6 +76,33 @@ jobs:
 
             - name: Install dependencies with the JAX extra
               run: uv sync --group dev --extra jax --frozen
+
+            # The continuous-wave tests need LALPulsar ephemeris tables. ripple fetches them
+            # from git.ligo.org on first use and caches them, so without this every job on
+            # every run pulled ~16 MB from an external service -- and a scheduled release
+            # failed when that download timed out. Cached under a fixed name, since the
+            # tables are static data, so there is nothing to invalidate.
+            - name: Cache LALPulsar ephemeris tables
+              uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+              with:
+                  path: ${{ github.workspace }}/.ephemeris-cache
+                  key: lalpulsar-ephemeris-de405 # gitleaks:allow
+
+            # Warms the cache on a miss. Deliberately non-fatal: a git.ligo.org outage must
+            # not fail a release. When it does fail the continuous-wave tests skip and say
+            # why, which the run summary shows.
+            - name: Fetch ephemeris tables if not cached
+              continue-on-error: true
+              run: |
+                  for attempt in 1 2 3; do
+                      if uv run --frozen ripplegw-fetch-ephemeris \
+                          earth00-40-DE405.dat.gz sun00-40-DE405.dat.gz; then
+                          exit 0
+                      fi
+                      echo "ephemeris fetch attempt $attempt failed; retrying"
+                      sleep $((attempt * 10))
+                  done
+                  echo "could not fetch the ephemeris; continuous-wave tests will skip"
 
             # Unit tests with JAX installed: the importorskip'd ripple/JAX tests now run.
             - name: Run tests with pytest (JAX backend)
