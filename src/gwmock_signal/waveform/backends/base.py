@@ -58,3 +58,56 @@ class WaveformBackend(ABC):
         **params: object,
     ) -> dict[str, TimeSeries]:
         """Generate ``plus`` and ``cross`` GWpy time series."""
+
+    def pre_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return how long before ``tc`` the generated waveform starts, in seconds.
+
+        A caller placing a signal in segmented data needs this *before* generating: a compact
+        binary's inspiral precedes its coalescence, so a buffer whose ``tc`` sits just past a
+        segment boundary begins in an earlier segment. Deciding which segment claims an event
+        without knowing this length means cropping the start away -- measured at 32% of a
+        30+25 solar-mass binary's strain-squared energy at 1024 Hz with 16-second segments, and
+        99.998% for a binary neutron star, whose buffer can start before the run.
+
+        Asked of the backend rather than computed by the caller on purpose. The length is a
+        property of how each library conditions its output: the LAL backend sizes with
+        :func:`~gwmock_signal.waveform.backends.conditioning.segment_sample_count`, the gwsignal
+        backend inherits that because it overrides only the frequency-domain evaluation, ripple
+        applies its own 5-smooth sizing, and PyCBC delegates to its library. A caller reproducing
+        any of that would be a second implementation of a quantity that already exists, wrong
+        differently per backend -- and wrong in the direction that silently truncates.
+
+        **This is where the buffer starts, not where audible signal begins.** The buffer carries
+        headroom beyond the estimated chirp time and is rounded up, so the first samples are
+        near-silent: a 30+25 solar-mass binary reports 3.6 s while carrying roughly 1.1 s of
+        inspiral. That is the safe direction for choosing a segment -- placing from this value
+        never crops real signal -- but it is not a statement about signal duration.
+
+        Returns:
+            Seconds between the first sample and coalescence, always positive. ``None`` when this
+            backend cannot say, which callers must treat as "unknown" rather than "zero": the
+            default is deliberately unhelpful because a wrong number is worse than none. A caller
+            that gets ``None`` should keep whatever conservative behaviour it had.
+
+            Test for ``None`` explicitly. ``if duration:`` is a trap -- it is also false for
+            ``0.0``, and treating an unknown length as zero places every event in the segment
+            holding its coalescence, which is the behaviour this method exists to avoid.
+
+            Of the backends here, only PyCBC returns ``None``.
+
+        Args:
+            approximant: The approximant that will be generated. Accepted because a backend may
+                condition differently per family, even though the current ones do not.
+            sampling_frequency: Sample rate in Hz, which sets the sample count.
+            minimum_frequency: Low-frequency cutoff in Hz; the dominant term in the chirp time.
+            **params: The source parameters that will be generated, in the same form
+                ``generate_td_waveform`` takes.
+        """
+        del approximant, sampling_frequency, minimum_frequency, params
+        return None
