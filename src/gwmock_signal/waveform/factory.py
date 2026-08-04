@@ -46,6 +46,11 @@ class WaveformFactory:
         self._models: dict[str, Callable[..., dict[str, TimeSeries]]] = {
             name: self._wrap_backend_call(name) for name in self._backend.available_approximants()
         }
+        # Kept so :meth:`pre_coalescence_duration` can tell a backend approximant from a custom
+        # registration. Compared by identity rather than by name, because
+        # ``register_waveform_model`` may *shadow* a backend name -- and then the backend's answer
+        # would describe a waveform nobody is generating.
+        self._backend_models = dict(self._models)
 
     def _wrap_backend_call(self, default_approximant: str) -> Callable[..., dict[str, TimeSeries]]:
         """Adapt the backend interface to the factory's callable registry contract."""
@@ -124,6 +129,40 @@ class WaveformFactory:
         if name in self._models:
             return self._models[name]
         raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
+
+    def pre_coalescence_duration(
+        self,
+        name: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return how long before ``tc`` the buffer for ``name`` starts, or ``None`` if unknown.
+
+        Delegates to the backend, which computes it from the same sizing its own generation uses.
+        See :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration`
+        for what the number means -- in particular that it is where the *buffer* starts, not where
+        audible signal begins, and that ``None`` means unknown rather than zero.
+
+        Returns ``None`` for a custom registered model. Those are arbitrary callables that never
+        reach the backend, so the backend's sizing would not describe what they produce. The check
+        is by identity against the wrappers built at construction, so a registration that shadows a
+        backend approximant is also excluded.
+
+        Args:
+            name: Waveform model name, as passed to :meth:`get_model`.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            **params: Source parameters, as generation would receive them.
+
+        Raises:
+            ValueError: If ``name`` is not registered at all, matching :meth:`get_model`.
+        """
+        if name not in self._models:
+            raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
+        if self._models[name] is not self._backend_models.get(name):
+            return None
+        return self._backend.pre_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
 
     def list_models(self) -> list[str]:
         """Return every registered waveform model name, in dict iteration order.
