@@ -398,9 +398,13 @@ class CBCSimulator(TransientSimulator):
         Answered before generating, which is the point: a caller placing signals into segmented
         data needs to know that a compact binary's buffer begins well before its coalescence, so a
         ``coa_time`` just past a segment boundary belongs to an *earlier* segment. Choosing the
-        claiming segment from ``coa_time`` alone crops the start away, and the loss is not marginal
-        -- 32% of a 30+25 solar-mass binary's strain-squared energy at 1024 Hz with 16-second
-        segments, 99.998% for a binary neutron star whose buffer can start before the run.
+        claiming segment from ``coa_time`` alone crops the start away, and the loss is not marginal.
+
+        **The size of that loss is not a single number** -- it moves by orders of magnitude with the
+        low-frequency cutoff, the offset past the boundary, the backend, the approximant and the
+        component spins, so no bare percentage is quoted here. The measured tables are in the user
+        guide, under *How much signal a segment boundary costs*, together with what they are a proxy
+        for and what they are not anchored against.
 
         Exposed here rather than left to callers to reach the backend through
         ``_waveform_factory``. Two private attributes across a package boundary would break

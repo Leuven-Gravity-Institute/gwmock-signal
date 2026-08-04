@@ -71,9 +71,14 @@ class WaveformBackend(ABC):
         A caller placing a signal in segmented data needs this *before* generating: a compact
         binary's inspiral precedes its coalescence, so a buffer whose ``tc`` sits just past a
         segment boundary begins in an earlier segment. Deciding which segment claims an event
-        without knowing this length means cropping the start away -- measured at 32% of a
-        30+25 solar-mass binary's strain-squared energy at 1024 Hz with 16-second segments, and
-        99.998% for a binary neutron star, whose buffer can start before the run.
+        without knowing this length means cropping the start away.
+
+        **How much that costs is not a single number.** It moves by orders of magnitude with the
+        low-frequency cutoff, with how far past ``tc`` lands beyond the boundary, and with the
+        backend -- from under 1% to over 99% of a binary's unweighted strain-squared energy, for the
+        same source. A percentage quoted without all three is not interpretable, so none is quoted
+        here. The measured tables live in the user guide, under *How much signal a segment boundary
+        costs*, together with what they are a proxy for and what they are not anchored against.
 
         Asked of the backend rather than computed by the caller on purpose. The length is a
         property of how each library conditions its output: the LAL backend sizes with
