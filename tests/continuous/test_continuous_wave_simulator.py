@@ -347,11 +347,10 @@ class TestOutput:
 class TestANonFinitePolarizationIsRefused:
     """A non-finite signal must be refused, not written.
 
-    The motivating case is released ripplegw, which returns NaN at the geocentre and raises
-    nothing. That pin in ``pyproject.toml`` is development-only and is not carried into a
-    published wheel, so anyone installing ``gwmock-signal[jax]`` from PyPI resolves a ripplegw
-    without GW-JAX-Team/ripple#141. Verified against released 0.3.0: every sample of both
-    polarizations is NaN.
+    The motivating case was a ripplegw before 0.3.1, which returned NaN at the geocentre and raised
+    nothing. That is closed now: the `jax` extra floors ripplegw at 0.3.1, so reaching it takes a
+    deliberate downgrade. The guard stays because a second cause does not involve ripple at all --
+    see ``test_an_out_of_range_spindown_overflows_the_phase``.
 
     The guard is written for the general condition rather than that one bug, so the tests cover
     the general condition: either polarization, NaN or infinity, one bad sample as well as all of
@@ -449,3 +448,59 @@ class TestANonFinitePolarizationIsRefused:
         assert np.all(np.isfinite(plus))
         assert np.all(np.isfinite(cross))
         assert np.max(np.abs(plus)) > 0.0
+
+
+def test_an_out_of_range_spindown_overflows_the_phase():
+    """The guard's non-ripple cause, exercised rather than asserted.
+
+    Its message leads with the source parameters, and until this test that claim rested on nothing:
+    every other guard test monkeypatches ripple, so none showed the library producing NaN from
+    finite input. A review pointed that out, and trying to reproduce it corrected the claim as well
+    as substantiating it -- a large spindown alone is *not* enough. `f1 = 1e300` stays finite with
+    the reference epoch beside the data, because the spindown term grows as the square of the time
+    from it; the two together overflow.
+
+    Absurd values, deliberately: the point is that ``_validate_source`` bounds finiteness and not
+    magnitude, so this is reachable through the public interface rather than only in principle.
+    """
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0)
+
+    with pytest.raises(RuntimeError, match="not all finite"):
+        simulator._geocentre_polarizations(
+            {
+                "right_ascension": 1.1,
+                "declination": 0.3,
+                "frequency": 20.0,
+                "initial_phase": 0.4,
+                "amplitude_plus": 1e-24,
+                "amplitude_cross": 7e-25,
+            },
+            epoch=_EPOCH,
+            n_samples=64,
+            sampling_frequency=64.0,
+        )
+
+
+def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
+    """Pins the second half of the mechanism, so the test above cannot be misread.
+
+    Without this, the case above reads as "a large spindown produces NaN", which is false and would
+    send someone bounding spindowns rather than looking at the epoch difference.
+    """
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=_EPOCH)
+
+    plus, _ = simulator._geocentre_polarizations(
+        {
+            "right_ascension": 1.1,
+            "declination": 0.3,
+            "frequency": 20.0,
+            "initial_phase": 0.4,
+            "amplitude_plus": 1e-24,
+            "amplitude_cross": 7e-25,
+        },
+        epoch=_EPOCH,
+        n_samples=64,
+        sampling_frequency=64.0,
+    )
+
+    assert np.all(np.isfinite(plus))

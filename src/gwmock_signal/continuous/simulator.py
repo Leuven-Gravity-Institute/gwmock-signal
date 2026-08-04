@@ -249,8 +249,12 @@ class ContinuousWaveSimulator(GWSimulator):
         # `jax` extra now floors ripplegw there -- so this is no longer reachable without a
         # deliberate downgrade.
         #
-        # The check stays regardless. The floor closes one cause; the other, an out-of-range source
-        # parameter overflowing the phase, has nothing to do with ripple and is still live.
+        # The check stays regardless. The floor closes one cause; the other has nothing to do with
+        # ripple and is still live -- an out-of-range spindown overflowing the phase. Reachable
+        # only when the reference epoch is also far from the data, because the term grows as the
+        # square of the time from it: measured, `f1 = 1e300` stays finite with the reference beside
+        # the data and produces NaN with it at GPS 0. Extreme, but demonstrable rather than
+        # asserted, and `_validate_source` does not bound magnitudes.
         #
         # The condition is the general one, not a test for that bug, so the message must not
         # assert the cause. A finite but extreme spindown overflows the phase and produces NaN on
@@ -268,8 +272,9 @@ class ContinuousWaveSimulator(GWSimulator):
                 f"the continuous-wave polarizations are not all finite, so nothing was written. "
                 f"Two causes are worth checking, in order. First, the source parameters: "
                 f"`_validate_source` requires them finite but not bounded, so an extreme spindown "
-                f"or amplitude can overflow the phase and yield NaN from a perfectly good "
-                f"library. Second, an old ripplegw: before 0.3.1 it returned NaN for *every* "
+                f"or amplitude, combined with a reference epoch far from the data, can overflow "
+                f"the phase and yield NaN from a perfectly good library -- the spindown term grows "
+                f"as the square of the time from `reference_time_ssb`. Second, an old ripplegw: before 0.3.1 it returned NaN for *every* "
                 f"sample when generating at the geocentre, which is what this simulator asks for, "
                 f"so a wholly-NaN array points there. The `jax` extra floors ripplegw at 0.3.1, so "
                 f"reaching that needs a deliberate downgrade. "
