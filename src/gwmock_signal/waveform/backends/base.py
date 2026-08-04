@@ -71,9 +71,48 @@ class WaveformBackend(ABC):
         A caller placing a signal in segmented data needs this *before* generating: a compact
         binary's inspiral precedes its coalescence, so a buffer whose ``tc`` sits just past a
         segment boundary begins in an earlier segment. Deciding which segment claims an event
-        without knowing this length means cropping the start away -- measured at 32% of a
-        30+25 solar-mass binary's strain-squared energy at 1024 Hz with 16-second segments, and
-        99.998% for a binary neutron star, whose buffer can start before the run.
+        without knowing this length means cropping the start away.
+
+        **How much that costs depends on the low-frequency cutoff, and a figure quoted without one is
+        not interpretable.** Measured with IMRPhenomD at 1024 Hz into a single detector (H1), ``tc``
+        0.5 s past a segment boundary, 20 Hz cutoff against 30 Hz:
+
+        =========================  ==============  ==============
+        30+25 solar masses         20 Hz           30 Hz
+        =========================  ==============  ==============
+        buffer                     4.000 s         4.000 s
+        dropped span               3.100 s (77.5%) 3.100 s (77.5%)
+        dropped ``h**2``           **32.3%**       **0.91%**
+        =========================  ==============  ==============
+
+        For this binary the cutoff changes the *content* of the dropped span and not its geometry:
+        the conditioning rounds both cutoffs to the same power of two, so the span is identical while
+        the energy in it differs by a factor of 35 -- at 30 Hz those early samples lie below the
+        cutoff and are near-silent, and at 20 Hz they also enlarge the total the fraction is taken
+        against. Across offsets, energy lost at 20 Hz against 30 Hz: 99.9%/99.8% at 1 ms past the
+        boundary, 72.8%/48.7% at 0.1 s, 54.2%/10.5% at 0.25 s, 32.3%/0.91% at 0.5 s, 2.9%/0.34% at
+        1 s. The gap is widest in the middle, where the dropped span covers just the band between the
+        two cutoffs.
+
+        A binary neutron star is worse in absolute terms and differs in kind, because there the
+        cutoff moves the geometry too -- the chirp time dominates the rounding:
+
+        =========================  ==============  ==============
+        1.4+1.35 solar masses      20 Hz           30 Hz
+        =========================  ==============  ==============
+        lead                       230.4 s         57.6 s
+        buffer                     256.0 s         64.0 s
+        dropped span               229.9 s (89.8%) 57.1 s (89.2%)
+        dropped ``h**2``           **96.1%**       **93.1%**
+        =========================  ==============  ==============
+
+        The detector network shifts these by around a percentage point -- 32.9% rather than 32.3% at
+        20 Hz for a three-detector ET triangle -- so it is worth naming alongside the cutoff, but it
+        is not what makes the figures differ by orders of magnitude.
+
+        These are unweighted ``h**2`` fractions -- a proxy, not a matched-filter SNR loss, which needs
+        a detector PSD and frequency-domain weighting. **None is anchored against an external SNR
+        tool.** They are this package's own measurement of its own output.
 
         Asked of the backend rather than computed by the caller on purpose. The length is a
         property of how each library conditions its output: the LAL backend sizes with
