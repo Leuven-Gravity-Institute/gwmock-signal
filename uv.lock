@@ -754,7 +754,7 @@ requires-dist = [
     { name = "lalsuite", specifier = ">=7.23" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ripplegw", marker = "extra == 'jax'", git = "https://github.com/GW-JAX-Team/ripple.git?rev=400afb4" },
+    { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.3.1" },
     { name = "typer", specifier = ">=0.16.0" },
 ]
 provides-extras = ["jax", "pycbc", "sgwb"]
@@ -2353,11 +2353,15 @@ wheels = [
 
 [[package]]
 name = "ripplegw"
-version = "0.3.1.dev3"
-source = { git = "https://github.com/GW-JAX-Team/ripple.git?rev=400afb4#400afb4d41d2fbc6a85f3aac7ad8c07eb64fa641" }
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jax" },
     { name = "jaxtyping" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e0/b7/d6da3e3adcd03d5490638a1f73c743e22b9d002ea06c8ebf8c2725905727/ripplegw-0.3.1.tar.gz", hash = "sha256:c9435c9266125b645d38636a42947acad93cf841ce635e55a1a3a5d765990f2e", size = 481899, upload-time = "2026-08-03T20:28:19.215Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/33/fc079529e3a796da9f4bb1b2cd17a77ba70ff3ae9e821380bdcf46714134/ripplegw-0.3.1-py3-none-any.whl", hash = "sha256:0bd8f1bb8235ae59d9bfa3938ca1ee49bf91f4b38bd313a25620f087539cfeaf", size = 225512, upload-time = "2026-08-03T20:28:17.909Z" },
 ]
 
 [[package]]
