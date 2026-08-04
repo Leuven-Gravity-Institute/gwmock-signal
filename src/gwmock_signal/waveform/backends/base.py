@@ -74,58 +74,11 @@ class WaveformBackend(ABC):
         without knowing this length means cropping the start away.
 
         **How much that costs is not a single number.** It moves by orders of magnitude with the
-        low-frequency cutoff, with how far past the boundary ``tc`` lands, and with the backend, so a
-        bare percentage is not interpretable and none is quoted without all three. Measured with
-        IMRPhenomD at 1024 Hz into a single detector (H1) on this LAL backend, ``tc`` 0.5 s past a
-        segment boundary:
-
-        =========================  ================  ================
-        30+25 solar masses         20 Hz             30 Hz
-        =========================  ================  ================
-        buffer                     4.000 s           4.000 s
-        dropped span               3.100 s (77.5%)   3.100 s (77.5%)
-        dropped ``h**2``           **32.3%**         **0.91%**
-        =========================  ================  ================
-
-        Here the cutoff changes the *content* of the dropped span and not its geometry, so the span is
-        identical while the energy in it differs 35-fold: at 30 Hz those early samples lie below the
-        cutoff and are near-silent, and at 20 Hz they also enlarge the total the fraction is taken
-        against. **That coincidence is specific to this mass pair on this backend, and must not be
-        read as a rule** -- LAL's power-of-two rounding happens to absorb the difference at 30+25,
-        while a 10+10 binary gives a 16.000 s buffer at 20 Hz against 8.000 s at 30 Hz (dropping 74.6%
-        against 53.7% of the energy), and ripple reports a 4.050 s lead at 20 Hz against 2.813 s at
-        30 Hz where LAL reports 3.600 s at both.
-
-        Across offsets, energy lost at 20 Hz against 30 Hz for 30+25 on LAL: 99.9%/99.8% at 1 ms past
-        the boundary, 72.8%/48.7% at 0.1 s, 54.2%/10.5% at 0.25 s, 32.3%/0.91% at 0.5 s, 2.9%/0.34%
-        at 1 s. The gap is widest in the middle, where the dropped span covers just the band between
-        the two cutoffs.
-
-        A binary neutron star is worse in absolute terms, and there the cutoff moves the geometry as
-        well because the chirp time dominates the rounding. The offset matters most of all -- at
-        ``tc`` exactly on the boundary nothing of the buffer is retained but the post-merger tail:
-
-        =========================  ================  ================
-        1.4+1.35 solar masses      20 Hz             30 Hz
-        =========================  ================  ================
-        lead                       230.4 s           57.6 s
-        buffer                     256.0 s           64.0 s
-        dropped ``h**2``, ``tc``   **99.998%**       **99.93%**
-        on the boundary
-        dropped ``h**2``, ``tc``   **96.1%**         **93.1%**
-        0.5 s past it
-        =========================  ================  ================
-
-        The two BNS rows are the same binary half a second apart, which is why an offset has to be
-        given alongside any of these figures.
-
-        The detector network shifts them by around a percentage point -- 32.9% rather than 32.3% at
-        20 Hz for a three-detector ET triangle -- worth naming, but not what makes them differ by
-        orders of magnitude. Distance cancels out of a fraction entirely.
-
-        These are unweighted ``h**2`` fractions -- a proxy, not a matched-filter SNR loss, which needs
-        a detector PSD and frequency-domain weighting. **None is anchored against an external SNR
-        tool.** They are this package's own measurement of its own output.
+        low-frequency cutoff, with how far past ``tc`` lands beyond the boundary, and with the
+        backend -- from under 1% to over 99% of a binary's unweighted strain-squared energy, for the
+        same source. A percentage quoted without all three is not interpretable, so none is quoted
+        here. The measured tables live in the user guide, under *How much signal a segment boundary
+        costs*, together with what they are a proxy for and what they are not anchored against.
 
         Asked of the backend rather than computed by the caller on purpose. The length is a
         property of how each library conditions its output: the LAL backend sizes with

@@ -404,8 +404,9 @@ class CBCSimulator(TransientSimulator):
         low-frequency cutoff, the offset past the boundary and the backend. On LAL at 1024 Hz, a 30+25
         solar-mass binary with ``coa_time`` 0.5 s past a boundary drops 3.100 s of a 4.000 s buffer at
         either cutoff, but that span holds 32.3% of the unweighted strain-squared energy at a 20 Hz
-        cutoff against 0.91% at 30 Hz. A binary neutron star at 20 Hz loses 96.1% at that same offset
-        and 99.998% with ``coa_time`` on the boundary itself, its buffer running to 256 s. See
+        cutoff against 0.91% at 30 Hz. A 1.4+1.35 solar-mass binary at 20 Hz, whose buffer runs to
+        256 s, loses 96.1% at that same offset and 99.998% with ``coa_time`` on the boundary itself.
+        See
         :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration` for
         the figures across offsets and both cutoffs, and for why they are a proxy rather than an SNR
         loss.

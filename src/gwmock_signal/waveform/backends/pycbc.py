@@ -64,6 +64,36 @@ class PyCBCBackend(WaveformBackend):
         """Return all PyCBC time-domain approximants."""
         return list(self._pycbc_waveform.td_approximants())
 
+    def pre_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return ``None``: this backend cannot say where its buffer starts.
+
+        PyCBC sizes the waveform inside its own library, so there is no conditioning arithmetic here
+        to answer from. Declared explicitly rather than inherited so that this is a documented
+        property of the PyCBC backend rather than a silent fallthrough -- and so the base class's
+        discussion of measured losses, which is about backends that *can* answer, does not appear on
+        this page as though these figures came from PyCBC.
+
+        ``None`` means *unknown*, never zero. A caller that reads it as zero concludes the waveform
+        starts at coalescence and crops the entire inspiral; see
+        :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration`.
+
+        Args:
+            approximant: Unused; accepted to match the base signature.
+            sampling_frequency: Unused; accepted to match the base signature.
+            minimum_frequency: Unused; accepted to match the base signature.
+            **params: Unused; accepted to match the base signature.
+
+        Returns:
+            Always ``None``.
+        """
+        return None
+
     @staticmethod
     def _resolve_waveform_arguments(value: object) -> dict[str, object]:
         """Validate the optional extra-argument mapping forwarded to PyCBC.
