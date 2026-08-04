@@ -242,11 +242,15 @@ class ContinuousWaveSimulator(GWSimulator):
         cross_values = np.asarray(cross, dtype=float)
 
         # Refuse a non-finite signal rather than writing it. The motivating case is released
-        # ripplegw, which cannot generate at the geocentre -- `barycenter.py` computes the
-        # detector latitude as `arccos(lz / rd)`, which is 0/0 when the location is the Earth
-        # centre, exactly what this class asks for so the projection can own the
-        # geocentre-to-detector leg. Fixed in GW-JAX-Team/ripple#141; unfixed versions return NaN
-        # for every sample and raise nothing, so the NaNs reach written frames.
+        # ripplegw before 0.3.1, which could not generate at the geocentre -- `barycenter.py`
+        # computed the detector latitude as `arccos(lz / rd)`, which is 0/0 when the location is the
+        # Earth centre, exactly what this class asks for so the projection can own the
+        # geocentre-to-detector leg. Fixed in GW-JAX-Team/ripple#141, released in 0.3.1, and the
+        # `jax` extra now floors ripplegw there -- so this is no longer reachable without a
+        # deliberate downgrade.
+        #
+        # The check stays regardless. The floor closes one cause; the other, an out-of-range source
+        # parameter overflowing the phase, has nothing to do with ripple and is still live.
         #
         # The condition is the general one, not a test for that bug, so the message must not
         # assert the cause. A finite but extreme spindown overflows the phase and produces NaN on
@@ -265,10 +269,10 @@ class ContinuousWaveSimulator(GWSimulator):
                 f"Two causes are worth checking, in order. First, the source parameters: "
                 f"`_validate_source` requires them finite but not bounded, so an extreme spindown "
                 f"or amplitude can overflow the phase and yield NaN from a perfectly good "
-                f"library. Second, the library itself: releases without GW-JAX-Team/ripple#141 "
-                f"return NaN for *every* sample when generating at the geocentre, which is what "
-                f"this simulator asks for -- if the whole array is NaN that is the likely cause, "
-                f"and this project pins ripplegw to revision 400afb4 for it. "
+                f"library. Second, an old ripplegw: before 0.3.1 it returned NaN for *every* "
+                f"sample when generating at the geocentre, which is what this simulator asks for, "
+                f"so a wholly-NaN array points there. The `jax` extra floors ripplegw at 0.3.1, so "
+                f"reaching that needs a deliberate downgrade. "
                 f"Installed ripplegw: {getattr(ripplegw, '__version__', 'unknown')}."
             )
         return plus_values, cross_values
