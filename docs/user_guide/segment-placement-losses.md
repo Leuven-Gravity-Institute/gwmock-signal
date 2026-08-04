@@ -98,23 +98,57 @@ transfer to it. PyCBC does not report a length at all — its
 `pre_coalescence_duration` returns `None`, meaning _unknown_, and a caller must
 not read that as zero.
 
-## What does not matter much
+## Other things that move it
 
+All measured at 20 Hz, `coa_time` 0.5 s past the boundary, against the 32.3%
+baseline above.
+
+**Bigger than the cutoff-independent effects listed further down:**
+
+- **Component spins** are the largest single mover named here. Aligned
+  `spin1z = spin2z` of 0.4 gives 35.7% and 0.8 gives 38.5%, against 32.3% for a
+  non-spinning binary.
+- **The approximant** matters as much, and this one has a trap in it:
+
+    | approximant   | dropped h² |
+    | ------------- | ---------- |
+    | IMRPhenomD    | 32.3%      |
+    | IMRPhenomXPHM | 31.5%      |
+    | TaylorF2      | 26.4%      |
+
+    Every table on this page uses IMRPhenomD. **gwmock's default waveform model
+    is IMRPhenomXPHM**, so a default gwmock run does not produce the 32.3%
+    quoted here — it produces 31.5%.
+
+- **GPS epoch** moves it 30.9% to 33.3% across twelve epochs spanning a single
+  day. The cause is the Greenwich mean sidereal time _at the epoch_, which sets
+  where the detector is pointing when the signal arrives; it is not rotation
+  during the buffer, which over 4 s is negligible.
+
+    Sampling this one badly is easy, and the failure is worth recording. Four
+    epochs taken on 1 January of different years give 32.32% to 32.34%, which
+    looks like a flat knob — but sidereal time at a fixed calendar date barely
+    changes from year to year, so those are nearly the same orientation measured
+    four times. A quantity periodic in sidereal time has to be sampled across
+    that period, not along a variable aliased with it.
+
+**Smaller:**
+
+- **Right ascension, declination and polarization angle** together span 29.7% to
+  33.4% over a 6×3×3 grid. **Inclination** is not part of that: on its own it
+  moves the fraction by about 0.003 percentage points.
+- **Detector network**: 32.9% for a three-detector ET triangle against 32.3% for
+  H1.
+- **`ringdown_fraction`** (a backend constructor argument, not a per-event
+  parameter) changes the lead more than the fraction: 0.05 gives a 3.800 s lead
+  and 32.37%, 0.1 gives 3.600 s and 32.34%, 0.2 gives 3.200 s and 32.29%.
 - **Distance** cancels out of a fraction entirely.
-- **Detector network** moves it by about a percentage point: 32.9% for a
-  three-detector ET triangle against 32.3% for H1, at 20 Hz and 0.5 s past the
-  boundary.
-- **Sky position, polarization and inclination** together move it by a few
-  percentage points: across 54 combinations the 20 Hz / 0.5 s figure ranges from
-  29.7% to 33.4%. Larger than the network effect, and named for the same reason
-  — to say explicitly that these are _not_ where the orders of magnitude come
-  from.
-- **GPS epoch** is negligible: 32.32% to 32.34% across four epochs spanning 2020
-  to 2030. Worth stating because it is the one knob here that looks like it
-  should matter — the antenna pattern rotates with the Earth — and over a 4 s
-  buffer it does not.
-- **`ringdown_fraction`** between 0.05 and 0.2 leaves the 4.000 s buffer and the
-  32.3% unchanged.
+
+**Checked and genuinely negligible:** sample rate, reference frequency, and the
+backend `segment_duration` pin.
+
+The ripple leads quoted above are for its constructor defaults, including
+`taper_fraction`; changing the taper changes them.
 
 ## These are a proxy, not an SNR loss
 

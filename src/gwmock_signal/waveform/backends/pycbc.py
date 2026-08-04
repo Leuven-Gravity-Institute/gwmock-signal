@@ -80,8 +80,8 @@ class PyCBCBackend(WaveformBackend):
         this page as though these figures came from PyCBC.
 
         ``None`` means *unknown*, never zero. A caller that reads it as zero concludes the waveform
-        starts at coalescence and crops the entire inspiral; see
-        :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration`.
+        starts at coalescence and crops the entire inspiral; see ``WaveformBackend`` for what that
+        costs.
 
         Args:
             approximant: Unused; accepted to match the base signature.
