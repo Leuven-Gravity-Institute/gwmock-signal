@@ -318,6 +318,21 @@ class TransientSimulator(GWSimulator):
         return DetectorStrainStack.from_mapping(str_names, injected)
 
 
+#: Parameters the *projection* consumes, which the waveform backend must never be handed.
+#:
+#: One definition, because two code paths need the same answer: generation, and
+#: :meth:`CBCSimulator.pre_coalescence_duration`, which must be callable with exactly the mapping
+#: generation takes. They were filtered in one place and not the other, so a caller passing a
+#: complete CBC mapping got a `ValueError` about unsupported LAL parameters from the duration query
+#: while generation accepted the same input -- the query being unusable by its only intended caller.
+_PROJECTION_ONLY_PARAMETERS = frozenset({"right_ascension", "declination", "polarization_angle", "coa_time"})
+
+
+def _waveform_parameters(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Return *params* without the keys the projection owns, which the backend rejects."""
+    return {key: value for key, value in params.items() if key not in _PROJECTION_ONLY_PARAMETERS}
+
+
 class CBCSimulator(TransientSimulator):
     """Compact binary coalescence simulator backed by ``WaveformFactory``.
 
@@ -411,7 +426,7 @@ class CBCSimulator(TransientSimulator):
             self._waveform_model,
             sampling_frequency,
             minimum_frequency,
-            **dict(params),
+            **_waveform_parameters(params),
         )
 
     def generate_polarizations(
@@ -434,11 +449,7 @@ class CBCSimulator(TransientSimulator):
         Returns:
             Tuple of ``(hp, hc)`` GWpy ``TimeSeries`` objects.
         """
-        waveform_params = {
-            k: v
-            for k, v in params.items()
-            if k not in {"right_ascension", "declination", "polarization_angle", "coa_time"}
-        }
+        waveform_params = _waveform_parameters(params)
 
         result = self._waveform_factory.generate(
             self._waveform_model,

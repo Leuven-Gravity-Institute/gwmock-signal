@@ -15,9 +15,27 @@ import pytest
 
 from gwmock_signal.simulator import CBCSimulator
 
-_BBH = {"mass1": 30.0, "mass2": 25.0, "distance": 400.0, "inclination": 0.0}
-_BNS = {"mass1": 1.4, "mass2": 1.35, "distance": 100.0, "inclination": 0.0}
 _TC = 1419724820.0
+
+#: Complete source mappings, exactly as a caller passes them -- including the projection keys the
+#: waveform backend must never see.
+#:
+#: They matter. The first version of these tests fed the prediction a *reduced* mapping and
+#: generation a separately augmented one, so both paths passed while the prediction was in fact
+#: unusable: it forwarded `coa_time`, `right_ascension`, `declination` and `polarization_angle` to a
+#: backend that rejects them, raising `ValueError` on the very input generation accepts. Tailoring
+#: the input per path is what hid it, so both now receive the same mapping.
+_BBH = {
+    "mass1": 30.0,
+    "mass2": 25.0,
+    "distance": 400.0,
+    "inclination": 0.4,
+    "coa_time": _TC,
+    "right_ascension": 1.1,
+    "declination": 0.3,
+    "polarization_angle": 0.2,
+}
+_BNS = {**_BBH, "mass1": 1.4, "mass2": 1.35, "distance": 100.0}
 
 
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])
@@ -27,7 +45,7 @@ def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_fre
     simulator = CBCSimulator(waveform_model="IMRPhenomD")
 
     predicted = simulator.pre_coalescence_duration(params, sampling_frequency, 20.0)
-    hp, _ = simulator.generate_polarizations({**params, "coa_time": _TC}, sampling_frequency, 20.0)
+    hp, _ = simulator.generate_polarizations(params, sampling_frequency, 20.0)
     actual = _TC - float(hp.t0.value)
 
     assert predicted is not None
@@ -70,6 +88,7 @@ def test_a_factory_registration_shadowing_an_approximant_answers_unknown():
     import numpy as np
     from gwpy.timeseries import TimeSeries
 
+    from gwmock_signal.simulator import _waveform_parameters
     from gwmock_signal.waveform.factory import WaveformFactory
 
     def _flat(**kwargs):
@@ -79,12 +98,16 @@ def test_a_factory_registration_shadowing_an_approximant_answers_unknown():
             "cross": TimeSeries(np.zeros(128), t0=0.0, sample_rate=128.0),
         }
 
+    # Backend-shaped parameters here, not the caller's mapping: stripping the projection-owned keys
+    # is the simulator's contract, and the factory sits below it.
+    backend_params = _waveform_parameters(_BBH)
+
     factory = WaveformFactory()
-    assert factory.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH) is not None
+    assert factory.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **backend_params) is not None
 
     factory.register_model("IMRPhenomD", _flat)
 
-    assert factory.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH) is None
+    assert factory.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **backend_params) is None
 
 
 def test_the_simulator_refuses_to_shadow_an_existing_model():
@@ -111,3 +134,25 @@ def test_an_unknown_model_raises_like_generation_would():
 
     with pytest.raises(ValueError, match="not found"):
         simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0)
+
+
+def test_the_query_accepts_exactly_what_generation_accepts():
+    """Neither path may require a mapping the other rejects.
+
+    The bug this pins: generation strips the projection-owned keys before reaching the backend and
+    the query did not, so a complete CBC mapping raised `ValueError: Unsupported LAL waveform
+    parameters: coa_time, declination, polarization_angle, right_ascension` from the query while
+    generation succeeded. The query was therefore unusable by its only intended caller, and every
+    other test passed because it was handed a reduced mapping.
+
+    Asserted as a symmetry rather than by listing the keys, so adding a projection parameter cannot
+    reintroduce the divergence.
+    """
+    simulator = CBCSimulator(waveform_model="IMRPhenomD")
+
+    predicted = simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0)
+    hp, _ = simulator.generate_polarizations(_BBH, 1024.0, 20.0)
+
+    assert predicted == pytest.approx(_TC - float(hp.t0.value), abs=0.5 / 1024.0)
+    # And the mapping really does carry the keys that used to break it, or this proves nothing.
+    assert {"coa_time", "right_ascension", "declination", "polarization_angle"} <= set(_BBH)
