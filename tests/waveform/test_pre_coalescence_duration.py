@@ -2,9 +2,11 @@
 
 A caller placing signals into segmented data needs this in advance: a compact binary's inspiral
 precedes its coalescence, so a buffer whose ``tc`` sits just past a segment boundary begins in an
-earlier segment. Choosing the claiming segment from ``tc`` alone crops the start away -- 32% of a
-30+25 solar-mass binary's strain-squared energy at 1024 Hz with 16 s segments, and 99.998% for a
-binary neutron star whose buffer can begin before the run.
+earlier segment. Choosing the claiming segment from ``tc`` alone crops the start away, by an amount
+that depends on the low-frequency cutoff, the backend and how far past the boundary ``tc`` lands --
+see :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration` for the
+measured figures. Quoted without those, a single percentage is not interpretable, so none is quoted
+here.
 
 The property worth testing is not the arithmetic but the *agreement*: the number a backend promises
 must be the number generation delivers. A test that recomputed the formula would pass against a

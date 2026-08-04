@@ -400,11 +400,12 @@ class CBCSimulator(TransientSimulator):
         ``coa_time`` just past a segment boundary belongs to an *earlier* segment. Choosing the
         claiming segment from ``coa_time`` alone crops the start away, and the loss is not marginal.
 
-        **The size of that loss depends on the low-frequency cutoff.** A 30+25 solar-mass binary at
-        1024 Hz with ``coa_time`` 0.5 s past a boundary drops 3.100 s of a 4.000 s buffer at either
-        cutoff, but that span holds 32.3% of the unweighted strain-squared energy at a 20 Hz cutoff
-        against 0.91% at 30 Hz. A binary neutron star loses 96.1% at 20 Hz, its buffer running to
-        256 s and starting well before the segment. See
+        **The size of that loss is not a single number** -- it moves by orders of magnitude with the
+        low-frequency cutoff, the offset past the boundary and the backend. On LAL at 1024 Hz, a 30+25
+        solar-mass binary with ``coa_time`` 0.5 s past a boundary drops 3.100 s of a 4.000 s buffer at
+        either cutoff, but that span holds 32.3% of the unweighted strain-squared energy at a 20 Hz
+        cutoff against 0.91% at 30 Hz. A binary neutron star at 20 Hz loses 96.1% at that same offset
+        and 99.998% with ``coa_time`` on the boundary itself, its buffer running to 256 s. See
         :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration` for
         the figures across offsets and both cutoffs, and for why they are a proxy rather than an SNR
         loss.
