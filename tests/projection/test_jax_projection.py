@@ -269,7 +269,7 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
     from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, precess_to_epoch
 
     sampling_frequency = 2048.0
     n_samples = 2**16
@@ -289,6 +289,20 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
+    # The kernel takes a sky position already in the mean frame of date, because
+    # `project_polarizations_to_network` precesses once before dispatching to either backend. Calling
+    # it directly, as here, means doing that conversion too -- otherwise this compares a precessed
+    # host path against a J2000 device path and reports 3.7% of peak, which is what it did when the
+    # precession landed.
+    of_date = dict(
+        zip(
+            ("right_ascension", "declination"),
+            precess_to_epoch(
+                sky["right_ascension"], sky["declination"], start_time + 0.5 * (n_samples - 1) / sampling_frequency
+            ),
+            strict=True,
+        )
+    )
     device = np.asarray(
         project_polarizations_td_rotating(
             plus,
@@ -299,7 +313,8 @@ def test_rotating_projection_matches_numpy_path() -> None:
             n_samples=n_samples,
             gmst_start=float(anchors[0]),
             gmst_rate=rate,
-            **sky,
+            polarization_angle=sky["polarization_angle"],
+            **of_date,
         )
     )
 

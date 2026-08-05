@@ -139,7 +139,10 @@ def antenna_pattern(
     Args:
         response: 3x3 detector response tensor.
         gmst: Greenwich Mean Sidereal Time in radians (scalar or array).
-        right_ascension: Source right ascension in radians.
+        right_ascension: Source right ascension in radians, in the **mean equator and equinox of
+            date** rather than J2000. `project_polarizations_to_network` applies that rotation once
+            before dispatching here; a direct caller must do the same, or the sidereal angle and the
+            sky position refer to different frames -- worth 3.7% of peak strain when it was missed.
         declination: Source declination in radians.
         polarization_angle: Polarization angle psi in radians.
 
@@ -193,7 +196,10 @@ def time_delay_from_geocenter(
     Args:
         location: Earth-fixed detector position in metres (3-vector).
         gmst: Greenwich Mean Sidereal Time in radians (scalar or array).
-        right_ascension: Source right ascension in radians.
+        right_ascension: Source right ascension in radians, in the **mean equator and equinox of
+            date** rather than J2000. `project_polarizations_to_network` applies that rotation once
+            before dispatching here; a direct caller must do the same, or the sidereal angle and the
+            sky position refer to different frames -- worth 3.7% of peak strain when it was missed.
         declination: Source declination in radians.
 
     Returns:
@@ -408,7 +414,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         location: Earth-fixed detector position in metres (3-vector).
         sampling_frequency: Sample rate in Hz.
         n_samples: Number of samples.
-        right_ascension: Source right ascension in radians.
+        right_ascension: Source right ascension in radians, in the **mean equator and equinox of
+            date** rather than J2000. `project_polarizations_to_network` applies that rotation once
+            before dispatching here; a direct caller must do the same, or the sidereal angle and the
+            sky position refer to different frames -- worth 3.7% of peak strain when it was missed.
         declination: Source declination in radians.
         polarization_angle: Polarization angle psi in radians.
         gmst_start: Greenwich Mean Sidereal Time in radians at the first sample, computed on

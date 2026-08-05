@@ -32,7 +32,7 @@ from gwmock_signal.projection.resampling import (
     require_terrestrial_location,
     resample_uniform_sinc,
 )
-from gwmock_signal.projection.sidereal import gmst_rad_astropy
+from gwmock_signal.projection.sidereal import gmst_rad_astropy, precessed_sky_anchor_and_rate
 
 logger = logging.getLogger("gwmock_signal")
 
@@ -465,6 +465,23 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
 
+    # Into the frame the sidereal angle is measured in, once, before anything else reads the sky
+    # position. Every branch below -- host scalar, host array, and the device kernel, for the delay
+    # *and* the antenna pattern -- derives its geometry from these two numbers, so converting here
+    # rather than at each site is what makes it impossible for one path to keep the J2000 values and
+    # disagree with the others.
+    #
+    # `reference_time` is the segment midpoint. The precession angles move 2306 arcseconds per
+    # century, so evaluating them once for the segment costs 3e-6 arcseconds of drift across 4096 s,
+    # fourteen orders below the effect being corrected.
+    # Anchored at the segment midpoint and *linear in absolute time*, which is the part that matters:
+    # a position frozen per segment steps at every boundary, and that step broke continuous-wave phase
+    # coherence at 1.6e-08 of peak against a 1e-09 tolerance. Two abutting segments evaluate the same
+    # line at the same absolute time, so they agree exactly where they meet whatever their anchors are.
+    (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
+        right_ascension, declination, reference_time
+    )
+
     # Dispatched here, before any of the host branch's preparation. Everything below -- two
     # rffts, the frequency grid, and per-sample Astropy GMST with its sines and cosines -- serves
     # only the NumPy branches, and the device path recomputes what it needs from an anchor and a
@@ -496,12 +513,16 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     strains: dict[str, GWpyTimeSeries] = {}
 
-    cosdec = np.cos(declination)
-    sindec = np.sin(declination)
+    # Per sample, not per segment: see the anchor-and-rate comment above.
+    precession_offsets = time_array - reference_time
+    right_ascension_array = right_ascension + d_right_ascension * precession_offsets
+    declination_array = declination + d_declination * precession_offsets
+    cosdec = np.cos(declination_array)
+    sindec = np.sin(declination_array)
     cospsi = np.cos(polarization_angle)
     sinpsi = np.sin(polarization_angle)
     gmst_array = _gmst_accurate_array(time_array)
-    gha_array = gmst_array - right_ascension
+    gha_array = gmst_array - right_ascension_array
     cosgha = np.cos(gha_array)
     singha = np.sin(gha_array)
 
@@ -510,14 +531,14 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             response, location = reconstructed_geometry(prefix)
 
             # Vectorized time delay: time_delay = -location · prop_dir / c
-            prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, np.full(len(time_array), sindec)], axis=-1)
+            prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, sindec], axis=-1)
             time_delays = -np.dot(prop_dir, location) / constants.c.value
 
             # Antenna pattern at the detector-time sample, i.e. the same time coordinate
             # the output series is labelled with. Evaluating it at t + tau would mix the
             # detector and geocenter time coordinates; LALSuite and the bilby-x-g
             # frequency-domain implementation both use a single consistent coordinate.
-            gha_a = gmst_array - right_ascension
+            gha_a = gmst_array - right_ascension_array
             cosgha_a = np.cos(gha_a)
             singha_a = np.sin(gha_a)
 
@@ -526,7 +547,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
                 [
                     -cospsi * singha_a - sinpsi * cosgha_a * sindec,
                     -cospsi * cosgha_a + sinpsi * singha_a * sindec,
-                    np.full(len(time_array), sinpsi * cosdec),
+                    sinpsi * cosdec,
                 ],
                 axis=-1,
             )
@@ -534,7 +555,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
                 [
                     sinpsi * singha_a - cospsi * cosgha_a * sindec,
                     sinpsi * cosgha_a + cospsi * singha_a * sindec,
-                    np.full(len(time_array), cospsi * cosdec),
+                    cospsi * cosdec,
                 ],
                 axis=-1,
             )
