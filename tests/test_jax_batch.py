@@ -315,3 +315,86 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
             # both paths. See test_jax_projection.py for the history of this tolerance.
             assert np.sqrt(np.mean(difference**2)) < 1e-11 * scale
             assert np.max(difference) < 1e-10 * scale
+
+
+def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
+    """The batched ``earth_rotation=False`` branch agrees with the per-event NumPy projection.
+
+    The same anchoring as the rotating test above, for the branch that evaluates the response at a
+    single instant. It exists separately because that branch has its own reference time -- the
+    segment midpoint rather than the first sample -- which the rotating test cannot reach.
+
+    ``test_simulate_cbc_batch_matches_host_pipeline`` already compares these two paths, but it gates
+    on ``overlap > 0.999``, and an overlap is nearly blind to a common-mode error: giving one side
+    the wrong sky-frame convention moves the strain by 4.4e-03 of peak and still leaves that test
+    passing at 0.9999997, both measured. So the residual is asserted directly instead, which is what
+    makes this a check on the *convention* reaching both paths and not only on the arithmetic.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+    import numpy as np
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+    from gwmock_signal.jax_batch import simulate_cbc_batch
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    detectors = ["E1", "E2"]
+    sampling_frequency, minimum_frequency = 4096.0, 25.0
+    parameters = {
+        "detector_frame_mass_1": np.array([30.0, 25.0]),
+        "detector_frame_mass_2": np.array([28.0, 22.0]),
+        "luminosity_distance": np.array([900.0, 1200.0]),
+        "inclination": np.array([0.3, 1.1]),
+        "coa_phase": np.array([0.0, 2.0]),
+        "right_ascension": np.array([1.3, 4.0]),
+        "declination": np.array([-0.4, 0.6]),
+        "polarization_angle": np.array([0.7, 2.1]),
+        "coa_time": np.array([1.4e9, 1.4e9 + 300.0]),
+    }
+
+    batch = simulate_cbc_batch(
+        "IMRPhenomD",
+        detectors,
+        sampling_frequency=sampling_frequency,
+        minimum_frequency=minimum_frequency,
+        parameters=parameters,
+        earth_rotation=False,
+    )
+    device = np.asarray(batch.strain)
+
+    backend = RippleBackend()
+    fd = backend.generate_fd_polarizations_batch(
+        "IMRPhenomD",
+        sampling_frequency=sampling_frequency,
+        minimum_frequency=minimum_frequency,
+        parameters=parameters,
+    )
+    n_samples = fd.n_samples
+    merger_index, epoch = backend.coalescence_placement(n_samples, sampling_frequency)
+
+    for event in range(len(parameters["coa_time"])):
+        start = epoch + parameters["coa_time"][event]
+        hp = np.roll(np.fft.irfft(np.asarray(fd.plus[event]), n=n_samples) * sampling_frequency, merger_index)
+        hc = np.roll(np.fft.irfft(np.asarray(fd.cross[event]), n=n_samples) * sampling_frequency, merger_index)
+        reference = project_polarizations_to_network(
+            {
+                "plus": GWpyTimeSeries(hp, t0=start, sample_rate=sampling_frequency),
+                "cross": GWpyTimeSeries(hc, t0=start, sample_rate=sampling_frequency),
+            },
+            detectors,
+            right_ascension=float(parameters["right_ascension"][event]),
+            declination=float(parameters["declination"][event]),
+            polarization_angle=float(parameters["polarization_angle"][event]),
+            earth_rotation=False,
+        )
+        for index, name in enumerate(detectors):
+            expected = reference[name].value
+            scale = np.max(np.abs(expected))
+            assert scale > 0.0
+            difference = np.abs(device[event, index] - expected)
+            # Measured at 7.7e-12 to 1.3e-11 of peak across the four event/detector pairs, so the
+            # bound sits just above that rather than at a round number. It is round-off from the two
+            # paths associating the same arithmetic differently, the same size the rotating branch
+            # shows, and eight orders below the 0.4% a dropped precession costs.
+            assert np.sqrt(np.mean(difference**2)) < 3e-11 * scale

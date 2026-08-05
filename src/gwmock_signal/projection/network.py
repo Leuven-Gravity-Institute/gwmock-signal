@@ -403,6 +403,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     declination: float,
     polarization_angle: float,
     earth_rotation: bool = True,
+    precess_source_direction: bool = False,
     backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
@@ -430,6 +431,26 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
         earth_rotation: If ``True``, evaluate antenna patterns at time-dependent
             GPS times (recommended for longer signals). If ``False``, use a single
             reference time at the segment midpoint for patterns and delays.
+        precess_source_direction: Whether to rotate ``right_ascension``/``declination`` from J2000
+            into the mean equator and equinox *of date* before using them. **Which value is correct
+            depends on the source type, because LAL itself uses two conventions and they disagree
+            by 1.8e-04 s of geocentre-to-detector delay:**
+
+            * ``False`` (the default) reproduces ``XLALTimeDelayFromEarthCenter`` and
+              ``XLALComputeDetAMResponse`` -- ``gha = gmst - ra`` with no rotation -- which is what
+              every compact-binary search and parameter-estimation code does (Bilby, PyCBC,
+              LALInference, GstLAL). Strictly it mixes frames, since GMST is measured from the
+              equinox of date; but a CBC injection is only useful if the pipeline that recovers it
+              agrees about where the source was, and precessing here would shift the recovered
+              right ascension by ~0.43 degrees by 2030.
+            * ``True`` reproduces ``lalpulsar.XLALBarycenter``, which applies lunisolar precession.
+              Required for continuous waves, where the SSB-to-geocentre part of the phase comes from
+              a barycentering routine that precesses (both LAL's and ripple's do), so *not*
+              rotating here would leave the site term inconsistent with the term it is added to.
+
+            This is therefore a property of the generator, not of the projection, which is why it is
+            an explicit argument with no clever default: see
+            :func:`~gwmock_signal.projection.sidereal.precess_to_epoch`.
         backend: Which implementation evaluates the ``earth_rotation=True`` branch.
             ``"numpy"`` (the default) runs on the host. ``"jax"`` delegates to
             :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating`,
@@ -475,11 +496,10 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
 
-    # Into the frame the sidereal angle is measured in, once, before anything else reads the sky
-    # position. Every branch below -- host scalar, host array, and the device kernel, for the delay
-    # *and* the antenna pattern -- derives its geometry from these two numbers, so converting here
-    # rather than at each site is what makes it impossible for one path to keep the J2000 values and
-    # disagree with the others.
+    # Resolved once, before anything else reads the sky position. Every branch below -- host scalar,
+    # host array, and the device kernel, for the delay *and* the antenna pattern -- derives its
+    # geometry from these numbers, so deciding here rather than at each site is what makes it
+    # impossible for one path to precess and another not to.
     #
     # Anchored at the *first* sample, because that is the origin the device kernel's `sample_offsets`
     # counts from, so both backends read the same line without a second convention to keep straight.
@@ -490,9 +510,16 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     # The step broke continuous-wave phase coherence at 1.6e-08 of peak against a 1e-09 tolerance.
     # Linear in absolute time removes it: two abutting segments evaluate the same line at the same
     # absolute time, so they agree exactly where they meet whatever their anchors are.
-    (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
-        right_ascension, declination, float(time_array[0])
-    )
+    #
+    # Zero rates when not precessing, rather than a separate code path: the same multiply-add then
+    # holds the position fixed exactly, so the two conventions cannot diverge in anything but the
+    # numbers they put in.
+    if precess_source_direction:
+        (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
+            right_ascension, declination, float(time_array[0])
+        )
+    else:
+        d_right_ascension = d_declination = 0.0
 
     # Dispatched here, before any of the host branch's preparation. Everything below -- two
     # rffts, the frequency grid, and per-sample Astropy GMST with its sines and cosines -- serves

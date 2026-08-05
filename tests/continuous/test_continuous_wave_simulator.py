@@ -28,6 +28,7 @@ from gwpy.timeseries import TimeSeries
 pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
 
 from gwmock_signal.continuous import ContinuousWaveSimulator
+from gwmock_signal.projection.network import project_polarizations_to_network
 
 _EARTH = "earth00-40-DE405.dat.gz"
 _SUN = "sun00-40-DE405.dat.gz"
@@ -504,3 +505,39 @@ def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
     )
 
     assert np.all(np.isfinite(plus))
+
+
+def test_the_continuous_wave_path_precesses_the_source_direction():
+    """This simulator must opt into the frame-of-date convention; the CBC path must not.
+
+    LAL uses two sky conventions and they differ by 1.8e-04 s of geocentre-to-detector delay:
+    ``lalpulsar.XLALBarycenter`` precesses, ``lal.XLALTimeDelayFromEarthCenter`` does not. A
+    continuous wave needs the first, because the SSB-to-geocentre part of its phase already came from
+    a barycentering routine that precessed, so the site term added to it has to match or the seam
+    carries that offset -- across a months-long coherent integration, where it does not average away.
+
+    Asserted on the call rather than on the strain because
+    ``test_the_flag_selects_between_lals_two_conventions`` already measures what the flag *does*
+    against both LAL references. What is unpinned without this is the wiring: which value this
+    simulator passes. The projection's default is the compact-binary one, so the wiring is the whole
+    difference, and silently losing it would leave every continuous-wave test still green.
+    """
+    from unittest.mock import patch
+
+    simulator = _simulator()
+    n_samples = int(8 * _FS)
+    background = {
+        name: TimeSeries(np.zeros(n_samples), t0=_EPOCH, sample_rate=_FS, unit="strain") for name in _DETECTORS
+    }
+    with patch(
+        "gwmock_signal.continuous.simulator.project_polarizations_to_network",
+        side_effect=project_polarizations_to_network,
+    ) as spy:
+        simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
+
+    assert spy.call_count > 0, "the projection was never called, so this asserts nothing"
+    for call in spy.call_args_list:
+        assert call.kwargs["precess_source_direction"] is True, (
+            "the continuous-wave path must ask for the frame-of-date convention explicitly; the "
+            "projection defaults to the compact-binary one"
+        )

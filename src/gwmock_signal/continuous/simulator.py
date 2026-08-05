@@ -462,6 +462,13 @@ class ContinuousWaveSimulator(GWSimulator):
             declination=float(params["declination"]),
             polarization_angle=float(params.get("polarization_angle", 0.0)),
             earth_rotation=earth_rotation,
+            # Not the projection's default, and not a preference. The SSB-to-geocentre part of this
+            # signal's phase comes from a barycentering routine that applies lunisolar precession --
+            # ripple's does, as LAL's ``XLALBarycenter`` does -- so the site term added to it has to
+            # be evaluated in the same frame or the seam between them carries a 1.8e-04 s offset.
+            # The compact-binary path deliberately leaves this off, because CBC searches do; see the
+            # argument's documentation for why the two source types differ.
+            precess_source_direction=True,
             # The device implementation of the same algorithm. Measured against the host path at
             # this class's own segment sizes, three detectors, 512 Hz: 2.0x over 256 s and 3.4x
             # over 1024 s, agreeing to 1.4e-11 of peak. Not a choice about accuracy -- the two

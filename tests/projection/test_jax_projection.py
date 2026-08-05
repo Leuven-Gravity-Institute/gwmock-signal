@@ -269,13 +269,11 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
     from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, precessed_sky_anchor_and_rate
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
 
     sampling_frequency = 2048.0
     n_samples = 2**16
     start_time = 1.4e9
-    # Zero rates: these exercise the resampler, the sidereal model and the guards, not
-    # precession, so the sky position is held fixed deliberately rather than by default.
     sky = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
 
     plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
@@ -291,20 +289,10 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
-    # The kernel takes a sky position already in the mean frame of date, because
-    # `project_polarizations_to_network` precesses once before dispatching to either backend. Calling
-    # it directly, as here, means doing that conversion too -- otherwise this compares a precessed
-    # host path against a J2000 device path and reports 3.7% of peak, which is what it did when the
-    # precession landed.
-    (ra_of_date, dec_of_date), (ra_rate, dec_rate) = precessed_sky_anchor_and_rate(
-        sky["right_ascension"], sky["declination"], start_time
-    )
-    of_date = {
-        "right_ascension": ra_of_date,
-        "declination": dec_of_date,
-        "right_ascension_rate": ra_rate,
-        "declination_rate": dec_rate,
-    }
+    # Zero rates, matching `precess_source_direction=False` in the reference above: whichever sky
+    # convention the two sides use, they must use the *same* one, or this measures a frame offset
+    # instead of the round-off it claims to. Mismatching them here reported 1.1% of peak.
+    frozen_sky = {"right_ascension_rate": 0.0, "declination_rate": 0.0}
     device = np.asarray(
         project_polarizations_td_rotating(
             plus,
@@ -315,8 +303,8 @@ def test_rotating_projection_matches_numpy_path() -> None:
             n_samples=n_samples,
             gmst_start=float(anchors[0]),
             gmst_rate=rate,
-            polarization_angle=sky["polarization_angle"],
-            **of_date,
+            **sky,
+            **frozen_sky,
         )
     )
 
@@ -342,7 +330,7 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
 
     from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
     from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, precessed_sky_anchor_and_rate
+    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
 
     sampling_frequency = 64.0
     n_samples = 2**18  # 4096 s, the scale of a BNS inspiral in the ET band
@@ -352,12 +340,6 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
     plus, cross = _chirp_polarizations(n_samples, sampling_frequency)
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
-    # `project_polarizations_to_network` precesses internally; the kernel takes an already-precessed
-    # position. Feeding it the same one leaves Earth rotation as the only difference between the two
-    # results, which is what the mismatch below is meant to be measuring.
-    (ra_of_date, dec_of_date), (ra_rate, dec_rate) = precessed_sky_anchor_and_rate(
-        sky["right_ascension"], sky["declination"], start_time
-    )
 
     rotating = np.asarray(
         project_polarizations_td_rotating(
@@ -369,11 +351,11 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
             n_samples=n_samples,
             gmst_start=float(anchors[0]),
             gmst_rate=rate,
-            right_ascension=ra_of_date,
-            declination=dec_of_date,
-            right_ascension_rate=ra_rate,
-            declination_rate=dec_rate,
-            polarization_angle=sky["polarization_angle"],
+            **sky,
+            # Zero, matching `project_polarizations_to_network`'s default: neither side precesses,
+            # so Earth rotation is the only difference and it is what the mismatch below measures.
+            right_ascension_rate=0.0,
+            declination_rate=0.0,
         )
     )
 
