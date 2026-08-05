@@ -515,9 +515,16 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     # holds the position fixed exactly, so the two conventions cannot diverge in anything but the
     # numbers they put in.
     if precess_source_direction:
-        (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
+        (anchor_ra, anchor_dec), (rate_ra, rate_dec) = precessed_sky_anchor_and_rate(
             right_ascension, declination, float(time_array[0])
         )
+        # Back to Python floats. `precessed_sky_anchor_and_rate` returns 0-d NumPy arrays, and
+        # handing those to the cached device kernel where the other branch hands it weakly typed
+        # Python floats makes the two branches distinct `jax.jit` signatures at one segment shape --
+        # so a process using both would compile the same kernel twice. `jax_batch` pins `gmst_rate`
+        # for the same reason.
+        right_ascension, declination = float(anchor_ra), float(anchor_dec)
+        d_right_ascension, d_declination = float(rate_ra), float(rate_dec)
     else:
         d_right_ascension = d_declination = 0.0
 
@@ -579,23 +586,20 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             # the output series is labelled with. Evaluating it at t + tau would mix the
             # detector and geocenter time coordinates; LALSuite and the bilby-x-g
             # frequency-domain implementation both use a single consistent coordinate.
-            gha_a = gmst_array - right_ascension_array
-            cosgha_a = np.cos(gha_a)
-            singha_a = np.sin(gha_a)
 
             # Shape (N, 3) — polarization basis vectors
             x_vec = np.stack(
                 [
-                    -cospsi * singha_a - sinpsi * cosgha_a * sindec,
-                    -cospsi * cosgha_a + sinpsi * singha_a * sindec,
+                    -cospsi * singha - sinpsi * cosgha * sindec,
+                    -cospsi * cosgha + sinpsi * singha * sindec,
                     sinpsi * cosdec,
                 ],
                 axis=-1,
             )
             y_vec = np.stack(
                 [
-                    sinpsi * singha_a - cospsi * cosgha_a * sindec,
-                    sinpsi * cosgha_a + cospsi * singha_a * sindec,
+                    sinpsi * singha - cospsi * cosgha * sindec,
+                    sinpsi * cosgha + cospsi * singha * sindec,
                     cospsi * cosdec,
                 ],
                 axis=-1,

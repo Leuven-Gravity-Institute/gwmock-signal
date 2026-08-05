@@ -347,14 +347,17 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     location: ArrayLike,
     sampling_frequency: float,
     n_samples: int,
-    right_ascension: float,
-    declination: float,
-    right_ascension_rate: float,
-    declination_rate: float,
-    polarization_angle: float,
-    gmst_start: float,
+    # `ArrayLike`, not `float`, for everything `jax_batch` maps over: under its `jax.vmap` these
+    # arrive as traced per-event arrays, so `float` describes only the single-event caller. Kept as
+    # `float` where the batched path passes one unmapped value -- `gmst_rate` is shared across a batch.
+    right_ascension: ArrayLike,
+    declination: ArrayLike,
+    right_ascension_rate: ArrayLike,
+    declination_rate: ArrayLike,
+    polarization_angle: ArrayLike,
+    gmst_start: ArrayLike,
     gmst_rate: float,
-    extra_shift_samples: float = 0.0,
+    extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
 ) -> Array:
