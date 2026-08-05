@@ -258,6 +258,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
         location,
         right_ascension,
         declination,
+        right_ascension_rate,
+        declination_rate,
         polarization_angle,
         gmst_start,
         gmst_rate,
@@ -271,6 +273,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
             n_samples=n_samples,
             right_ascension=right_ascension,
             declination=declination,
+            right_ascension_rate=right_ascension_rate,
+            declination_rate=declination_rate,
             polarization_angle=polarization_angle,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
@@ -289,6 +293,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
     time_array: np.ndarray,
     right_ascension: float,
     declination: float,
+    right_ascension_rate: float,
+    declination_rate: float,
     polarization_angle: float,
     sinc_taps: int,
     kaiser_beta: float,
@@ -368,6 +374,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
             location,
             right_ascension,
             declination,
+            right_ascension_rate,
+            declination_rate,
             polarization_angle,
             float(np.atleast_1d(anchors)[0]),
             float(rate),
@@ -478,8 +486,10 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     # a position frozen per segment steps at every boundary, and that step broke continuous-wave phase
     # coherence at 1.6e-08 of peak against a 1e-09 tolerance. Two abutting segments evaluate the same
     # line at the same absolute time, so they agree exactly where they meet whatever their anchors are.
+    # Anchored at the *first* sample, which is the origin the device kernel's `sample_offsets` uses,
+    # so both backends read the same line without a second convention to keep straight.
     (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
-        right_ascension, declination, reference_time
+        right_ascension, declination, float(time_array[0])
     )
 
     # Dispatched here, before any of the host branch's preparation. Everything below -- two
@@ -496,6 +506,8 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             time_array=time_array,
             right_ascension=right_ascension,
             declination=declination,
+            right_ascension_rate=d_right_ascension,
+            declination_rate=d_declination,
             polarization_angle=polarization_angle,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
@@ -514,7 +526,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     strains: dict[str, GWpyTimeSeries] = {}
 
     # Per sample, not per segment: see the anchor-and-rate comment above.
-    precession_offsets = time_array - reference_time
+    precession_offsets = time_array - time_array[0]
     right_ascension_array = right_ascension + d_right_ascension * precession_offsets
     declination_array = declination + d_declination * precession_offsets
     cosdec = np.cos(declination_array)

@@ -349,6 +349,8 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     n_samples: int,
     right_ascension: float,
     declination: float,
+    right_ascension_rate: float,
+    declination_rate: float,
     polarization_angle: float,
     gmst_start: float,
     gmst_rate: float,
@@ -426,6 +428,13 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             implementation of the sidereal model; see that module for why a linear model
             is exact at these segment lengths.
         gmst_rate: dGMST/dt in radians per second.
+        right_ascension_rate: How fast the precessed right ascension moves, in radians per second,
+            from :func:`~gwmock_signal.projection.sidereal.precessed_sky_anchor_and_rate`. Required
+            rather than defaulted, because a caller that forgets it gets a position frozen for the
+            whole segment -- which steps at every segment boundary and broke continuous-wave phase
+            coherence at 1.6e-08 of peak against a 1e-09 tolerance. Anchored at the first sample, the
+            same origin as ``gmst_start``.
+        declination_rate: The same for declination.
         extra_shift_samples: Additional shift, in samples, applied together with the
             geocenter delay. Used to land the output on a caller's sample lattice; because it
             joins the delay inside one resampling, the alignment costs no extra interpolation
@@ -445,7 +454,17 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     # GMST from the host-supplied anchor and rate. Deliberately left unwrapped: only its
     # sine and cosine are used, and wrapping would put a discontinuity mid-segment.
     gmst = gmst_start + gmst_rate * sample_offsets
-    time_delays = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
+
+    # The sky position moves too, because precession is a rotation into the frame *of date* and the
+    # date advances across the segment. Linear in absolute time, so two abutting segments agree
+    # exactly where they meet; frozen per segment they do not, and the step is what a continuous-wave
+    # coherence test sees.
+    right_ascension_of_date = right_ascension + right_ascension_rate * sample_offsets
+    declination_of_date = declination + declination_rate * sample_offsets
+
+    time_delays = time_delay_from_geocenter(
+        location, gmst, right_ascension=right_ascension_of_date, declination=declination_of_date
+    )
 
     # Antenna pattern at the detector-time sample, i.e. the time coordinate the output
     # series is labelled with. Evaluating it at t + tau would mix the detector and
@@ -453,8 +472,8 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     f_plus, f_cross = antenna_pattern(
         response,
         gmst,
-        right_ascension=right_ascension,
-        declination=declination,
+        right_ascension=right_ascension_of_date,
+        declination=declination_of_date,
         polarization_angle=polarization_angle,
     )
 
