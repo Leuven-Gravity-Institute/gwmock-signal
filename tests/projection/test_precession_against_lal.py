@@ -19,8 +19,13 @@ matches ``lalpulsar``, and this module measures how well. What pins the other co
 ``test_matches_pycbc_reference_on_gw150914_like_case`` in ``test_projection_network.py``, and the two
 are supposed to disagree.
 
-``lalpulsar`` and DE405 ephemeris tables are required, so these skip where either is absent. The
-ephemeris files are the same ones the continuous-wave tests use.
+One test here deliberately does **not** use LAL:
+``test_the_rotation_agrees_with_astropys_independent_precession_model`` compares the rotation against
+Astropy's IAU 2006 frame transform. Everything else in this module measures fidelity to LAL, which
+cannot distinguish a faithful port from a shared error.
+
+``lalpulsar`` and DE405 ephemeris tables are required, so most of these skip where either is absent.
+The ephemeris files are the same ones the continuous-wave tests use.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import pathlib
 
 import numpy as np
 import pytest
+from astropy.time import Time
 
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.sidereal import gmst_rad_astropy, lunisolar_precession_angles, precess_to_epoch
@@ -213,93 +219,252 @@ def test_precession_at_j2000_is_the_identity():
     assert declination == pytest.approx(0.3, abs=1e-12)
 
 
-def test_the_flag_selects_between_lals_two_conventions():
-    """``precess_source_direction`` must route to whichever LAL convention it names.
+def test_each_convention_reproduces_its_own_lal_function():
+    """Anchor both settings against LAL exactly, at the level of the delay itself.
 
-    The rotation is only useful if the switch that turns it on reaches the projection, and the
-    earlier version of this work got that wrong twice -- once by leaving a second entry point on the
-    old frame, and once by taking one function's agreement as evidence about another's. So this
-    asserts on ``project_polarizations_to_network`` itself rather than on ``precess_to_epoch``.
+    Not through a projected waveform: enabling precession changes the antenna coefficients as well
+    as the delay, so any waveform-level comparison mixes the two. An earlier version of this test
+    read the timing difference off a cross-correlation peak and came out 7.8% from LAL's own figure,
+    which I attributed to the estimator's resolution -- an attribution I could not separate from
+    antenna-coefficient contamination. Comparing the delays directly removes both effects, and the
+    tolerance goes from 25% of the effect to the size of a named omission.
 
-    The measurement is the *timing difference between the two settings*, against the difference
-    between LAL's two delays, both computed here. Comparing each projection to a hand-built expected
-    waveform instead would need this test to reproduce the antenna pattern as well, and the pattern
-    also moves with the frame; the difference isolates the delay.
-
-    A broadband burst, not a sinusoid: the offset is read from a cross-correlation peak, and a
-    sinusoid's peak is ambiguous modulo its period, which is far larger than the effect.
+    The two references are LAL's own two functions, in the sense the projection applies:
+    ``lal.TimeDelayFromEarthCenter`` for the compact-binary convention, and
+    ``-erot`` from ``lalpulsar.Barycenter`` for the continuous-wave one.
     """
     lal = pytest.importorskip("lal", reason="lalsuite is not installed")
+
+    from gwmock_signal.projection.network import _time_delay_from_earth_center_lal
+
+    prefix, right_ascension, declination, t_gps = "H1", 1.1, 0.3, 1.75e9
+    detector = lal.CachedDetectors[lal.LALDetectorIndexLHODIFF]
+
+    cbc_reference = lal.TimeDelayFromEarthCenter(detector.location, right_ascension, declination, t_gps)
+    # `erot` is the opposite sense to `TimeDelayFromEarthCenter`. Getting this backwards leaves the
+    # magnitudes agreeing and the sign inverted, which several weaker assertions would not catch.
+    cw_reference = -_lal_erot(prefix, right_ascension, declination, t_gps)
+    separation = cw_reference - cbc_reference
+    assert abs(separation) > 1.0e-05, (
+        f"LAL's two conventions differ by only {separation:.3e} s at this epoch, so the assertions "
+        f"below cannot distinguish them; move the epoch further from J2000"
+    )
+
+    unprecessed = _time_delay_from_earth_center_lal(
+        prefix, right_ascension=right_ascension, declination=declination, t_gps=t_gps
+    )
+    ra_of_date, dec_of_date = precess_to_epoch(right_ascension, declination, t_gps)
+    precessed = _time_delay_from_earth_center_lal(
+        prefix, right_ascension=float(ra_of_date), declination=float(dec_of_date), t_gps=t_gps
+    )
+
+    # The two bounds differ, and the difference is the point.
+    #
+    # Compact-binary side: 4.0e-08 s, measured. This package takes sidereal time from Astropy where
+    # LAL uses its own implementation, and that is the whole residue -- three orders below the
+    # 7.4e-05 s separating the conventions. Anything larger would be a geometry difference.
+    assert abs(unprecessed - cbc_reference) < 5.0e-08, (
+        f"without precession the delay is {unprecessed - cbc_reference:.3e} s from LAL's "
+        f"compact-binary convention, which it is supposed to reproduce exactly up to sidereal time"
+    )
+    # Continuous-wave side: 5.4e-07 s, measured, and an order looser *for a stated reason* rather
+    # than because the first bound would not fit. `Barycenter` applies precession **and nutation**;
+    # `precess_to_epoch` applies precession only. Nutation's amplitude is ~17 arcseconds, which over
+    # an Earth radius is ~5e-07 s -- so the residue is the size the omission predicts, and it is the
+    # same quantity `_MAX_DELAY_DISAGREEMENT_SECONDS` bounds over the grid above.
+    assert abs(precessed - cw_reference) < _MAX_DELAY_DISAGREEMENT_SECONDS, (
+        f"with precession the delay is {precessed - cw_reference:.3e} s from LAL's continuous-wave "
+        f"convention, above the {_MAX_DELAY_DISAGREEMENT_SECONDS:.1e} s omitted nutation accounts "
+        f"for; the residue should be nutation-scale and nothing larger"
+    )
+
+
+def test_the_flag_selects_between_lals_two_conventions():
+    """``precess_source_direction`` must route to the convention it names, through the projection.
+
+    Exact rather than approximate: setting the flag must give the *same array* as pre-rotating the
+    coordinates by hand and leaving the flag off. That pins the routing without needing to model
+    what the rotation does to the output, which the test above measures separately.
+
+    Worth having because the rotation is only useful if the switch reaches the projection, and an
+    earlier revision of this work left a second entry point on the old frame.
+    """
+    pytest.importorskip("lal", reason="lalsuite is not installed")
     from gwpy.timeseries import TimeSeries
 
     from gwmock_signal.projection.network import project_polarizations_to_network
 
     prefix, right_ascension, declination = "H1", 1.1, 0.3
-    # Far from J2000 so the two conventions separate, and sampled fast enough that the separation is
-    # more than one sample: at 16384 Hz a sample is 6.1e-05 s against the 7.4e-05 s below.
-    t_gps, sampling_frequency, n_samples = 1.75e9, 16384.0, 4096
+    t_gps, sampling_frequency, n_samples = 1.75e9, 4096.0, 1024
     times = np.arange(n_samples) / sampling_frequency
-    centre = 0.5 * times[-1]
-    envelope = np.exp(-(((times - centre) / 0.01) ** 2))
-    rng = np.random.default_rng(20260805)
+    taper = np.hanning(n_samples)
     polarizations = {
-        "plus": TimeSeries(rng.standard_normal(n_samples) * envelope, t0=t_gps, sample_rate=sampling_frequency),
-        "cross": TimeSeries(rng.standard_normal(n_samples) * envelope, t0=t_gps, sample_rate=sampling_frequency),
+        "plus": TimeSeries(np.sin(2 * np.pi * 120.0 * times) * taper, t0=t_gps, sample_rate=sampling_frequency),
+        "cross": TimeSeries(np.cos(2 * np.pi * 120.0 * times) * taper, t0=t_gps, sample_rate=sampling_frequency),
     }
 
-    reference_time = float(centre + t_gps)
-    detector = lal.CachedDetectors[lal.LALDetectorIndexLHODIFF]
-    # Both in the sense the projection applies, which is `TimeDelayFromEarthCenter`'s. `erot` is the
-    # other way round -- ``erot = -TimeDelayFromEarthCenter`` -- so the continuous-wave one is
-    # negated, not the compact-binary one. Getting this backwards is not a subtle failure: it leaves
-    # the magnitudes agreeing and the sign inverted, which is what it did when first written.
-    cbc_delay = lal.TimeDelayFromEarthCenter(detector.location, right_ascension, declination, reference_time)
-    cw_delay = -_lal_erot(prefix, right_ascension, declination, reference_time)
-    separation = cw_delay - cbc_delay
-    assert abs(separation) > 1.0 / sampling_frequency, (
-        f"LAL's two conventions differ by {separation:.3e} s at this epoch, under one sample, which "
-        f"is too little to read off a correlation peak; move the epoch further from J2000"
-    )
-
-    projected = {
-        precess: project_polarizations_to_network(
+    def project(*, ra, dec, precess):
+        return project_polarizations_to_network(
             polarizations,
             [prefix],
-            right_ascension=right_ascension,
-            declination=declination,
+            right_ascension=ra,
+            declination=dec,
             polarization_angle=0.0,
             earth_rotation=False,
             precess_source_direction=precess,
         )[prefix].value
-        for precess in (False, True)
-    }
 
-    measured = _peak_offset_seconds(projected[True], projected[False], sampling_frequency)
-    # A quarter of the separation. The measurement itself came out 7.8% low against LAL, which is the
-    # correlation peak's own resolution on a noise-like burst rather than a discrepancy in the code,
-    # so the bound is set above that with room and not at a figure the estimator cannot reach.
-    # Still rejects both ways this can break: no rotation at all (0 s) and applying it twice (2x).
-    assert abs(measured - separation) < 0.25 * abs(separation), (
-        f"turning precess_source_direction on shifted the projection by {measured:.3e} s, but LAL's "
-        f"two conventions differ by {separation:.3e} s; the flag is not selecting between them"
+    ra_of_date, dec_of_date = precess_to_epoch(right_ascension, declination, t_gps)
+    routed = project(ra=right_ascension, dec=declination, precess=True)
+    by_hand = project(ra=float(ra_of_date), dec=float(dec_of_date), precess=False)
+    untouched = project(ra=right_ascension, dec=declination, precess=False)
+
+    scale = np.max(np.abs(untouched))
+    assert scale > 0.0
+    # This branch evaluates everything at one reference time, so the two routes differ only in
+    # float64 round-off on the same arithmetic; measured at 0.0 exactly, bounded at 1e-14 rather
+    # than asserting equality in case the two orderings ever stop being identical.
+    assert np.max(np.abs(routed - by_hand)) < 1e-14 * scale, (
+        "setting precess_source_direction did not reproduce pre-rotating the coordinates by hand, "
+        "so the flag is not applying the rotation the tests above validated"
+    )
+    # And it must actually do something: measured at 6.8e-03 of peak here.
+    assert np.max(np.abs(routed - untouched)) > 1e-04 * scale, (
+        "precess_source_direction=True gave the same result as False, so the flag is a no-op"
     )
 
 
-def _peak_offset_seconds(measured: np.ndarray, expected: np.ndarray, sampling_frequency: float) -> float:
-    """Return the sub-sample time offset between two similar series, from their cross-correlation.
+def test_the_projection_defaults_to_the_compact_binary_convention():
+    """The default must be the convention compact-binary searches use.
 
-    Parabolic interpolation about the correlation peak, because the offset being measured is around
-    one sample and an integer-lag answer would quantise it to 0 or 1 -- either of which a broken
-    implementation could produce.
+    Pinned separately because it is the load-bearing part of the design and nothing else asserts it:
+    every compact-binary path -- including the batched device one -- relies on the default rather
+    than passing the argument, so flipping it would silently move every CBC injection ~0.43 degrees
+    in right ascension while the tests above, which pass the flag explicitly, all stayed green.
     """
-    a = np.asarray(measured, dtype=float)
-    b = np.asarray(expected, dtype=float)
-    a = a - a.mean()
-    b = b - b.mean()
-    correlation = np.correlate(a, b, mode="same")
-    peak = int(np.argmax(np.abs(correlation)))
-    assert 0 < peak < len(correlation) - 1, "correlation peaked at an edge; the two series are unrelated"
-    left, centre, right = (float(correlation[peak + offset]) for offset in (-1, 0, 1))
-    denominator = left - 2.0 * centre + right
-    sub_sample = 0.0 if denominator == 0.0 else 0.5 * (left - right) / denominator
-    return (peak - len(correlation) // 2 + sub_sample) / sampling_frequency
+    import inspect
+
+    from gwmock_signal.projection.network import project_polarizations_to_network
+
+    default = inspect.signature(project_polarizations_to_network).parameters["precess_source_direction"].default
+    assert default is False, (
+        f"precess_source_direction defaults to {default!r}; it must default to False, the convention "
+        f"lal.XLALTimeDelayFromEarthCenter and every compact-binary search use"
+    )
+
+
+def test_the_host_and_device_rotating_paths_agree_when_precessing():
+    """The two ``earth_rotation=True`` implementations must agree with the rotation switched on.
+
+    Closes a gap rather than repeating a check. Every other device-versus-host comparison in this
+    suite pins ``right_ascension_rate = declination_rate = 0``, and every continuous-wave test runs
+    the device backend, because ``ContinuousWaveSimulator`` defaults to it. So the host branch's
+    per-sample position -- ``right_ascension_array`` and ``declination_array`` in
+    ``project_polarizations_to_network`` -- was never evaluated with a non-zero rate by anything, and
+    a regression in it would have passed the whole suite.
+
+    It also pins the device branch's non-zero-rate path against an independent implementation. The
+    continuous-wave coherence tests reach that path, but they compare the device against itself at
+    different segmentations, so a rate applied wrongly but *consistently* survives them.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    from gwpy.timeseries import TimeSeries
+
+    from gwmock_signal.projection.network import project_polarizations_to_network
+
+    detectors = ["H1", "V1"]
+    t_gps, sampling_frequency, n_samples = 1.75e9, 512.0, 4096
+    times = np.arange(n_samples) / sampling_frequency
+    polarizations = {
+        "plus": TimeSeries(1e-24 * np.sin(2 * np.pi * 40.0 * times), t0=t_gps, sample_rate=sampling_frequency),
+        "cross": TimeSeries(1e-24 * np.cos(2 * np.pi * 40.0 * times), t0=t_gps, sample_rate=sampling_frequency),
+    }
+
+    projected = {
+        backend: project_polarizations_to_network(
+            polarizations,
+            detectors,
+            right_ascension=1.1,
+            declination=0.3,
+            polarization_angle=0.4,
+            earth_rotation=True,
+            precess_source_direction=True,
+            backend=backend,
+        )
+        for backend in ("numpy", "jax")
+    }
+
+    for name in detectors:
+        host = projected["numpy"][name].value
+        device = projected["jax"][name].value
+        scale = float(np.max(np.abs(host)))
+        assert scale > 0.0, f"{name} has a null response, so a relative bound means nothing"
+        # atol=0.0 on purpose: this is strain of order 1e-24, and the default absolute tolerance of
+        # any allclose-style comparison would make two arbitrary arrays of that size compare equal.
+        residual = float(np.sqrt(np.mean((device - host) ** 2))) / scale
+        # 6e-14 measured. Round-off from the same arithmetic associated differently -- one resampling
+        # kernel and one sidereal model across both paths -- and eight orders below the 4.4e-03 of
+        # peak that getting the sky frame wrong costs.
+        assert residual < 1e-12, (
+            f"{name}: host and device rotating projections differ by {residual:.3e} of peak with "
+            f"precession on, which is too large to be round-off; the per-sample position has drifted "
+            f"between the two implementations"
+        )
+
+
+def test_the_rotation_agrees_with_astropys_independent_precession_model():
+    """Anchor the rotation against something that is not LAL.
+
+    Every other test here compares against LAL, which makes them a check that the port is faithful
+    rather than a check that the model is right. Astropy's ICRS-to-FK5-mean-equinox-of-date transform
+    is an independent implementation of the same physical rotation, from the IAU 2006 model rather
+    than the 1976 series LAL uses, and with no nutation -- so it is directly comparable.
+
+    Over the grid the two agree to **4.2e-07 rad**, 0.087 arcseconds, worth 9.0e-09 s of delay over
+    an Earth radius. That is two orders below the 8.7e-07 s nutation residue and four below the
+    1.8e-04 s the rotation removes, so it confirms the rotation is a faithful frame-of-date
+    conversion and not a transcription error in three polynomials.
+
+    The disagreement grows monotonically with time from J2000 across the grid epochs -- 1.2e-07 rad
+    at GPS 1.0e9 to 4.2e-07 at 1.75e9 -- which is the signature of two different precession models
+    diverging, not of a bug. A constant offset, or one that did not grow, would be the worrying shape.
+
+    What this does **not** anchor is the nutation that makes up the residue against ``lalpulsar``;
+    that would need an apparent-place computation, and it remains LAL-only.
+    """
+    import astropy.units as u
+    from astropy.coordinates import FK5, SkyCoord
+
+    worst = 0.0
+    per_epoch: dict[float, float] = {}
+    for right_ascension, declination, t_gps in itertools.product(_RIGHT_ASCENSIONS, _DECLINATIONS, _EPOCHS):
+        equinox = Time(t_gps, format="gps", scale="utc")
+        reference = SkyCoord(ra=right_ascension * u.rad, dec=declination * u.rad, frame="icrs").transform_to(
+            FK5(equinox=equinox)
+        )
+        ra_of_date, dec_of_date = precess_to_epoch(right_ascension, declination, t_gps)
+        # Compared as an angular separation rather than per-coordinate: near the poles a right
+        # ascension difference is not an angle on the sky, and a per-coordinate bound there would be
+        # either vacuous or impossible.
+        separation = (
+            SkyCoord(ra=reference.ra, dec=reference.dec, frame="icrs")
+            .separation(SkyCoord(ra=ra_of_date * u.rad, dec=dec_of_date * u.rad, frame="icrs"))
+            .rad
+        )
+        worst = max(worst, separation)
+        per_epoch[t_gps] = max(per_epoch.get(t_gps, 0.0), separation)
+
+    # 4.2e-07 rad measured; the bound sits just above it rather than at a round number, so that a
+    # regression in the polynomials cannot slip under it.
+    assert worst < 6.0e-07, (
+        f"the rotation differs from Astropy's independent precession model by {worst:.3e} rad over "
+        f"{len(_RIGHT_ASCENSIONS) * len(_DECLINATIONS) * len(_EPOCHS)} combinations, more than the "
+        f"1976-versus-2006 model difference accounts for"
+    )
+    # The shape matters as much as the size: two precession models diverge with time from J2000.
+    # A disagreement that did not grow would point at a transcription error instead.
+    ordered = [per_epoch[epoch] for epoch in sorted(per_epoch)]
+    assert ordered == sorted(ordered), (
+        f"the disagreement with Astropy does not grow with time from J2000 ({ordered}), which is "
+        f"not how two precession models differ; suspect a constant error rather than a model gap"
+    )

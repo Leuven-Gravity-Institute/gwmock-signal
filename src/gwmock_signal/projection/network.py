@@ -515,16 +515,13 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     # holds the position fixed exactly, so the two conventions cannot diverge in anything but the
     # numbers they put in.
     if precess_source_direction:
-        (anchor_ra, anchor_dec), (rate_ra, rate_dec) = precessed_sky_anchor_and_rate(
+        # Python floats on both branches, which `precessed_sky_anchor_and_rate` guarantees: 0-d
+        # NumPy arrays here would be a distinct `jax.jit` signature from the other branch's weakly
+        # typed floats, so a process using both conventions at one segment shape would compile the
+        # same device kernel twice.
+        (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
             right_ascension, declination, float(time_array[0])
         )
-        # Back to Python floats. `precessed_sky_anchor_and_rate` returns 0-d NumPy arrays, and
-        # handing those to the cached device kernel where the other branch hands it weakly typed
-        # Python floats makes the two branches distinct `jax.jit` signatures at one segment shape --
-        # so a process using both would compile the same kernel twice. `jax_batch` pins `gmst_rate`
-        # for the same reason.
-        right_ascension, declination = float(anchor_ra), float(anchor_dec)
-        d_right_ascension, d_declination = float(rate_ra), float(rate_dec)
     else:
         d_right_ascension = d_declination = 0.0
 
