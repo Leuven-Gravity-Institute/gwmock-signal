@@ -129,7 +129,9 @@ _GPS_AT_J2000 = 630763213.0
 _ARCSEC_TO_RAD = np.pi / 6.48e5
 
 
-def lunisolar_precession_angles(t_gps: float) -> tuple[float, float, float]:
+def lunisolar_precession_angles(
+    t_gps: np.ndarray | float,
+) -> tuple[np.ndarray | float, np.ndarray | float, np.ndarray | float]:
     """Return the three lunisolar precession angles ``(zeta_A, z_A, theta_A)`` in radians.
 
     Equations 3.212 of the *Explanatory Supplement to the Astronomical Almanac*, which is what
@@ -140,19 +142,22 @@ def lunisolar_precession_angles(t_gps: float) -> tuple[float, float, float]:
     reference does not use.
 
     Args:
-        t_gps: GPS time in seconds.
+        t_gps: GPS time in seconds, scalar or array. Arrays are needed by the batched path, which
+            precesses a whole catalogue of events at their own segment epochs.
 
     Returns:
-        ``(zeta_A, z_A, theta_A)`` in radians.
+        ``(zeta_A, z_A, theta_A)`` in radians, shaped like *t_gps*.
     """
-    centuries = (float(t_gps) - _GPS_AT_J2000) / _SECONDS_PER_JULIAN_CENTURY
+    centuries = (np.asarray(t_gps, dtype=float) - _GPS_AT_J2000) / _SECONDS_PER_JULIAN_CENTURY
     zeta_a = centuries * (2306.2181 + (0.30188 + 0.017998 * centuries) * centuries) * _ARCSEC_TO_RAD
     z_a = centuries * (2306.2181 + (1.09468 + 0.018203 * centuries) * centuries) * _ARCSEC_TO_RAD
     theta_a = centuries * (2004.3109 - (0.42665 + 0.041833 * centuries) * centuries) * _ARCSEC_TO_RAD
     return zeta_a, z_a, theta_a
 
 
-def precess_to_epoch(right_ascension: float, declination: float, t_gps: float) -> tuple[float, float]:
+def precess_to_epoch(
+    right_ascension: np.ndarray | float, declination: np.ndarray | float, t_gps: np.ndarray | float
+) -> tuple[np.ndarray, np.ndarray]:
     """Rotate a J2000 sky position into the mean equator and equinox of *t_gps*.
 
     **Why this is needed at all.** Greenwich Mean Sidereal Time measures the Earth's rotation from
@@ -176,12 +181,15 @@ def precess_to_epoch(right_ascension: float, declination: float, t_gps: float) -
     residue is nutation-scale (its amplitude is ~17 arcseconds).
 
     Args:
-        right_ascension: J2000 right ascension in radians.
-        declination: J2000 declination in radians.
-        t_gps: GPS time defining the target frame.
+        right_ascension: J2000 right ascension in radians, scalar or array.
+        declination: J2000 declination in radians, scalar or array.
+        t_gps: GPS time defining the target frame, scalar or array. All three broadcast together,
+            which is what lets the batched path precess a catalogue of events at their own epochs
+            through the same code the single-event path uses.
 
     Returns:
-        ``(right_ascension, declination)`` in the mean frame of *t_gps*, in radians.
+        ``(right_ascension, declination)`` in the mean frame of *t_gps*, in radians, as arrays
+        (0-d for scalar input).
     """
     zeta_a, z_a, theta_a = lunisolar_precession_angles(t_gps)
     cos_dec = np.cos(declination)
@@ -195,43 +203,7 @@ def precess_to_epoch(right_ascension: float, declination: float, t_gps: float) -
     north = cos_ra_zeta * np.cos(theta_a) * cos_dec - np.sin(theta_a) * sin_dec
     pole = cos_ra_zeta * np.sin(theta_a) * cos_dec + np.cos(theta_a) * sin_dec
 
-    return float(np.arctan2(east, north) + z_a), float(np.arcsin(pole))
-
-
-def precession_anchors_and_rates(t_gps: float) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Return the precession angles at *t_gps* and their time derivatives, in radians and rad/s.
-
-    The same decomposition :func:`gmst_anchor_and_rate` uses, and for the same reason: a device
-    kernel cannot evaluate a polynomial in Julian centuries per sample any more than it can call
-    Astropy, but it can do a multiply-add.
-
-    **Why a rate at all, when the angles barely move.** They move 2306 arcseconds per century, so
-    across one segment the change is negligible -- which is exactly the reasoning that produced a bug.
-    Evaluating them once per segment makes the sky position piecewise constant in time, and the step
-    at each boundary broke continuous-wave phase coherence between segments at 1.6e-08 of peak
-    against a 1e-09 tolerance. Drift *within* a segment being negligible says nothing about the
-    discontinuity *between* two of them. LAL evaluates precession at each sample time; a rate
-    reproduces that continuously at the cost of one multiply-add.
-
-    Linear is not an approximation worth worrying about here: the quadratic term is 0.30 arcseconds
-    per century squared, which over a day contributes 2e-11 arcseconds.
-
-    Args:
-        t_gps: GPS time at which to anchor.
-
-    Returns:
-        ``((zeta_A, z_A, theta_A), (dzeta_A, dz_A, dtheta_A))``, radians and radians per second.
-    """
-    centuries = (float(t_gps) - _GPS_AT_J2000) / _SECONDS_PER_JULIAN_CENTURY
-    anchors = lunisolar_precession_angles(t_gps)
-    # d/dt of each polynomial, converted from per-century to per-second.
-    per_century = (
-        (2306.2181 + (2.0 * 0.30188 + 3.0 * 0.017998 * centuries) * centuries) * _ARCSEC_TO_RAD,
-        (2306.2181 + (2.0 * 1.09468 + 3.0 * 0.018203 * centuries) * centuries) * _ARCSEC_TO_RAD,
-        (2004.3109 - (2.0 * 0.42665 + 3.0 * 0.041833 * centuries) * centuries) * _ARCSEC_TO_RAD,
-    )
-    rates = tuple(value / _SECONDS_PER_JULIAN_CENTURY for value in per_century)
-    return anchors, (rates[0], rates[1], rates[2])
+    return np.arctan2(east, north) + z_a, np.arcsin(pole)
 
 
 #: Half-interval for differencing the precessed sky position, in seconds.
@@ -243,8 +215,8 @@ _PRECESSION_DIFFERENCE_SECONDS = 86400.0
 
 
 def precessed_sky_anchor_and_rate(
-    right_ascension: float, declination: float, t_gps: float
-) -> tuple[tuple[float, float], tuple[float, float]]:
+    right_ascension: np.ndarray | float, declination: np.ndarray | float, t_gps: np.ndarray | float
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
     """Return the precessed sky position at *t_gps* and how fast it moves, in radians and rad/s.
 
     Precession is slow -- the position drifts about 3.5e-12 rad/s -- but it is *not* constant, and
@@ -262,19 +234,25 @@ def precessed_sky_anchor_and_rate(
     host.
 
     Args:
-        right_ascension: J2000 right ascension in radians.
-        declination: J2000 declination in radians.
-        t_gps: GPS time to anchor at, normally the segment midpoint.
+        right_ascension: J2000 right ascension in radians, scalar or array.
+        declination: J2000 declination in radians, scalar or array.
+        t_gps: GPS time to anchor at, scalar or array. One entry per event on the batched path,
+            where each event has its own segment.
 
     Returns:
         ``((right_ascension, declination), (d_right_ascension, d_declination))`` -- the position in
-        the mean frame of *t_gps*, and its rate in radians per second.
+        the mean frame of *t_gps*, and its rate in radians per second, as arrays (0-d for scalar
+        input).
     """
     half = _PRECESSION_DIFFERENCE_SECONDS
+    t_gps = np.asarray(t_gps, dtype=float)
     anchor = precess_to_epoch(right_ascension, declination, t_gps)
-    before = precess_to_epoch(right_ascension, declination, t_gps - half)
-    after = precess_to_epoch(right_ascension, declination, t_gps + half)
-    # Unwrapped, so a position straddling the 2*pi seam does not produce a spurious rate.
-    d_ra = float(np.unwrap([before[0], after[0]])[1] - np.unwrap([before[0], after[0]])[0]) / (2.0 * half)
-    d_dec = (after[1] - before[1]) / (2.0 * half)
+    before_ra, before_dec = precess_to_epoch(right_ascension, declination, t_gps - half)
+    after_ra, after_dec = precess_to_epoch(right_ascension, declination, t_gps + half)
+    # Wrapped into (-pi, pi] before dividing, so a position straddling the 2*pi seam -- where
+    # `arctan2` returns values at opposite ends of its range for two epochs a day apart -- gives the
+    # small true rate rather than a spurious 2*pi/(2 days). Elementwise, so it holds for every entry
+    # of a batch independently.
+    d_ra = (np.mod(after_ra - before_ra + np.pi, 2.0 * np.pi) - np.pi) / (2.0 * half)
+    d_dec = (after_dec - before_dec) / (2.0 * half)
     return anchor, (d_ra, d_dec)

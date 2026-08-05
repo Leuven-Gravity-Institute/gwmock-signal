@@ -47,7 +47,12 @@ from gwmock_signal.projection.resampling import (
     require_shift_within_padding,
     require_terrestrial_location,
 )
-from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
+from gwmock_signal.projection.sidereal import (
+    gmst_anchor_and_rate,
+    gmst_rad_astropy,
+    precess_to_epoch,
+    precessed_sky_anchor_and_rate,
+)
 from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
@@ -230,8 +235,8 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
         sampling_frequency: Sample rate in Hz.
 
     Returns:
-        A callable over ``(plus, cross, ra, dec, psi, gmst_start, gmst_rate, response,
-        location)``, batched over events.
+        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, extra_shift,
+        gmst_rate, response, location)``, batched over events.
     """
     import jax  # noqa: PLC0415
 
@@ -240,6 +245,8 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
         cross: Array,
         ra: Array,
         dec: Array,
+        ra_rate: Array,
+        dec_rate: Array,
         psi: Array,
         gmst_start: Array,
         extra_shift: Array,
@@ -256,13 +263,18 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
             n_samples=n_samples,
             right_ascension=ra,
             declination=dec,
+            right_ascension_rate=ra_rate,
+            declination_rate=dec_rate,
             polarization_angle=psi,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
             extra_shift_samples=extra_shift,
         )
 
-    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, None, None, None)))
+    # The precession rates are mapped, not unmapped: they are per-event because each event's segment
+    # sits at its own epoch, and the polynomials' derivatives differ between epochs. Sharing one rate
+    # across a batch would be a second, silent approximation on top of the linear model.
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -470,8 +482,14 @@ def simulate_cbc_batch(  # noqa: PLR0913
     dt = 1.0 / sampling_frequency
     merger_index, epoch = backend.coalescence_placement(n_samples, sampling_frequency)
 
-    right_ascension = jnp.asarray(_required(parameters, "right_ascension"), dtype=jnp.float64)
-    declination = jnp.asarray(_required(parameters, "declination"), dtype=jnp.float64)
+    # Kept on the host as J2000 values, because both branches must rotate them into the frame of
+    # date before anything reads them and the two branches anchor at different times: the rotating
+    # branch at each segment's first sample, the static branch at the one midpoint it evaluates
+    # everything at. See `gwmock_signal.projection.sidereal.precess_to_epoch` for why the rotation is
+    # not optional -- combining a J2000 right ascension with Greenwich Mean Sidereal Time mixes two
+    # frames and cost 1.8e-04 s of geocentre-to-detector delay against `lalpulsar.Barycenter`.
+    right_ascension_j2000 = np.asarray(_required(parameters, "right_ascension"), dtype=float)
+    declination_j2000 = np.asarray(_required(parameters, "declination"), dtype=float)
     polarization_angle = jnp.asarray(_required(parameters, "polarization_angle"), dtype=jnp.float64)
     coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
 
@@ -490,18 +508,29 @@ def simulate_cbc_batch(  # noqa: PLR0913
         start_index, alignment_shift = output_grid.split_index(coa_time + epoch)
 
     if earth_rotation:
+        # The aligned buffer starts one fractional sample earlier than requested, so the
+        # sidereal anchor must move with it or F(t) and tau(t) are evaluated up to a full
+        # sample after the samples they multiply.
+        segment_start_gps = coa_time + epoch - alignment_shift / sampling_frequency
+        # Per event, anchored at its own first sample -- the origin the kernel's `sample_offsets`
+        # counts from, and the same convention `project_polarizations_to_network` uses, so the
+        # batched and single-event paths read the same line. The rate is what keeps it a line: a
+        # position frozen per segment steps at every boundary, which broke continuous-wave phase
+        # coherence at 1.6e-08 of peak against a 1e-09 tolerance.
+        (ra_of_date, dec_of_date), (ra_rate, dec_rate) = precessed_sky_anchor_and_rate(
+            right_ascension_j2000, declination_j2000, segment_start_gps
+        )
         strain = _project_rotating(
             fd,
             lookup_keys,
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
-            # The aligned buffer starts one fractional sample earlier than requested, so the
-            # sidereal anchor must move with it or F(t) and tau(t) are evaluated up to a full
-            # sample after the samples they multiply.
-            segment_start_gps=coa_time + epoch - alignment_shift / sampling_frequency,
-            right_ascension=right_ascension,
-            declination=declination,
+            segment_start_gps=segment_start_gps,
+            right_ascension=jnp.asarray(ra_of_date, dtype=jnp.float64),
+            declination=jnp.asarray(dec_of_date, dtype=jnp.float64),
+            right_ascension_rate=jnp.asarray(ra_rate, dtype=jnp.float64),
+            declination_rate=jnp.asarray(dec_rate, dtype=jnp.float64),
             polarization_angle=polarization_angle,
             alignment_shift=alignment_shift,
         )
@@ -522,6 +551,13 @@ def simulate_cbc_batch(  # noqa: PLR0913
     # the buffer, so the midpoint reference time moves with it, as in the rotating branch.
     aligned_midpoint = coa_time + midpoint_offset - alignment_shift / sampling_frequency
     gmst = jnp.asarray(gmst_rad_astropy(aligned_midpoint), dtype=jnp.float64)
+    # No rate here: this branch evaluates the whole response at one instant by construction, so the
+    # sky position is a single rotation into the frame of that instant. Precessing it is not optional
+    # even though the branch is already an approximation in *time*: the frame mismatch is a
+    # systematic offset, not a smearing, and it does not shrink with the segment length.
+    ra_of_date, dec_of_date = precess_to_epoch(right_ascension_j2000, declination_j2000, aligned_midpoint)
+    right_ascension = jnp.asarray(ra_of_date, dtype=jnp.float64)
+    declination = jnp.asarray(dec_of_date, dtype=jnp.float64)
 
     project_batch = _static_projection_kernel(n_samples, sampling_frequency, merger_index)
 
@@ -571,6 +607,8 @@ def _project_rotating(  # noqa: PLR0913
     segment_start_gps: np.ndarray,
     right_ascension: Array,
     declination: Array,
+    right_ascension_rate: Array,
+    declination_rate: Array,
     polarization_angle: Array,
     alignment_shift: np.ndarray,
 ) -> Array:
@@ -591,8 +629,13 @@ def _project_rotating(  # noqa: PLR0913
         merger_index: Sample index coalescence is rolled to.
         segment_start_gps: GPS time of each event segment's first sample, shape
             ``(n_events,)``. Used on the host to anchor sidereal time per event.
-        right_ascension: Per-event right ascension in radians.
-        declination: Per-event declination in radians.
+        right_ascension: Per-event right ascension in radians, in the mean frame of that event's
+            first sample -- not J2000. The caller precesses; see the note at the call site.
+        declination: Per-event declination in radians, in the same frame.
+        right_ascension_rate: Per-event rate of change of right ascension from precession, in
+            radians per second, so the kernel can move the position with each sample instead of
+            holding it fixed across the segment.
+        declination_rate: Per-event rate of change of declination, in radians per second.
         polarization_angle: Per-event polarization angle in radians.
         alignment_shift: Per-event sub-sample offset, in samples, to absorb so the output
             starts on the caller's lattice. Folded into the resampling the projection already
@@ -634,6 +677,8 @@ def _project_rotating(  # noqa: PLR0913
                 cross_td,
                 right_ascension,
                 declination,
+                right_ascension_rate,
+                declination_rate,
                 polarization_angle,
                 gmst_anchors,
                 jnp.asarray(alignment_shift, dtype=jnp.float64),

@@ -50,16 +50,17 @@ That constraint drives the design of this class:
      module relies on. Nothing is double-counted or dropped at the seam.
 
    The residual: this package's geocentre-to-detector delay differs from LAL's ``erot`` by
-   **8.6e-05 s** (0.088 samples at 1024 Hz) once the sign convention is accounted for.
-   :func:`~gwmock_signal.projection.network._time_delay_from_earth_center_lal` uses plain GMST with
-   a J2000 source direction, while LAL applies lunisolar precession and nutation. The size fits:
-   8.6e-05 s of light travel is 25.8 km, or 0.23 degrees over an Earth radius, against roughly
-   0.42 degrees of precession between J2000 and 2030.
+   **8.7e-07 s** worst case over detectors, sky positions and epochs. What remains is nutation, the
+   short-period part of a motion whose secular part
+   :func:`~gwmock_signal.projection.sidereal.precess_to_epoch` now applies and LAL applies in full.
+   The size fits: nutation's amplitude is ~17 arcseconds, which over an Earth radius is ~5e-07 s.
 
-   That difference predates this module and applies to every source type, not only continuous
-   waves -- but it matters more here, because a coherent search integrates for months. It is a
-   near-constant timing offset, so most of it is absorbed into the initial phase; the part that is
-   not scales with frequency, reaching about 0.5 rad at 1 kHz.
+   It was **1.8e-04 s** before that rotation existed, from combining plain GMST -- which measures
+   the Earth's rotation from the mean equinox *of date* -- with a J2000 source direction. Like the
+   residual it replaced, this applies to every source type, not only continuous waves, but matters
+   most here because a coherent search integrates for months. It is a near-constant timing offset,
+   so most of it is absorbed into the initial phase; the part that is not scales with frequency,
+   which at the current 8.7e-07 s reaches about 5e-03 rad at 1 kHz.
 """
 
 from __future__ import annotations

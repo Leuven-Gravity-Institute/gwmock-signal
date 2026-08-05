@@ -640,7 +640,7 @@ class TestTheDeviceBackend:
         """The device path extrapolates sidereal time linearly from a single anchor.
 
         Accepted to 86400 s, a ceiling set by an error budget: at a day the model costs 6.2e-11 s
-        of geocenter delay, six orders below the 8.6e-05 s precession offset the projection
+        of geocenter delay, four orders below the 8.7e-07 s nutation residue the projection
         already carries. Beyond that nothing has been measured, and a single segment that long
         would get a quietly degraded answer rather than an error. Consecutive segments are
         unaffected at any run length, because each re-anchors against Astropy.
@@ -690,7 +690,7 @@ class TestTheDeviceBackend:
         jax = pytest.importorskip("jax")
         from gwmock_signal.projection.geometry import reconstructed_geometry
         from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
-        from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
+        from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, precessed_sky_anchor_and_rate
 
         polarizations = self._polarizations(256.0)
         reference = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, **_SKY)["H1"]
@@ -698,6 +698,12 @@ class TestTheDeviceBackend:
         cross = np.asarray(polarizations["cross"].value)
         response, location = reconstructed_geometry("H1")
         anchors, rate = gmst_anchor_and_rate(1.4e9)
+        # The reference precesses internally; the primitive does not, so it is handed the same
+        # precessed position. Otherwise the difference measured below would be a frame offset plus a
+        # precision loss, and only one of those is what the guard exists for.
+        (ra_of_date, dec_of_date), (ra_rate, dec_rate) = precessed_sky_anchor_and_rate(
+            _SKY["right_ascension"], _SKY["declination"], 1.4e9
+        )
 
         jax.config.update("jax_enable_x64", False)
         degraded = np.asarray(
@@ -710,7 +716,11 @@ class TestTheDeviceBackend:
                 n_samples=len(plus),
                 gmst_start=float(np.atleast_1d(anchors)[0]),
                 gmst_rate=float(rate),
-                **_SKY,
+                right_ascension=ra_of_date,
+                declination=dec_of_date,
+                right_ascension_rate=ra_rate,
+                declination_rate=dec_rate,
+                polarization_angle=_SKY["polarization_angle"],
             )
         )
 

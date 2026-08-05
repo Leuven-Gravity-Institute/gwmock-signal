@@ -213,9 +213,11 @@ _KERNEL_CACHE_SIZE = 32
 #: Set by an error budget rather than by where the validation table ends. The linear model's
 #: deviation from Astropy, converted to the quantity that actually enters the projection -- a
 #: geocenter delay -- is 1.2e-15 s over 8192 s, 6.2e-11 s over a day, and 1.2e-7 s over 90 days.
-#: The projection already carries a known 8.6e-05 s offset from using plain GMST with a J2000
-#: source direction where LAL applies precession and nutation, so a day-long span sits six orders
-#: of magnitude below a systematic this code knowingly accepts.
+#: The projection still carries a known 8.7e-07 s worst-case disagreement with
+#: ``lalpulsar.Barycenter``, from omitting nutation where LAL includes it, so a day-long span sits
+#: four orders of magnitude below a systematic this code knowingly accepts. (It was 1.8e-04 s and
+#: six orders before the source direction was precessed into the frame of date; the budget tightened
+#: with the fix, and 8192 s and one day both still clear it.)
 #:
 #: One day is therefore not a physical limit but the point beyond which nothing has been measured
 #: and a single segment stops being a plausible way to use this. Consecutive segments are
@@ -479,15 +481,15 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     # rather than at each site is what makes it impossible for one path to keep the J2000 values and
     # disagree with the others.
     #
-    # `reference_time` is the segment midpoint. The precession angles move 2306 arcseconds per
-    # century, so evaluating them once for the segment costs 3e-6 arcseconds of drift across 4096 s,
-    # fourteen orders below the effect being corrected.
-    # Anchored at the segment midpoint and *linear in absolute time*, which is the part that matters:
-    # a position frozen per segment steps at every boundary, and that step broke continuous-wave phase
-    # coherence at 1.6e-08 of peak against a 1e-09 tolerance. Two abutting segments evaluate the same
-    # line at the same absolute time, so they agree exactly where they meet whatever their anchors are.
-    # Anchored at the *first* sample, which is the origin the device kernel's `sample_offsets` uses,
-    # so both backends read the same line without a second convention to keep straight.
+    # Anchored at the *first* sample, because that is the origin the device kernel's `sample_offsets`
+    # counts from, so both backends read the same line without a second convention to keep straight.
+    #
+    # A position and a *rate*, not a position alone. Freezing it per segment looks harmless -- the
+    # angles move 2306 arcseconds per century, so across 4096 s they drift 3e-6 arcseconds -- but that
+    # argument is about drift *within* a segment and says nothing about the step *between* two of them.
+    # The step broke continuous-wave phase coherence at 1.6e-08 of peak against a 1e-09 tolerance.
+    # Linear in absolute time removes it: two abutting segments evaluate the same line at the same
+    # absolute time, so they agree exactly where they meet whatever their anchors are.
     (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
         right_ascension, declination, float(time_array[0])
     )
