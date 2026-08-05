@@ -32,7 +32,7 @@ from gwmock_signal.projection.resampling import (
     require_terrestrial_location,
     resample_uniform_sinc,
 )
-from gwmock_signal.projection.sidereal import gmst_rad_astropy
+from gwmock_signal.projection.sidereal import gmst_rad_astropy, precessed_sky_anchor_and_rate
 
 logger = logging.getLogger("gwmock_signal")
 
@@ -213,9 +213,11 @@ _KERNEL_CACHE_SIZE = 32
 #: Set by an error budget rather than by where the validation table ends. The linear model's
 #: deviation from Astropy, converted to the quantity that actually enters the projection -- a
 #: geocenter delay -- is 1.2e-15 s over 8192 s, 6.2e-11 s over a day, and 1.2e-7 s over 90 days.
-#: The projection already carries a known 8.6e-05 s offset from using plain GMST with a J2000
-#: source direction where LAL applies precession and nutation, so a day-long span sits six orders
-#: of magnitude below a systematic this code knowingly accepts.
+#: The projection still carries a known 8.7e-07 s worst-case disagreement with
+#: ``lalpulsar.Barycenter``, from omitting nutation where LAL includes it, so a day-long span sits
+#: four orders of magnitude below a systematic this code knowingly accepts. (It was 1.8e-04 s and
+#: six orders before the source direction was precessed into the frame of date; the budget tightened
+#: with the fix, and 8192 s and one day both still clear it.)
 #:
 #: One day is therefore not a physical limit but the point beyond which nothing has been measured
 #: and a single segment stops being a plausible way to use this. Consecutive segments are
@@ -258,6 +260,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
         location,
         right_ascension,
         declination,
+        right_ascension_rate,
+        declination_rate,
         polarization_angle,
         gmst_start,
         gmst_rate,
@@ -271,6 +275,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
             n_samples=n_samples,
             right_ascension=right_ascension,
             declination=declination,
+            right_ascension_rate=right_ascension_rate,
+            declination_rate=declination_rate,
             polarization_angle=polarization_angle,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
@@ -289,6 +295,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
     time_array: np.ndarray,
     right_ascension: float,
     declination: float,
+    right_ascension_rate: float,
+    declination_rate: float,
     polarization_angle: float,
     sinc_taps: int,
     kaiser_beta: float,
@@ -368,6 +376,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
             location,
             right_ascension,
             declination,
+            right_ascension_rate,
+            declination_rate,
             polarization_angle,
             float(np.atleast_1d(anchors)[0]),
             float(rate),
@@ -393,6 +403,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     declination: float,
     polarization_angle: float,
     earth_rotation: bool = True,
+    precess_source_direction: bool = False,
     backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
@@ -420,6 +431,26 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
         earth_rotation: If ``True``, evaluate antenna patterns at time-dependent
             GPS times (recommended for longer signals). If ``False``, use a single
             reference time at the segment midpoint for patterns and delays.
+        precess_source_direction: Whether to rotate ``right_ascension``/``declination`` from J2000
+            into the mean equator and equinox *of date* before using them. **Which value is correct
+            depends on the source type, because LAL itself uses two conventions and they disagree
+            by 1.8e-04 s of geocentre-to-detector delay:**
+
+            * ``False`` (the default) reproduces ``XLALTimeDelayFromEarthCenter`` and
+              ``XLALComputeDetAMResponse`` -- ``gha = gmst - ra`` with no rotation -- which is what
+              every compact-binary search and parameter-estimation code does (Bilby, PyCBC,
+              LALInference, GstLAL). Strictly it mixes frames, since GMST is measured from the
+              equinox of date; but a CBC injection is only useful if the pipeline that recovers it
+              agrees about where the source was, and precessing here would shift the recovered
+              right ascension by ~0.43 degrees by 2030.
+            * ``True`` reproduces ``lalpulsar.XLALBarycenter``, which applies lunisolar precession.
+              Required for continuous waves, where the SSB-to-geocentre part of the phase comes from
+              a barycentering routine that precesses (both LAL's and ripple's do), so *not*
+              rotating here would leave the site term inconsistent with the term it is added to.
+
+            This is therefore a property of the generator, not of the projection, which is why it is
+            an explicit argument with no clever default: see
+            :func:`~gwmock_signal.projection.sidereal.precess_to_epoch`.
         backend: Which implementation evaluates the ``earth_rotation=True`` branch.
             ``"numpy"`` (the default) runs on the host. ``"jax"`` delegates to
             :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating`,
@@ -465,6 +496,35 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
 
+    # Resolved once, before anything else reads the sky position. Every branch below -- host scalar,
+    # host array, and the device kernel, for the delay *and* the antenna pattern -- derives its
+    # geometry from these numbers, so deciding here rather than at each site is what makes it
+    # impossible for one path to precess and another not to.
+    #
+    # Anchored at the *first* sample, because that is the origin the device kernel's `sample_offsets`
+    # counts from, so both backends read the same line without a second convention to keep straight.
+    #
+    # A position and a *rate*, not a position alone. Freezing it per segment looks harmless -- the
+    # angles move 2306 arcseconds per century, so across 4096 s they drift 3e-6 arcseconds -- but that
+    # argument is about drift *within* a segment and says nothing about the step *between* two of them.
+    # The step broke continuous-wave phase coherence at 1.6e-08 of peak against a 1e-09 tolerance.
+    # Linear in absolute time removes it: two abutting segments evaluate the same line at the same
+    # absolute time, so they agree exactly where they meet whatever their anchors are.
+    #
+    # Zero rates when not precessing, rather than a separate code path: the same multiply-add then
+    # holds the position fixed exactly, so the two conventions cannot diverge in anything but the
+    # numbers they put in.
+    if precess_source_direction:
+        # Python floats on both branches, which `precessed_sky_anchor_and_rate` guarantees: 0-d
+        # NumPy arrays here would be a distinct `jax.jit` signature from the other branch's weakly
+        # typed floats, so a process using both conventions at one segment shape would compile the
+        # same device kernel twice.
+        (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
+            right_ascension, declination, float(time_array[0])
+        )
+    else:
+        d_right_ascension = d_declination = 0.0
+
     # Dispatched here, before any of the host branch's preparation. Everything below -- two
     # rffts, the frequency grid, and per-sample Astropy GMST with its sines and cosines -- serves
     # only the NumPy branches, and the device path recomputes what it needs from an anchor and a
@@ -479,6 +539,8 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             time_array=time_array,
             right_ascension=right_ascension,
             declination=declination,
+            right_ascension_rate=d_right_ascension,
+            declination_rate=d_declination,
             polarization_angle=polarization_angle,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
@@ -496,12 +558,16 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
 
     strains: dict[str, GWpyTimeSeries] = {}
 
-    cosdec = np.cos(declination)
-    sindec = np.sin(declination)
+    # Per sample, not per segment: see the anchor-and-rate comment above.
+    precession_offsets = time_array - time_array[0]
+    right_ascension_array = right_ascension + d_right_ascension * precession_offsets
+    declination_array = declination + d_declination * precession_offsets
+    cosdec = np.cos(declination_array)
+    sindec = np.sin(declination_array)
     cospsi = np.cos(polarization_angle)
     sinpsi = np.sin(polarization_angle)
     gmst_array = _gmst_accurate_array(time_array)
-    gha_array = gmst_array - right_ascension
+    gha_array = gmst_array - right_ascension_array
     cosgha = np.cos(gha_array)
     singha = np.sin(gha_array)
 
@@ -510,31 +576,28 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             response, location = reconstructed_geometry(prefix)
 
             # Vectorized time delay: time_delay = -location · prop_dir / c
-            prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, np.full(len(time_array), sindec)], axis=-1)
+            prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, sindec], axis=-1)
             time_delays = -np.dot(prop_dir, location) / constants.c.value
 
             # Antenna pattern at the detector-time sample, i.e. the same time coordinate
             # the output series is labelled with. Evaluating it at t + tau would mix the
             # detector and geocenter time coordinates; LALSuite and the bilby-x-g
             # frequency-domain implementation both use a single consistent coordinate.
-            gha_a = gmst_array - right_ascension
-            cosgha_a = np.cos(gha_a)
-            singha_a = np.sin(gha_a)
 
             # Shape (N, 3) — polarization basis vectors
             x_vec = np.stack(
                 [
-                    -cospsi * singha_a - sinpsi * cosgha_a * sindec,
-                    -cospsi * cosgha_a + sinpsi * singha_a * sindec,
-                    np.full(len(time_array), sinpsi * cosdec),
+                    -cospsi * singha - sinpsi * cosgha * sindec,
+                    -cospsi * cosgha + sinpsi * singha * sindec,
+                    sinpsi * cosdec,
                 ],
                 axis=-1,
             )
             y_vec = np.stack(
                 [
-                    sinpsi * singha_a - cospsi * cosgha_a * sindec,
-                    sinpsi * cosgha_a + cospsi * singha_a * sindec,
-                    np.full(len(time_array), cospsi * cosdec),
+                    sinpsi * singha - cospsi * cosgha * sindec,
+                    sinpsi * cosgha + cospsi * singha * sindec,
+                    cospsi * cosdec,
                 ],
                 axis=-1,
             )

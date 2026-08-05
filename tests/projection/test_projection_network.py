@@ -640,7 +640,7 @@ class TestTheDeviceBackend:
         """The device path extrapolates sidereal time linearly from a single anchor.
 
         Accepted to 86400 s, a ceiling set by an error budget: at a day the model costs 6.2e-11 s
-        of geocenter delay, six orders below the 8.6e-05 s precession offset the projection
+        of geocenter delay, four orders below the 8.7e-07 s nutation residue the projection
         already carries. Beyond that nothing has been measured, and a single segment that long
         would get a quietly degraded answer rather than an error. Consecutive segments are
         unaffected at any run length, because each re-anchors against Astropy.
@@ -711,6 +711,10 @@ class TestTheDeviceBackend:
                 gmst_start=float(np.atleast_1d(anchors)[0]),
                 gmst_rate=float(rate),
                 **_SKY,
+                # Zero, matching the reference's default: the difference measured below must be the
+                # precision loss the guard exists for and nothing else.
+                right_ascension_rate=0.0,
+                declination_rate=0.0,
             )
         )
 

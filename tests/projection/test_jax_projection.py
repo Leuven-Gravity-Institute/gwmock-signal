@@ -289,6 +289,10 @@ def test_rotating_projection_matches_numpy_path() -> None:
 
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
+    # Zero rates, matching `precess_source_direction=False` in the reference above: whichever sky
+    # convention the two sides use, they must use the *same* one, or this measures a frame offset
+    # instead of the round-off it claims to. Mismatching them here reported 1.1% of peak.
+    frozen_sky = {"right_ascension_rate": 0.0, "declination_rate": 0.0}
     device = np.asarray(
         project_polarizations_td_rotating(
             plus,
@@ -300,6 +304,7 @@ def test_rotating_projection_matches_numpy_path() -> None:
             gmst_start=float(anchors[0]),
             gmst_rate=rate,
             **sky,
+            **frozen_sky,
         )
     )
 
@@ -347,6 +352,10 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
             gmst_start=float(anchors[0]),
             gmst_rate=rate,
             **sky,
+            # Zero, matching `project_polarizations_to_network`'s default: neither side precesses,
+            # so Earth rotation is the only difference and it is what the mismatch below measures.
+            right_ascension_rate=0.0,
+            declination_rate=0.0,
         )
     )
 
@@ -396,7 +405,15 @@ def test_projection_gathers_from_zero_padded_polarizations() -> None:
     sampling_frequency = 2048.0
     n_samples = 8192
     start_time = 1.4e9
-    sky = {"right_ascension": 0.4, "declination": 0.2, "polarization_angle": 0.0}
+    # Zero rates: these exercise the resampler, the sidereal model and the guards, not
+    # precession, so the sky position is held fixed deliberately rather than by default.
+    sky = {
+        "right_ascension": 0.4,
+        "declination": 0.2,
+        "polarization_angle": 0.0,
+        "right_ascension_rate": 0.0,
+        "declination_rate": 0.0,
+    }
 
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
@@ -509,6 +526,10 @@ def test_sidereal_time_advances_linearly_across_the_buffer() -> None:
     sampling_frequency = 2048.0
     n_samples = 4096
     sky = {"right_ascension": 1.1, "declination": -0.3, "polarization_angle": 0.4}
+    # Held fixed deliberately: this test isolates the *sidereal* anchor convention, and the
+    # independent expectation below is `antenna_pattern` at one position. A non-zero precession rate
+    # would move the position between the two and make the comparison test both effects at once.
+    frozen_sky = {"right_ascension_rate": 0.0, "declination_rate": 0.0}
     response, location = reconstructed_geometry("E1")
 
     gmst_start = 0.7
@@ -530,6 +551,7 @@ def test_sidereal_time_advances_linearly_across_the_buffer() -> None:
             gmst_rate=exaggerated_rate,
             extra_shift_samples=0.0,
             **sky,
+            **frozen_sky,
         )
     )
 
@@ -560,7 +582,15 @@ def test_production_projection_accepts_a_non_default_kernel() -> None:
     sampling_frequency = 2048.0
     n_samples = 4096
     start_time = 1.4e9
-    sky = {"right_ascension": 0.9, "declination": 0.1, "polarization_angle": 0.2}
+    # Zero rates: these exercise the resampler, the sidereal model and the guards, not
+    # precession, so the sky position is held fixed deliberately rather than by default.
+    sky = {
+        "right_ascension": 0.9,
+        "declination": 0.1,
+        "polarization_angle": 0.2,
+        "right_ascension_rate": 0.0,
+        "declination_rate": 0.0,
+    }
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
 

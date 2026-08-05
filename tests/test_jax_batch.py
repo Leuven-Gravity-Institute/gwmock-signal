@@ -238,6 +238,82 @@ def test_simulate_cbc_catalogue_chunking_is_output_identical() -> None:
                 assert np.max(np.abs(a - b)) < 1e-9 * peak
 
 
+#: Catalogue for the two batched-versus-NumPy equivalence tests below.
+#:
+#: Module-level rather than copied into each: the two tests must compare against the *same*
+#: waveforms, and two literal copies would let the catalogues drift apart while both tests stayed
+#: green against different signals.
+_EQUIVALENCE_DETECTORS = ["E1", "E2"]
+_EQUIVALENCE_FS, _EQUIVALENCE_F_MIN = 4096.0, 25.0
+_EQUIVALENCE_CATALOGUE = {
+    "detector_frame_mass_1": np.array([30.0, 25.0]),
+    "detector_frame_mass_2": np.array([28.0, 22.0]),
+    "luminosity_distance": np.array([900.0, 1200.0]),
+    "inclination": np.array([0.3, 1.1]),
+    "coa_phase": np.array([0.0, 2.0]),
+    "right_ascension": np.array([1.3, 4.0]),
+    "declination": np.array([-0.4, 0.6]),
+    "polarization_angle": np.array([0.7, 2.1]),
+    "coa_time": np.array([1.4e9, 1.4e9 + 300.0]),
+}
+
+
+def _numpy_reference_strain(*, earth_rotation: bool):
+    """Yield ``(event, detector_index, name, expected)`` from the per-event NumPy projection.
+
+    Rebuilds the same time-domain polarizations the device path projects -- one shared frequency
+    grid, inverse-FFT, roll to place coalescence -- then runs the host projection on them. Shared by
+    both branches so neither can be compared against a different waveform than the other.
+    """
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    backend = RippleBackend()
+    fd = backend.generate_fd_polarizations_batch(
+        "IMRPhenomD",
+        sampling_frequency=_EQUIVALENCE_FS,
+        minimum_frequency=_EQUIVALENCE_F_MIN,
+        parameters=_EQUIVALENCE_CATALOGUE,
+    )
+    n_samples = fd.n_samples
+    merger_index, epoch = backend.coalescence_placement(n_samples, _EQUIVALENCE_FS)
+
+    for event in range(len(_EQUIVALENCE_CATALOGUE["coa_time"])):
+        start = epoch + _EQUIVALENCE_CATALOGUE["coa_time"][event]
+        hp = np.roll(np.fft.irfft(np.asarray(fd.plus[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
+        hc = np.roll(np.fft.irfft(np.asarray(fd.cross[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
+        reference = project_polarizations_to_network(
+            {
+                "plus": GWpyTimeSeries(hp, t0=start, sample_rate=_EQUIVALENCE_FS),
+                "cross": GWpyTimeSeries(hc, t0=start, sample_rate=_EQUIVALENCE_FS),
+            },
+            _EQUIVALENCE_DETECTORS,
+            right_ascension=float(_EQUIVALENCE_CATALOGUE["right_ascension"][event]),
+            declination=float(_EQUIVALENCE_CATALOGUE["declination"][event]),
+            polarization_angle=float(_EQUIVALENCE_CATALOGUE["polarization_angle"][event]),
+            earth_rotation=earth_rotation,
+        )
+        for index, name in enumerate(_EQUIVALENCE_DETECTORS):
+            yield event, index, name, reference[name].value
+
+
+def _batched_strain(*, earth_rotation: bool):
+    """Return the batched device strain for the shared catalogue."""
+    from gwmock_signal.jax_batch import simulate_cbc_batch
+
+    batch = simulate_cbc_batch(
+        "IMRPhenomD",
+        _EQUIVALENCE_DETECTORS,
+        sampling_frequency=_EQUIVALENCE_FS,
+        minimum_frequency=_EQUIVALENCE_F_MIN,
+        parameters=_EQUIVALENCE_CATALOGUE,
+        earth_rotation=earth_rotation,
+    )
+    return np.asarray(batch.strain)
+
+
 def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
     """The batched rotating path agrees with the per-event NumPy projection.
 
@@ -246,72 +322,45 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
     """
     pytest.importorskip("jax", reason="jax not installed")
     pytest.importorskip("ripplegw", reason="ripple not installed")
-    import numpy as np
-    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-    from gwmock_signal.jax_batch import simulate_cbc_batch
-    from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.waveform.backends.ripple import RippleBackend
+    device = _batched_strain(earth_rotation=True)
 
-    detectors = ["E1", "E2"]
-    sampling_frequency, minimum_frequency = 4096.0, 25.0
-    parameters = {
-        "detector_frame_mass_1": np.array([30.0, 25.0]),
-        "detector_frame_mass_2": np.array([28.0, 22.0]),
-        "luminosity_distance": np.array([900.0, 1200.0]),
-        "inclination": np.array([0.3, 1.1]),
-        "coa_phase": np.array([0.0, 2.0]),
-        "right_ascension": np.array([1.3, 4.0]),
-        "declination": np.array([-0.4, 0.6]),
-        "polarization_angle": np.array([0.7, 2.1]),
-        "coa_time": np.array([1.4e9, 1.4e9 + 300.0]),
-    }
+    for event, index, name, expected in _numpy_reference_strain(earth_rotation=True):
+        scale = np.max(np.abs(expected))
+        # Relative tolerances are meaningless at an antenna null; the sky positions
+        # are fixed, but assert the premise rather than assume it.
+        assert scale > 0.0, f"event {event} {name} has a null response"
+        difference = np.abs(device[event, index] - expected)
+        # Round-off: one resampling kernel and one sidereal implementation across
+        # both paths. See test_jax_projection.py for the history of this tolerance.
+        assert np.sqrt(np.mean(difference**2)) < 1e-11 * scale
+        assert np.max(difference) < 1e-10 * scale
 
-    batch = simulate_cbc_batch(
-        "IMRPhenomD",
-        detectors,
-        sampling_frequency=sampling_frequency,
-        minimum_frequency=minimum_frequency,
-        parameters=parameters,
-        earth_rotation=True,
-    )
-    device = np.asarray(batch.strain)
 
-    # Rebuild the same time-domain polarizations the device path projects, then run the
-    # NumPy projection on them event by event.
-    backend = RippleBackend()
-    fd = backend.generate_fd_polarizations_batch(
-        "IMRPhenomD",
-        sampling_frequency=sampling_frequency,
-        minimum_frequency=minimum_frequency,
-        parameters=parameters,
-    )
-    n_samples = fd.n_samples
-    merger_index, epoch = backend.coalescence_placement(n_samples, sampling_frequency)
+def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
+    """The batched ``earth_rotation=False`` branch agrees with the per-event NumPy projection.
 
-    for event in range(len(parameters["coa_time"])):
-        start = epoch + parameters["coa_time"][event]
-        hp = np.roll(np.fft.irfft(np.asarray(fd.plus[event]), n=n_samples) * sampling_frequency, merger_index)
-        hc = np.roll(np.fft.irfft(np.asarray(fd.cross[event]), n=n_samples) * sampling_frequency, merger_index)
-        reference = project_polarizations_to_network(
-            {
-                "plus": GWpyTimeSeries(hp, t0=start, sample_rate=sampling_frequency),
-                "cross": GWpyTimeSeries(hc, t0=start, sample_rate=sampling_frequency),
-            },
-            detectors,
-            right_ascension=float(parameters["right_ascension"][event]),
-            declination=float(parameters["declination"][event]),
-            polarization_angle=float(parameters["polarization_angle"][event]),
-            earth_rotation=True,
-        )
-        for index, name in enumerate(detectors):
-            expected = reference[name].value
-            scale = np.max(np.abs(expected))
-            # Relative tolerances are meaningless at an antenna null; the sky positions
-            # are fixed, but assert the premise rather than assume it.
-            assert scale > 0.0
-            difference = np.abs(device[event, index] - expected)
-            # Round-off: one resampling kernel and one sidereal implementation across
-            # both paths. See test_jax_projection.py for the history of this tolerance.
-            assert np.sqrt(np.mean(difference**2)) < 1e-11 * scale
-            assert np.max(difference) < 1e-10 * scale
+    The same anchoring as the rotating test above, for the branch that evaluates the response at a
+    single instant. It exists separately because that branch has its own reference time -- the
+    segment midpoint rather than the first sample -- which the rotating test cannot reach.
+
+    ``test_simulate_cbc_batch_matches_host_pipeline`` already compares these two paths, but it gates
+    on ``overlap > 0.999``, and an overlap is nearly blind to a common-mode error: giving one side
+    the wrong sky-frame convention moves the strain by 4.4e-03 of peak and still leaves that test
+    passing at 0.9999997, both measured. So the residual is asserted directly instead, which is what
+    makes this a check on the *convention* reaching both paths and not only on the arithmetic.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+
+    device = _batched_strain(earth_rotation=False)
+
+    for event, index, name, expected in _numpy_reference_strain(earth_rotation=False):
+        scale = np.max(np.abs(expected))
+        assert scale > 0.0, f"event {event} {name} has a null response"
+        difference = np.abs(device[event, index] - expected)
+        # Measured at 7.7e-12 to 1.3e-11 of peak across the four event/detector pairs, so the
+        # bound sits just above that rather than at a round number. It is round-off from the two
+        # paths associating the same arithmetic differently, the same size the rotating branch
+        # shows, and eight orders below the 4.4e-03 a wrong sky frame costs.
+        assert np.sqrt(np.mean(difference**2)) < 3e-11 * scale

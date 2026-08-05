@@ -50,16 +50,17 @@ That constraint drives the design of this class:
      module relies on. Nothing is double-counted or dropped at the seam.
 
    The residual: this package's geocentre-to-detector delay differs from LAL's ``erot`` by
-   **8.6e-05 s** (0.088 samples at 1024 Hz) once the sign convention is accounted for.
-   :func:`~gwmock_signal.projection.network._time_delay_from_earth_center_lal` uses plain GMST with
-   a J2000 source direction, while LAL applies lunisolar precession and nutation. The size fits:
-   8.6e-05 s of light travel is 25.8 km, or 0.23 degrees over an Earth radius, against roughly
-   0.42 degrees of precession between J2000 and 2030.
+   **8.7e-07 s** worst case over detectors, sky positions and epochs. What remains is nutation, the
+   short-period part of a motion whose secular part
+   :func:`~gwmock_signal.projection.sidereal.precess_to_epoch` now applies and LAL applies in full.
+   The size fits: nutation's amplitude is ~17 arcseconds, which over an Earth radius is ~5e-07 s.
 
-   That difference predates this module and applies to every source type, not only continuous
-   waves -- but it matters more here, because a coherent search integrates for months. It is a
-   near-constant timing offset, so most of it is absorbed into the initial phase; the part that is
-   not scales with frequency, reaching about 0.5 rad at 1 kHz.
+   It was **1.8e-04 s** before that rotation existed, from combining plain GMST -- which measures
+   the Earth's rotation from the mean equinox *of date* -- with a J2000 source direction. Like the
+   residual it replaced, this applies to every source type, not only continuous waves, but matters
+   most here because a coherent search integrates for months. It is a near-constant timing offset,
+   so most of it is absorbed into the initial phase; the part that is not scales with frequency,
+   which at the current 8.7e-07 s reaches about 5e-03 rad at 1 kHz.
 """
 
 from __future__ import annotations
@@ -461,6 +462,13 @@ class ContinuousWaveSimulator(GWSimulator):
             declination=float(params["declination"]),
             polarization_angle=float(params.get("polarization_angle", 0.0)),
             earth_rotation=earth_rotation,
+            # Not the projection's default, and not a preference. The SSB-to-geocentre part of this
+            # signal's phase comes from a barycentering routine that applies lunisolar precession --
+            # ripple's does, as LAL's ``XLALBarycenter`` does -- so the site term added to it has to
+            # be evaluated in the same frame or the seam between them carries a 1.8e-04 s offset.
+            # The compact-binary path deliberately leaves this off, because CBC searches do; see the
+            # argument's documentation for why the two source types differ.
+            precess_source_direction=True,
             # The device implementation of the same algorithm. Measured against the host path at
             # this class's own segment sizes, three detectors, 512 Hz: 2.0x over 256 s and 3.4x
             # over 1024 s, agreeing to 1.4e-11 of peak. Not a choice about accuracy -- the two
