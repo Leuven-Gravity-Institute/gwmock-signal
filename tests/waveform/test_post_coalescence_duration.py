@@ -229,3 +229,45 @@ def test_the_simulator_and_factory_expose_the_query() -> None:
     assert pre is not None
     assert post is not None
     assert post > 0.0
+
+
+def test_a_custom_registered_model_answers_unknown() -> None:
+    """A registered callable never reaches the backend, so the backend's sizing cannot describe it.
+
+    The mirror of the pre-side case, and it fails worse on this side. Handing back the backend's
+    tail would look authoritative while describing a waveform the simulator is not going to
+    generate -- and the caller this query exists for uses the tail to decide an event is *finished*
+    and can be dropped. A confident wrong tail therefore deletes signal, where the pre side's would
+    only misplace it.
+    """
+    import numpy as np
+    from gwpy.timeseries import TimeSeries
+
+    from gwmock_signal.simulator import CBCSimulator
+
+    def _flat(**kwargs):
+        del kwargs
+        return {
+            "plus": TimeSeries(np.ones(128), t0=0.0, sample_rate=128.0),
+            "cross": TimeSeries(np.zeros(128), t0=0.0, sample_rate=128.0),
+        }
+
+    simulator = CBCSimulator(waveform_model="MyFlatModel")
+    simulator.register_waveform_model("MyFlatModel", _flat)
+
+    assert simulator.post_coalescence_duration({"coa_time": _TC, **_BBH}, 1024.0, 20.0) is None
+
+
+def test_an_unknown_model_raises_like_generation_would() -> None:
+    """Unknown and unanswerable are different: one is a caller error, the other a capability gap.
+
+    Both would be `None` if the query swallowed the lookup failure, and the caller cannot tell a
+    typo'd approximant from a backend that declines to answer -- it would silently take the
+    conservative branch forever.
+    """
+    from gwmock_signal.simulator import CBCSimulator
+
+    simulator = CBCSimulator(waveform_model="NotAnApproximant")
+
+    with pytest.raises(ValueError, match="not found"):
+        simulator.post_coalescence_duration({"coa_time": _TC, **_BBH}, 1024.0, 20.0)
