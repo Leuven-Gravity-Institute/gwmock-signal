@@ -116,3 +116,49 @@ class WaveformBackend(ABC):
         """
         del approximant, sampling_frequency, minimum_frequency, params
         return None
+
+    def post_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return how long after ``tc`` the generated waveform runs, in seconds.
+
+        The other half of :meth:`pre_coalescence_duration`, and needed for the decision that one
+        cannot make: knowing where a buffer *starts* tells a caller that an event begins before a
+        segment, never that it has finished before one. A caller placing signals from a
+        population that begins earlier than its run has no way, from the start alone, to tell an
+        event whose content is entirely in the past from one whose tail lands in the segment it is
+        about to write -- so it must generate both.
+
+        **The tail is a fraction of the buffer, not a fixed ringdown.** It therefore scales with
+        everything the buffer scales with: a stellar-mass binary at 20 Hz carries a fraction of a
+        second, a binary neutron star at the same cutoff carries tens of seconds, and a lower
+        cutoff lengthens both. A caller substituting a constant -- "ringdown is milliseconds" --
+        is not approximating this quantity, it is discarding it.
+
+        Asked of the backend for the same reason as the pre side: the length is a property of how
+        each library conditions its output, and a caller reproducing that arithmetic would be a
+        second implementation of it, wrong differently per backend.
+
+        Returns:
+            Seconds between coalescence and one sample past the buffer's end, always positive.
+            ``None`` when this backend cannot say, which callers must treat as "unknown" rather
+            than "zero".
+
+            Test for ``None`` explicitly. Reading it as ``0.0`` asserts that an event's content
+            stops at its coalescence, which would discard every event whose ``tc`` precedes a
+            segment -- including the ones whose tail lands inside it, which is worse than the
+            behaviour this method exists to enable.
+
+        Args:
+            approximant: The approximant that will be generated.
+            sampling_frequency: Sample rate in Hz, which sets the sample count.
+            minimum_frequency: Low-frequency cutoff in Hz; the dominant term in the buffer length.
+            **params: The source parameters that will be generated, in the same form
+                ``generate_td_waveform`` takes.
+        """
+        del approximant, sampling_frequency, minimum_frequency, params
+        return None

@@ -94,6 +94,29 @@ class PyCBCBackend(WaveformBackend):
         """
         return None
 
+    def post_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return ``None``: this backend cannot say where its buffer ends either.
+
+        PyCBC conditions inside its own library, so answering would mean reimplementing that
+        conditioning here and being wrong whenever it changed. ``None`` means *unknown*, never
+        zero -- a caller reading zero concludes an event's content stops at coalescence, and
+        would discard events whose tail reaches into the segment it is writing.
+
+        Args:
+            approximant: Unused; accepted to match the base signature.
+            sampling_frequency: Unused; accepted to match the base signature.
+            minimum_frequency: Unused; accepted to match the base signature.
+            **params: Unused; accepted to match the base signature.
+        """
+        del approximant, sampling_frequency, minimum_frequency, params
+        return None
+
     @staticmethod
     def _resolve_waveform_arguments(value: object) -> dict[str, object]:
         """Validate the optional extra-argument mapping forwarded to PyCBC.

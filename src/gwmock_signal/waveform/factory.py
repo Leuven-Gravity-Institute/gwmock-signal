@@ -164,6 +164,38 @@ class WaveformFactory:
             return None
         return self._backend.pre_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
 
+    def post_coalescence_duration(
+        self,
+        name: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return how long after ``tc`` the buffer for ``name`` runs, or ``None`` if unknown.
+
+        The complement of :meth:`pre_coalescence_duration`, delegating the same way and excluding
+        custom registrations for the same reason: an arbitrary callable never reaches the backend,
+        so the backend's sizing would not describe what it produces.
+
+        Args:
+            name: Waveform model name, as passed to :meth:`get_model`.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            **params: Source parameters, as generation would receive them.
+
+        Returns:
+            Seconds from coalescence to one sample past the buffer's end, or ``None`` when the
+            backend cannot say -- unknown, never zero.
+
+        Raises:
+            ValueError: If ``name`` is not registered at all, matching :meth:`get_model`.
+        """
+        if name not in self._models:
+            raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
+        if self._models[name] is not self._backend_models.get(name):
+            return None
+        return self._backend.post_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
+
     def list_models(self) -> list[str]:
         """Return every registered waveform model name, in dict iteration order.
 

@@ -663,6 +663,44 @@ class RippleBackend(WaveformBackend):
         powers of two, and eta enters its 1PN term), which is exactly why this is asked of the
         backend rather than computed once by the caller.
         """
+        _, merger_index = self._buffer_shape(approximant, sampling_frequency, minimum_frequency, **params)
+        return merger_index / sampling_frequency
+
+    def post_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return the seconds after ``tc`` this backend's buffer runs.
+
+        The complement of :meth:`pre_coalescence_duration`, from the same sizing call, so the two
+        cannot drift into describing different buffers. Ripple's 5-smooth sizing and its 1PN eta
+        term make this a different number from the LAL backend's for the same source, which is
+        why both are asked of the backend rather than computed once by the caller.
+        """
+        n_samples, merger_index = self._buffer_shape(approximant, sampling_frequency, minimum_frequency, **params)
+        return (n_samples - merger_index) / sampling_frequency
+
+    def _buffer_shape(
+        self, approximant: str, sampling_frequency: float, minimum_frequency: float, **params: object
+    ) -> tuple[int, int]:
+        """Return ``(n_samples, merger_index)`` for the buffer generation would produce.
+
+        Shared by both duration queries so they remain two views of one buffer; computing them
+        separately is how a change to one silently stops matching the other, which at the call
+        site is indistinguishable from generation having drifted from its own sizing.
+
+        Args:
+            approximant: The approximant that will be generated.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            **params: Source parameters, as ``generate_td_waveform`` takes them.
+
+        Returns:
+            The buffer's sample count and the index coalescence sits on within it.
+        """
         resolved = self._resolve_parameters(approximant, sampling_frequency, minimum_frequency, **params)
         chirp_mass, eta = self._jax.vmap(self._conversions.ms_to_Mc_eta)(
             self._jnp.stack([self._jnp.atleast_1d(resolved.mass1), self._jnp.atleast_1d(resolved.mass2)], axis=-1)
@@ -673,9 +711,8 @@ class RippleBackend(WaveformBackend):
             sampling_frequency,
             eta=np.asarray(eta, dtype=float),
         )
-        _, epoch = self.coalescence_placement(n_samples, sampling_frequency)
-        # `epoch` is the first sample's time relative to coalescence, so it is negative.
-        return -float(epoch)
+        merger_index, _ = self.coalescence_placement(n_samples, sampling_frequency)
+        return n_samples, merger_index
 
     def generate_td_waveform(
         self,

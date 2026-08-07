@@ -275,6 +275,43 @@ class LALSimulationBackend(WaveformBackend):
         Reproducing the arithmetic here instead would be a second implementation of it.
         """
         del approximant
+        _, merger_index = self._buffer_shape(sampling_frequency, minimum_frequency, **params)
+        return merger_index / sampling_frequency
+
+    def post_coalescence_duration(
+        self,
+        approximant: str,
+        sampling_frequency: float,
+        minimum_frequency: float,
+        **params: object,
+    ) -> float | None:
+        """Return the seconds after ``tc`` this backend's buffer runs.
+
+        The complement of :meth:`pre_coalescence_duration`, from the same two helpers and the same
+        single call to them, so the two cannot describe different waveforms: the buffer is
+        ``n_samples`` long and coalescence sits at ``merger_index``, so what remains after it is
+        the rest. ``ringdown_fraction`` is what sets the split.
+        """
+        del approximant
+        n_samples, merger_index = self._buffer_shape(sampling_frequency, minimum_frequency, **params)
+        return (n_samples - merger_index) / sampling_frequency
+
+    def _buffer_shape(self, sampling_frequency: float, minimum_frequency: float, **params: object) -> tuple[int, int]:
+        """Return ``(n_samples, merger_index)`` for the buffer generation would produce.
+
+        Shared by both duration queries deliberately. They are two views of one buffer, and
+        computing them separately is how a change to one silently stops matching the other --
+        which would be indistinguishable, at the call site, from a backend whose generation had
+        drifted from its own sizing.
+
+        Args:
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz.
+            **params: Source parameters, as ``generate_td_waveform`` takes them.
+
+        Returns:
+            The buffer's sample count and the index coalescence sits on within it.
+        """
         p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
         chirp_mass = (p.mass1 * p.mass2) ** 0.6 / (p.mass1 + p.mass2) ** 0.2
         n_samples = conditioning.segment_sample_count(
@@ -284,9 +321,8 @@ class LALSimulationBackend(WaveformBackend):
             ringdown_fraction=self._ringdown_fraction,
             segment_duration=self._segment_duration,
         )
-        _, epoch = conditioning.coalescence_placement(n_samples, sampling_frequency, self._ringdown_fraction)
-        # `epoch` is the first sample's time relative to coalescence, so it is negative.
-        return -float(epoch)
+        merger_index, _ = conditioning.coalescence_placement(n_samples, sampling_frequency, self._ringdown_fraction)
+        return n_samples, merger_index
 
     def generate_td_waveform(
         self,
