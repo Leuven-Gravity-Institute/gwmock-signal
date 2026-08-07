@@ -219,7 +219,9 @@ def test_the_simulator_and_factory_expose_the_query() -> None:
     from gwmock_signal.simulator import CBCSimulator
 
     simulator = CBCSimulator(waveform_model="IMRPhenomD")
-    params = {"coa_time": _TC, **_BBH, "luminosity_distance": _BBH["distance"]}
+    # `_BBH` already carries `distance`; adding `luminosity_distance` too is refused as a mixed
+    # alias, which is the backend being right rather than a problem to work around.
+    params = {"coa_time": _TC, **_BBH}
 
     pre = simulator.pre_coalescence_duration(params, 1024.0, 20.0)
     post = simulator.post_coalescence_duration(params, 1024.0, 20.0)
