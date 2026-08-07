@@ -94,11 +94,14 @@ def test_the_two_sides_account_for_the_whole_buffer(params):
 
 
 def test_the_tail_is_large_enough_that_no_caller_should_guess_it():
-    """A constant would be wrong by orders of magnitude, which is why the query exists.
+    """A constant would be wrong by orders of magnitude -- a magnitude pin, nothing more.
 
-    Pinned as a fact about the shape of the answer rather than an exact figure: the tail scales
-    with the buffer, so a BNS carries seconds of it where a stellar-mass binary carries a fraction
-    of one. A caller approximating "ringdown" as a small constant would truncate the longer case.
+    **This does not discriminate a post/pre swap**, and its earlier docstring implied it did: the
+    ratio is roughly the same on both sides (~64 here, ~64 for pre), so returning the pre value
+    would satisfy it unchanged. What actually catches that is the end-match test above, which
+    compares the promise against generation. Kept because it pins the *scale* -- a caller
+    substituting a small constant truncates the BNS case by tens of seconds -- and because the
+    scale is the reason the query exists at all.
     """
     backend = _lal_backend()
 
@@ -115,7 +118,7 @@ def test_a_backend_that_cannot_say_returns_none_rather_than_zero():
 
     The mirror of the pre-side trap, and worse in this direction: a caller reading ``0.0`` as an
     answer concludes an event's content stops at its ``tc``, and would discard every event whose
-    coalescence precedes a segment -- including the ones whose ringdown lands inside it.
+    coalescence precedes a segment -- including the ones whose tail lands inside it.
     """
     from gwmock_signal.waveform.backends.base import WaveformBackend
 
