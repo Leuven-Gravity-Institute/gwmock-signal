@@ -433,6 +433,47 @@ class CBCSimulator(TransientSimulator):
             **_waveform_parameters(params),
         )
 
+    def post_coalescence_duration(
+        self,
+        params: Mapping[str, Any],
+        sampling_frequency: float,
+        minimum_frequency: float,
+    ) -> float | None:
+        """Return how long after ``coa_time`` this simulator's output runs, in seconds.
+
+        The complement of :meth:`pre_coalescence_duration`, and the half that answers a different
+        question: the pre side tells a caller an event *begins* before a segment, this one tells
+        it an event has *finished* before one. Without it, a run whose population starts earlier
+        than the run itself cannot distinguish an event whose content is entirely in the past from
+        one whose tail lands in the segment being written, and must generate both to find out.
+
+        **This is buffer padding, not physical ringdown.** It is a fraction of the buffer, so it
+        scales with it: a fraction of a second for a stellar-mass binary, tens of seconds for a
+        binary neutron star at the same cutoff, and longer as the cutoff falls. A caller
+        substituting a constant is not approximating it.
+
+        Exposed here for the same reason as the pre side: reaching the backend through
+        ``_waveform_factory`` means two private attributes across a package boundary, and a caller
+        does not reliably own the backend instance.
+
+        Args:
+            params: Source parameters, as :meth:`generate_polarizations` takes them.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Low-frequency cutoff in Hz.
+
+        Returns:
+            Seconds from coalescence to one sample past the buffer's end, always positive; or
+            ``None`` when the backend cannot say. Treat ``None`` as *unknown*, never as zero --
+            zero asserts the content stops at coalescence, which would discard exactly the events
+            whose tail reaches into the segment being written.
+        """
+        return self._waveform_factory.post_coalescence_duration(
+            self._waveform_model,
+            sampling_frequency,
+            minimum_frequency,
+            **_waveform_parameters(params),
+        )
+
     def generate_polarizations(
         self,
         params: Mapping[str, Any],

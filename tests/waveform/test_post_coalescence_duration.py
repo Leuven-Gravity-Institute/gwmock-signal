@@ -139,3 +139,88 @@ def test_pycbc_cannot_say_either() -> None:
 
     backend = PyCBCBackend()
     assert backend.post_coalescence_duration("IMRPhenomD", 2048.0, 20.0, **_BBH) is None
+
+
+@pytest.mark.parametrize("ringdown_fraction", [0.05, 0.2, 0.3])
+def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
+    """This fraction *is* the post side, so it must reach the answer.
+
+    The pre-side version of this test exists because a mutation dropping ``self._ringdown_fraction``
+    survived: the module default matches a default-constructed backend, so the two are
+    indistinguishable at that one value. The same trap applies here and matters more -- the
+    fraction defines how much of the buffer sits after coalescence, which is exactly what this
+    query reports.
+    """
+    from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+    backend = LALSimulationBackend(ringdown_fraction=ringdown_fraction)
+
+    predicted = backend.post_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _end_relative_to_tc(generated, 1024.0)
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+@pytest.mark.parametrize("segment_duration", [8.0, 64.0])
+def test_a_pinned_segment_duration_is_honoured(segment_duration):
+    """A pinned duration bypasses the chirp-time estimate and must reach this path too."""
+    from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+    backend = LALSimulationBackend(segment_duration=segment_duration)
+
+    predicted = backend.post_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _end_relative_to_tc(generated, 1024.0)
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+def test_the_gwsignal_backend_inherits_a_correct_answer():
+    """It subclasses the LAL backend and overrides only the frequency-domain evaluation."""
+    gwsignal = pytest.importorskip("lalsimulation.gwsignal", reason="gwsignal is not available in this lalsuite build")
+    del gwsignal
+    from gwmock_signal.waveform.backends.gwsignal import GWSignalBackend
+
+    backend = GWSignalBackend()
+
+    predicted = backend.post_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
+    actual = _end_relative_to_tc(generated, 1024.0)
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+def test_ripple_carries_eta_into_the_answer():
+    """Ripple's sizing carries eta, so an asymmetric binary must not be sized as a symmetric one."""
+    backend = _ripple_backend()
+    asymmetric = {"mass1": 60.0, "mass2": 6.0, "distance": 400.0, "inclination": 0.0}
+
+    predicted = backend.post_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **asymmetric)
+    generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **asymmetric)
+    actual = _end_relative_to_tc(generated, 1024.0)
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
+
+
+def test_the_simulator_and_factory_expose_the_query() -> None:
+    """A caller holds a simulator, not a backend -- the same argument the pre side makes.
+
+    Without this the only route to the tail is two private attributes across a package boundary,
+    which breaks silently on an internal rename and bypasses custom-registration handling.
+    """
+    from gwmock_signal.simulator import CBCSimulator
+
+    simulator = CBCSimulator(waveform_model="IMRPhenomD")
+    params = {"coa_time": _TC, **_BBH, "luminosity_distance": _BBH["distance"]}
+
+    pre = simulator.pre_coalescence_duration(params, 1024.0, 20.0)
+    post = simulator.post_coalescence_duration(params, 1024.0, 20.0)
+
+    assert pre is not None
+    assert post is not None
+    assert post > 0.0
