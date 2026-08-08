@@ -42,6 +42,7 @@ The array evaluation is written twice, once per backend; the definition lives he
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 
@@ -269,3 +270,129 @@ def resample_uniform_sinc(
     interpolated = np.where(weight_sum != 0.0, total / weight_sum, 0.0)
     in_range = (index >= 0.0) & (index <= n - 1)
     return np.where(in_range, interpolated, 0.0)
+
+
+#: Absolute accuracy the polynomial window must reach against the exact Kaiser window. Chosen
+#: against what it protects rather than for roundness: the kernel's own error is 4.027e-12 of peak
+#: (127 taps, beta = 32, measured against an analytic sinusoid), so 1e-13 leaves a factor of 40
+#: between the approximation and the thing it must not disturb. It is also reachable -- float64
+#: evaluation of a Chebyshev series bottoms out near 2e-14 at this beta, so the target sits above
+#: the arithmetic's own floor rather than chasing it.
+_WINDOW_FIT_TOLERANCE = 1e-13
+
+#: Highest degree tried before giving up. A degree this large means the request is outside what a
+#: polynomial can do in float64, and falling back is better than shipping a silently worse window.
+_WINDOW_FIT_MAX_DEGREE = 64
+
+
+def kaiser_window_chebyshev(beta: float, tolerance: float = _WINDOW_FIT_TOLERANCE) -> tuple[float, ...] | None:
+    """Cache-normalising wrapper; see :func:`_kaiser_window_chebyshev` for the fit itself.
+
+    ``float()`` before the cache, on a reviewer's finding: ``32`` and ``32.0`` are distinct keys to
+    ``lru_cache`` but the same Kaiser window, so an int caller silently paid for a second fit and
+    filled a slot. numpy scalars have the same problem.
+    """
+    return _kaiser_window_chebyshev(float(beta), float(tolerance))
+
+
+@lru_cache(maxsize=32)
+def _kaiser_window_chebyshev(beta: float, tolerance: float) -> tuple[float, ...] | None:
+    """Return Chebyshev coefficients for the Kaiser window as a function of ``v = (x / denom) ** 2``.
+
+    The device kernel evaluates the window ``i0(beta * sqrt(1 - v)) / i0(beta)`` once per tap, 127
+    times per output sample, and that kernel is about 87% of the whole pipeline. Because ``i0`` is
+    even, ``i0(sqrt(w))`` is analytic in ``w``: the window is a smooth function of ``v`` alone, so a
+    polynomial in ``v`` replaces **both** the ``i0`` and the ``sqrt``. Measured on an RTX 3060 in
+    float64, that is **2.18x** on the full kernel, with the output error against an analytic sinusoid
+    unchanged at 4.027e-12 of peak and the two kernels differing by 2.2e-15.
+
+    Fitted here rather than hard-coded because ``beta`` is a caller's choice, and a table for one
+    beta would silently apply the wrong window to every other. ``beta`` is static at trace time, the fit is pure
+    NumPy on the host, and the result is cached, so a run pays for it once per distinct beta.
+
+    **Evaluated in the Chebyshev basis, never converted to monomials.** Converting a degree-24 fit to
+    the monomial basis and using Horner cost three orders of accuracy when measured -- 1.9e-14
+    against 1.8e-11 -- because that conversion is ill-conditioned. The recurrence costs roughly two
+    fused multiply-adds per degree instead of one, which is why the measured speedup is 2.18x rather
+    than the 3.66x a window-only comparison showed.
+
+    Args:
+        beta: Kaiser shape parameter the caller will use.
+        tolerance: Largest acceptable absolute deviation from the exact window.
+
+    **The bound is measured with a margin, not proved.** Acceptance samples an independent, denser
+    grid than the fit used and requires half the tolerance, so a small exceedance between sample
+    points cannot slip through as it once did. A minimax construction would give a genuine bound;
+    this does not claim one. Two independent sweeps across the whole reachable region -- beta up to
+    about 274, since ``validate_kernel`` caps beta at roughly ``(taps + 1) / 4`` and taps is unbounded
+    -- found **no accepted fit over the target**, worst 0.68x at beta around 263. The default beta of
+    32 measures 0.074x.
+
+    **``None`` is reachable in ordinary use, and the boundary is not monotone.** At the default
+    tolerance every beta below about 250 is served by a polynomial, but above that acceptance
+    alternates -- 260 accepted at degree 64, 262 not, 264 accepted, 266 through 270 not, 272
+    accepted -- because degree 64's error oscillates with beta rather than decreasing. A caller in
+    that band gets the ``i0`` path and **no speedup**, and bisecting for a clean threshold will
+    mislead, as it did during review. Such a configuration needs taps of roughly 1000 or more, so it
+    is far from the default, but it is legal and it is not an error.
+
+    Returns:
+        Coefficients in ascending Chebyshev order for the domain ``[0, 1]``, or ``None`` when no
+        degree up to :data:`_WINDOW_FIT_MAX_DEGREE` reaches half of ``tolerance`` on the independent
+        grid -- in which case the caller must keep evaluating ``i0`` rather than accept a worse
+        window.
+    """
+    if not np.isfinite(beta) or beta < 0.0:
+        raise ValueError(f"Kaiser beta must be finite and non-negative; got {beta}.")
+
+    def window(v: np.ndarray) -> np.ndarray:
+        return np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - v))) / np.i0(beta)
+
+    def sampling(uniform: int, decades: int, offset: float) -> np.ndarray:
+        """Uniform points plus logarithmic clusters at **both** ends of [0, 1].
+
+        Both ends, on a reviewer's counterexample. The first version clustered only at ``v -> 1``,
+        where the window is smallest -- but the polynomial's difficulty is at ``v -> 0``, and at
+        ``beta = 16.046`` an independent search found 1,243 points over target there, worst
+        1.03e-13, while the fitting grid saw 9.97e-14 and accepted.
+        """
+        return np.unique(
+            np.concatenate(
+                [
+                    np.linspace(0.0, 1.0, uniform),
+                    np.logspace(-14.0 + offset, -1.0, decades),
+                    1.0 - np.logspace(-14.0 + offset, -1.0, decades),
+                ]
+            ).clip(0.0, 1.0)
+        )
+
+    # Two grids, deliberately different points: fitting on one and accepting on the other is what
+    # makes the check independent rather than circular. Accepting a fit against the very points it
+    # minimised over is how the first version of this passed while exceeding its target between them.
+    fit_grid = sampling(4001, 600, 0.0)
+    check_grid = sampling(7919, 901, 0.37)  # coprime-ish counts and an offset, so the points differ
+    fit_exact = window(fit_grid)
+    check_exact = window(check_grid)
+
+    # Half the target on the independent grid. A margin, because sampling can only ever bound the
+    # error between its points: this is a measured bound with headroom, not a proof, and the
+    # docstring says so rather than calling 1e-13 guaranteed.
+    #
+    # The margin's size is measured, and by adversarial sweeps rather than by this file's author --
+    # who got it wrong twice. Worst inter-grid slippage found by an independent search: **1.54x**
+    # (check grid against a denser one, near beta = 260-280 at degree 64), so a fit accepted at
+    # 0.5 * tolerance can be up to ~0.77 * tolerance in truth: the 2x margin holds with about 1.3x
+    # residual headroom. My own earlier notes put that slippage at 3% and then 1.37x; both came from
+    # measuring only where my own sweep peaked.
+    #
+    # Why the margin is not sampling luck: `i0` is even, so the sqrt branch cancels and
+    # `i0(beta * sqrt(1 - v)) / i0(beta)` is analytic on [0, 1]. Every extremum of the error is
+    # therefore wider than the local grid spacing, and the peak near v -> 0 sits at beta * v ~ 0.6,
+    # which the check grid's logarithmic clustering resolves with ~1e4 points even at beta = 274.
+    acceptance = 0.5 * tolerance
+
+    for degree in range(8, _WINDOW_FIT_MAX_DEGREE + 1, 2):
+        fit = np.polynomial.chebyshev.Chebyshev.fit(fit_grid, fit_exact, degree, domain=[0.0, 1.0])
+        if float(np.max(np.abs(fit(check_grid) - check_exact))) <= acceptance:
+            return tuple(float(c) for c in fit.coef)
+    return None
