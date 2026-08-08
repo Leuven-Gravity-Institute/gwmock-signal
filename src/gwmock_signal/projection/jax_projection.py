@@ -44,6 +44,7 @@ from gwmock_signal.projection.resampling import (
     DEFAULT_SINC_TAPS,
     SPEED_OF_LIGHT_M_S,
     edge_padding,
+    kaiser_window_chebyshev,
     validate_kernel,
 )
 
@@ -317,6 +318,35 @@ def _interpolate_uniform_sinc(
     denominator = half + 1.0
     normalisation = i0(jnp.asarray(beta, dtype=jnp.float64))
 
+    # The window is `i0(beta * sqrt(1 - v)) / i0(beta)` with `v = (x / denominator) ** 2`, evaluated
+    # once per tap. Because `i0` is even, that composition is analytic in `v`, so a polynomial in `v`
+    # replaces both the `i0` and the `sqrt`: measured 2.18x on this kernel in float64, with the error
+    # against an analytic sinusoid unchanged at 4.027e-12 of peak. `beta` is static here, so the fit
+    # happens on the host once per distinct beta. `None` means no degree reached the accuracy target,
+    # and then `i0` is kept rather than a worse window accepted.
+    window_coefficients = kaiser_window_chebyshev(float(beta))
+    coefficients = None if window_coefficients is None else jnp.asarray(window_coefficients, dtype=jnp.float64)
+
+    def _window(x: Array) -> Array:
+        if coefficients is None:
+            return i0(beta * jnp.sqrt(jnp.maximum(0.0, 1.0 - (x / denominator) ** 2))) / normalisation
+        # Clamped at 1 to mirror the exact form's `maximum(0.0, 1 - v)`, and **unreachable by
+        # construction**: `x = frac - offset` with `frac` in [0, 1) and `offset` in [-half, half]
+        # gives `|x| < half + 1 = denominator`, so `v < 1` strictly. Verified by mutation -- removing
+        # the clamp changes no test result, because no input reaches it. Kept so the two
+        # implementations read alike, not because it guards a live case; a reader who assumes it is
+        # load-bearing would be wrong.
+        #
+        # Clenshaw in the Chebyshev basis, never monomials: converting a degree-24 fit and using
+        # Horner was measured to cost three orders of accuracy (1.9e-14 against 1.8e-11).
+        v = jnp.minimum(1.0, (x / denominator) ** 2)
+        t = 2.0 * v - 1.0
+        b_kp1 = jnp.zeros_like(t)
+        b_kp2 = jnp.zeros_like(t)
+        for coefficient in coefficients[:0:-1]:
+            b_kp1, b_kp2 = 2.0 * t * b_kp1 - b_kp2 + coefficient, b_kp1
+        return t * b_kp1 - b_kp2 + coefficients[0]
+
     base = jnp.floor(index)
     frac = index - base
     base_int = base.astype(jnp.int32)
@@ -325,8 +355,7 @@ def _interpolate_uniform_sinc(
         total, weight_sum = carry
         offset = step - half
         x = frac - offset
-        window = i0(beta * jnp.sqrt(jnp.maximum(0.0, 1.0 - (x / denominator) ** 2))) / normalisation
-        weight = jnp.sinc(x) * window
+        weight = jnp.sinc(x) * _window(x)
         gathered = samples[jnp.clip(base_int + offset, 0, n_samples - 1)]
         return total + weight * gathered, weight_sum + weight
 

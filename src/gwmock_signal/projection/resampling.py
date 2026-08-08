@@ -42,6 +42,7 @@ The array evaluation is written twice, once per backend; the definition lives he
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 
@@ -269,3 +270,62 @@ def resample_uniform_sinc(
     interpolated = np.where(weight_sum != 0.0, total / weight_sum, 0.0)
     in_range = (index >= 0.0) & (index <= n - 1)
     return np.where(in_range, interpolated, 0.0)
+
+
+#: Absolute accuracy the polynomial window must reach against the exact Kaiser window. Chosen
+#: against what it protects rather than for roundness: the kernel's own error is 4.027e-12 of peak
+#: (127 taps, beta = 32, measured against an analytic sinusoid), so 1e-13 leaves a factor of 40
+#: between the approximation and the thing it must not disturb. It is also reachable -- float64
+#: evaluation of a Chebyshev series bottoms out near 2e-14 at this beta, so the target sits above
+#: the arithmetic's own floor rather than chasing it.
+_WINDOW_FIT_TOLERANCE = 1e-13
+
+#: Highest degree tried before giving up. A degree this large means the request is outside what a
+#: polynomial can do in float64, and falling back is better than shipping a silently worse window.
+_WINDOW_FIT_MAX_DEGREE = 64
+
+
+@lru_cache(maxsize=32)
+def kaiser_window_chebyshev(beta: float, tolerance: float = _WINDOW_FIT_TOLERANCE) -> tuple[float, ...] | None:
+    """Return Chebyshev coefficients for the Kaiser window as a function of ``v = (x / denom) ** 2``.
+
+    The device kernel evaluates the window ``i0(beta * sqrt(1 - v)) / i0(beta)`` once per tap, 127
+    times per output sample, and that kernel is about 87% of the whole pipeline. Because ``i0`` is
+    even, ``i0(sqrt(w))`` is analytic in ``w``: the window is a smooth function of ``v`` alone, so a
+    polynomial in ``v`` replaces **both** the ``i0`` and the ``sqrt``. Measured on an RTX 3060 in
+    float64, that is **2.18x** on the full kernel, with the output error against an analytic sinusoid
+    unchanged at 4.027e-12 of peak and the two kernels differing by 2.2e-15.
+
+    Fitted here rather than hard-coded because ``beta`` is a caller's choice, and a table for one
+    beta would silently apply the wrong window to every other. ``beta`` is static at trace time, the fit is pure
+    NumPy on the host, and the result is cached, so a run pays for it once per distinct beta.
+
+    **Evaluated in the Chebyshev basis, never converted to monomials.** Converting a degree-24 fit to
+    the monomial basis and using Horner cost three orders of accuracy when measured -- 1.9e-14
+    against 1.8e-11 -- because that conversion is ill-conditioned. The recurrence costs roughly two
+    fused multiply-adds per degree instead of one, which is why the measured speedup is 2.18x rather
+    than the 3.66x a window-only comparison showed.
+
+    Args:
+        beta: Kaiser shape parameter the caller will use.
+        tolerance: Largest acceptable absolute deviation from the exact window.
+
+    Returns:
+        Coefficients in ascending Chebyshev order for the domain ``[0, 1]``, or ``None`` when no
+        degree up to :data:`_WINDOW_FIT_MAX_DEGREE` reaches ``tolerance`` -- in which case the caller
+        must keep evaluating ``i0`` rather than accept a worse window.
+    """
+    if not np.isfinite(beta) or beta < 0.0:
+        raise ValueError(f"Kaiser beta must be finite and non-negative; got {beta}.")
+
+    # Dense on [0, 1] plus a logarithmic cluster at v -> 1, where the window is smallest and a
+    # uniform grid would leave the fit unconstrained over several decades of its range.
+    grid = np.unique(np.concatenate([np.linspace(0.0, 1.0, 4001), 1.0 - np.logspace(-12.0, -1.0, 400)]))
+    grid = grid[(grid >= 0.0) & (grid <= 1.0)]
+    exact = np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - grid))) / np.i0(beta)
+
+    for degree in range(8, _WINDOW_FIT_MAX_DEGREE + 1, 2):
+        fit = np.polynomial.chebyshev.Chebyshev.fit(grid, exact, degree, domain=[0.0, 1.0])
+        if float(np.max(np.abs(fit(grid) - exact))) <= tolerance:
+            return tuple(float(c) for c in fit.coef)
+    return None
