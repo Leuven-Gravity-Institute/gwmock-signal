@@ -310,22 +310,56 @@ def kaiser_window_chebyshev(beta: float, tolerance: float = _WINDOW_FIT_TOLERANC
         beta: Kaiser shape parameter the caller will use.
         tolerance: Largest acceptable absolute deviation from the exact window.
 
+    **The bound is measured with a margin, not proved.** Acceptance samples an independent, denser
+    grid than the fit used and requires half the tolerance, so a small exceedance between sample
+    points cannot slip through as it once did. A minimax construction would give a genuine bound;
+    this does not claim one.
+
     Returns:
         Coefficients in ascending Chebyshev order for the domain ``[0, 1]``, or ``None`` when no
-        degree up to :data:`_WINDOW_FIT_MAX_DEGREE` reaches ``tolerance`` -- in which case the caller
-        must keep evaluating ``i0`` rather than accept a worse window.
+        degree up to :data:`_WINDOW_FIT_MAX_DEGREE` reaches half of ``tolerance`` on the independent
+        grid -- in which case the caller must keep evaluating ``i0`` rather than accept a worse
+        window.
     """
     if not np.isfinite(beta) or beta < 0.0:
         raise ValueError(f"Kaiser beta must be finite and non-negative; got {beta}.")
 
-    # Dense on [0, 1] plus a logarithmic cluster at v -> 1, where the window is smallest and a
-    # uniform grid would leave the fit unconstrained over several decades of its range.
-    grid = np.unique(np.concatenate([np.linspace(0.0, 1.0, 4001), 1.0 - np.logspace(-12.0, -1.0, 400)]))
-    grid = grid[(grid >= 0.0) & (grid <= 1.0)]
-    exact = np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - grid))) / np.i0(beta)
+    def window(v: np.ndarray) -> np.ndarray:
+        return np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - v))) / np.i0(beta)
+
+    def sampling(uniform: int, decades: int, offset: float) -> np.ndarray:
+        """Uniform points plus logarithmic clusters at **both** ends of [0, 1].
+
+        Both ends, on a reviewer's counterexample. The first version clustered only at ``v -> 1``,
+        where the window is smallest -- but the polynomial's difficulty is at ``v -> 0``, and at
+        ``beta = 16.046`` an independent search found 1,243 points over target there, worst
+        1.03e-13, while the fitting grid saw 9.97e-14 and accepted.
+        """
+        return np.unique(
+            np.concatenate(
+                [
+                    np.linspace(0.0, 1.0, uniform),
+                    np.logspace(-14.0 + offset, -1.0, decades),
+                    1.0 - np.logspace(-14.0 + offset, -1.0, decades),
+                ]
+            ).clip(0.0, 1.0)
+        )
+
+    # Two grids, deliberately different points: fitting on one and accepting on the other is what
+    # makes the check independent rather than circular. Accepting a fit against the very points it
+    # minimised over is how the first version of this passed while exceeding its target between them.
+    fit_grid = sampling(4001, 600, 0.0)
+    check_grid = sampling(7919, 901, 0.37)  # coprime-ish counts and an offset, so the points differ
+    fit_exact = window(fit_grid)
+    check_exact = window(check_grid)
+
+    # Half the target on the independent grid. A margin, because sampling can only ever bound the
+    # error between its points: this is a measured bound with headroom, not a proof, and the
+    # docstring says so rather than calling 1e-13 guaranteed.
+    acceptance = 0.5 * tolerance
 
     for degree in range(8, _WINDOW_FIT_MAX_DEGREE + 1, 2):
-        fit = np.polynomial.chebyshev.Chebyshev.fit(grid, exact, degree, domain=[0.0, 1.0])
-        if float(np.max(np.abs(fit(grid) - exact))) <= tolerance:
+        fit = np.polynomial.chebyshev.Chebyshev.fit(fit_grid, fit_exact, degree, domain=[0.0, 1.0])
+        if float(np.max(np.abs(fit(check_grid) - check_exact))) <= acceptance:
             return tuple(float(c) for c in fit.coef)
     return None

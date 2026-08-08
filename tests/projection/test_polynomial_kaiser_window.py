@@ -144,3 +144,38 @@ def test_the_resampled_output_matches_an_analytic_signal() -> None:
     error = float(np.max(np.abs(got - truth)) / np.max(np.abs(truth)))
 
     assert error < 1e-10, f"resampled output is off by {error:.3e} of peak against the analytic value"
+
+
+@pytest.mark.parametrize("beta", [16.046, 15.5, 17.25, 23.9, 31.4])
+def test_the_fit_holds_at_beta_between_the_documented_values(beta: float) -> None:
+    """Off-grid beta, checked off-grid in v, because both were validated circularly before.
+
+    A reviewer found the hole: at beta = 16.046 the fit's own grid saw 9.97e-14 and accepted, while an
+    independent search found 1.03e-13 at v = 3.15e-07 -- reachable, since that v corresponds to
+    x = 0.036 which `frac - offset` produces. 1,243 points exceeded the target, **all near v = 0**,
+    where the original grid had no logarithmic clustering: it clustered at v -> 1, where the window is
+    smallest, rather than where the polynomial struggles.
+
+    Two things were circular and both are fixed: the fit is now accepted against a *different*,
+    denser grid at half the tolerance, and this test samples beta values that are not the round ones
+    the other test uses. The chosen beta values sit near the degree transitions, which is where the
+    search is most likely to stop one step early.
+    """
+    coefficients = kaiser_window_chebyshev(beta)
+    assert coefficients is not None
+
+    v = np.unique(
+        np.concatenate(
+            [
+                np.linspace(0.0, 1.0, 40001),
+                np.logspace(-14.0, -1.0, 2000),
+                1.0 - np.logspace(-14.0, -1.0, 2000),
+            ]
+        ).clip(0.0, 1.0)
+    )
+    error = np.abs(_clenshaw(coefficients, v) - _exact_window(beta, v))
+    worst = int(np.argmax(error))
+
+    assert float(error[worst]) <= _WINDOW_FIT_TOLERANCE, (
+        f"beta={beta} is off by {error[worst]:.3e} at v={v[worst]:.6e}, over the {_WINDOW_FIT_TOLERANCE:.0e} target"
+    )
