@@ -323,7 +323,18 @@ def _kaiser_window_chebyshev(beta: float, tolerance: float) -> tuple[float, ...]
     **The bound is measured with a margin, not proved.** Acceptance samples an independent, denser
     grid than the fit used and requires half the tolerance, so a small exceedance between sample
     points cannot slip through as it once did. A minimax construction would give a genuine bound;
-    this does not claim one.
+    this does not claim one. Two independent sweeps across the whole reachable region -- beta up to
+    about 274, since ``validate_kernel`` caps beta at roughly ``(taps + 1) / 4`` and taps is unbounded
+    -- found **no accepted fit over the target**, worst 0.68x at beta around 263. The default beta of
+    32 measures 0.074x.
+
+    **``None`` is reachable in ordinary use, and the boundary is not monotone.** At the default
+    tolerance every beta below about 250 is served by a polynomial, but above that acceptance
+    alternates -- 260 accepted at degree 64, 262 not, 264 accepted, 266 through 270 not, 272
+    accepted -- because degree 64's error oscillates with beta rather than decreasing. A caller in
+    that band gets the ``i0`` path and **no speedup**, and bisecting for a clean threshold will
+    mislead, as it did during review. Such a configuration needs taps of roughly 1000 or more, so it
+    is far from the default, but it is legal and it is not an error.
 
     Returns:
         Coefficients in ascending Chebyshev order for the domain ``[0, 1]``, or ``None`` when no
@@ -366,6 +377,18 @@ def _kaiser_window_chebyshev(beta: float, tolerance: float) -> tuple[float, ...]
     # Half the target on the independent grid. A margin, because sampling can only ever bound the
     # error between its points: this is a measured bound with headroom, not a proof, and the
     # docstring says so rather than calling 1e-13 guaranteed.
+    #
+    # The margin's size is measured, and by adversarial sweeps rather than by this file's author --
+    # who got it wrong twice. Worst inter-grid slippage found by an independent search: **1.54x**
+    # (check grid against a denser one, near beta = 260-280 at degree 64), so a fit accepted at
+    # 0.5 * tolerance can be up to ~0.77 * tolerance in truth: the 2x margin holds with about 1.3x
+    # residual headroom. My own earlier notes put that slippage at 3% and then 1.37x; both came from
+    # measuring only where my own sweep peaked.
+    #
+    # Why the margin is not sampling luck: `i0` is even, so the sqrt branch cancels and
+    # `i0(beta * sqrt(1 - v)) / i0(beta)` is analytic on [0, 1]. Every extremum of the error is
+    # therefore wider than the local grid spacing, and the peak near v -> 0 sits at beta * v ~ 0.6,
+    # which the check grid's logarithmic clustering resolves with ~1e4 points even at beta = 274.
     acceptance = 0.5 * tolerance
 
     for degree in range(8, _WINDOW_FIT_MAX_DEGREE + 1, 2):

@@ -146,7 +146,7 @@ def test_the_resampled_output_matches_an_analytic_signal() -> None:
     assert error < 1e-10, f"resampled output is off by {error:.3e} of peak against the analytic value"
 
 
-@pytest.mark.parametrize("beta", [16.046, 15.5, 17.25, 23.9, 31.4])
+@pytest.mark.parametrize("beta", [16.046, 15.5, 17.25, 23.9, 31.4, 63.7, 128.3, 201.5, 260.0, 269.1])
 def test_the_fit_holds_at_beta_between_the_documented_values(beta: float) -> None:
     """Off-grid beta, checked off-grid in v, because both were validated circularly before.
 
@@ -191,3 +191,21 @@ def test_an_int_and_a_float_beta_share_one_cache_entry() -> None:
     assert kaiser_window_chebyshev(32) is kaiser_window_chebyshev(32.0)
     assert kaiser_window_chebyshev(np.float64(16.0)) is kaiser_window_chebyshev(16.0)
     assert kaiser_window_chebyshev(-0.0) is kaiser_window_chebyshev(0.0)
+
+
+def test_a_large_beta_may_fall_back_and_that_is_not_an_error() -> None:
+    """Above about beta = 250 acceptance alternates, and a caller there gets ``i0``.
+
+    Found in review, and it contradicts a claim of mine that ``None`` was only reachable for
+    tolerances no caller would pass. Degree 64's error oscillates with beta instead of decreasing, so
+    the accept/reject boundary is not monotone -- 262 and 266-270 fall back while 260, 264 and 272 are
+    served. Such a beta needs roughly 1000 taps, so it is far from the default, but it is legal.
+
+    Pinned as *behaviour*, not as a specific set: what must hold is that a fallback is a clean `None`
+    the kernel can act on, not an exception and not a worse window.
+    """
+    fell_back = [beta for beta in (262.0, 266.0, 268.0, 270.0) if kaiser_window_chebyshev(beta) is None]
+    served = [beta for beta in (260.0, 264.0, 272.0) if kaiser_window_chebyshev(beta) is not None]
+
+    assert fell_back, "no large beta fell back, so the documented non-monotone boundary is stale"
+    assert served, "no large beta was served, so the fit is failing more broadly than documented"
