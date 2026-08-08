@@ -285,8 +285,18 @@ _WINDOW_FIT_TOLERANCE = 1e-13
 _WINDOW_FIT_MAX_DEGREE = 64
 
 
-@lru_cache(maxsize=32)
 def kaiser_window_chebyshev(beta: float, tolerance: float = _WINDOW_FIT_TOLERANCE) -> tuple[float, ...] | None:
+    """Cache-normalising wrapper; see :func:`_kaiser_window_chebyshev` for the fit itself.
+
+    ``float()`` before the cache, on a reviewer's finding: ``32`` and ``32.0`` are distinct keys to
+    ``lru_cache`` but the same Kaiser window, so an int caller silently paid for a second fit and
+    filled a slot. numpy scalars have the same problem.
+    """
+    return _kaiser_window_chebyshev(float(beta), float(tolerance))
+
+
+@lru_cache(maxsize=32)
+def _kaiser_window_chebyshev(beta: float, tolerance: float) -> tuple[float, ...] | None:
     """Return Chebyshev coefficients for the Kaiser window as a function of ``v = (x / denom) ** 2``.
 
     The device kernel evaluates the window ``i0(beta * sqrt(1 - v)) / i0(beta)`` once per tap, 127

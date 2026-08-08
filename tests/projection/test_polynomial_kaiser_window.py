@@ -179,3 +179,15 @@ def test_the_fit_holds_at_beta_between_the_documented_values(beta: float) -> Non
     assert float(error[worst]) <= _WINDOW_FIT_TOLERANCE, (
         f"beta={beta} is off by {error[worst]:.3e} at v={v[worst]:.6e}, over the {_WINDOW_FIT_TOLERANCE:.0e} target"
     )
+
+
+def test_an_int_and_a_float_beta_share_one_cache_entry() -> None:
+    """``32`` and ``32.0`` are the same window; ``lru_cache`` disagrees unless the key is normalised.
+
+    A reviewer found the split. The cost is small -- a duplicate fit and a wasted cache slot -- but it
+    is the kind of thing that turns into "the fit runs on every call" once a caller happens to pass a
+    numpy scalar, which has the same problem.
+    """
+    assert kaiser_window_chebyshev(32) is kaiser_window_chebyshev(32.0)
+    assert kaiser_window_chebyshev(np.float64(16.0)) is kaiser_window_chebyshev(16.0)
+    assert kaiser_window_chebyshev(-0.0) is kaiser_window_chebyshev(0.0)
