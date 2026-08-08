@@ -134,12 +134,24 @@ def test_the_free_remedy_comes_before_the_one_that_costs_signal(monkeypatch: pyt
     assert message.index("chunk_size=") < message.index("minimum_frequency"), (
         "the physics-altering remedy is offered before the free one"
     )
-    # The cost has to be stated where the remedy is offered, not left to the reader's knowledge of
-    # what a low-frequency cutoff does.
-    tail = message[message.index("minimum_frequency") - 200 :]
-    assert any(word in tail for word in ("discard", "removes", "loses", "changes what")), (
-        f"raising minimum_frequency is offered without saying it changes the simulated signal: {tail!r}"
+    # Split at the two remedies and check each half separately. A reviewer demonstrated that the
+    # first version of this test -- "any of four cost-words appears somewhere after the knob" --
+    # passes sentences that assert the *opposite* of the fix, including "Raising minimum_frequency
+    # does NOT discard the early inspiral, so output is identical". Checking that the free half
+    # claims identity and the costly half does not is what rejects those.
+    free = message[message.index("chunk_size=") : message.index("minimum_frequency")]
+    tail = message[message.index("minimum_frequency") :]
+
+    assert any(phrase in free for phrase in ("same output", "identical", "output-identical")), (
+        f"the free remedy is not described as leaving the output alone: {free!r}"
     )
+    assert not any(phrase in tail for phrase in ("identical", "same output")), (
+        f"the costly remedy is described as output-preserving, which it is not: {tail!r}"
+    )
+    assert ("changes" in tail and ("simulated" in tail or "signal" in tail)) or (
+        "early inspiral" in tail
+        and any(word in tail for word in ("discard", "remove", "drop", "lose", "truncate", "cut"))
+    ), f"raising minimum_frequency is not said to change the simulated signal: {tail!r}"
 
 
 def test_preflight_runs_before_waveform_generation(monkeypatch: pytest.MonkeyPatch) -> None:

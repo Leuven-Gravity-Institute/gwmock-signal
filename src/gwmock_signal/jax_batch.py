@@ -373,12 +373,21 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
     the estimate is made of, and a chunk size that should work.
 
     The two remedies are **not** equivalent and the message says so. ``chunk_size`` splits the batch
-    and produces identical output, so it costs only wall-clock. Raising ``minimum_frequency`` also
+    and leaves the model untouched, so it costs only wall-clock. Raising ``minimum_frequency`` also
     fits, by shortening the buffer -- but it does so by discarding the early inspiral, which changes
     what was simulated rather than how it was computed. Offering them in one breath, as this message
     once did, invites a user to damage every waveform in a run to satisfy a memory limit.
-    ``earth_rotation=False`` is in the same class and is deliberately not offered at all: it is a
-    different physical model, not a cheaper route to the same one.
+
+    "The same output" is deliberate and is as strong as the evidence: chunking is pinned against a
+    single batch at **1e-9 of peak**, not bit-for-bit
+    (``tests/test_jax_batch.py::test_simulate_cbc_catalogue_chunking_is_output_identical`` -- whose
+    name is stronger than its assertion). The residue is summation order, which is why the message
+    does not promise identical bits.
+
+    ``earth_rotation=False`` and ``n_chirp_mass_bins`` are in the same class as the cutoff and are
+    deliberately not offered at all: each changes the model rather than the cost of evaluating it.
+    ``memory_fraction`` is not a remedy either -- it sizes automatically chosen chunks and cannot
+    make an oversized explicit batch fit.
     """
     limit = available_device_memory_bytes()
     if not limit:
@@ -392,9 +401,12 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
         f"device reports {limit / 2**30:.1f} GiB: {n_events} events x {n_detectors} detectors x "
         f"{n_samples} samples, earth_rotation={earth_rotation}. Generate the catalogue through "
         f"simulate_cbc_catalogue(chunk_size={suggestion}): it splits the batch and produces the "
-        f"same output, costing only wall-clock. Raising minimum_frequency would also fit, by "
-        f"shortening the buffer -- but it discards the early inspiral, so it changes what is "
-        f"simulated rather than how it is computed. The estimate is approximate (see "
+        f"same output, costing only wall-clock. If that is not enough, n_chirp_mass_bins shortens "
+        f"the buffers themselves and agrees with a single grid to a fraction of a percent in "
+        f"overlap -- the resolution the per-event path already uses -- though it saves nothing when "
+        f"the backend pins segment_duration. Raising minimum_frequency would also fit, and is the "
+        f"last resort rather than an equal option: it discards the early inspiral, so it changes "
+        f"what is simulated rather than how it is computed. The estimate is approximate (see "
         f"estimate_batch_memory_bytes); pass a larger chunk_size explicitly if you believe it is "
         f"pessimistic."
     )
