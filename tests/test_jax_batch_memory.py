@@ -113,7 +113,33 @@ def test_preflight_error_names_the_numbers_and_a_remedy(monkeypatch: pytest.Monk
     assert "GiB" in message
     assert "chunk_size=" in message
     assert "16384 events" in message
-    assert "minimum_frequency" in message
+
+
+def test_the_free_remedy_comes_before_the_one_that_costs_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two remedies, one of them free, and the message must not present them as equivalent.
+
+    `chunk_size` splits the batch and costs wall-clock alone: the output is identical. Raising
+    `minimum_frequency` shortens the buffer by discarding the early inspiral, which is a *different
+    simulation*, not a smaller one. A user reading "or" as "equivalently" damages every waveform in
+    the run to fit a memory limit -- and gets no warning that they did.
+
+    Order is asserted, not merely presence: the previous version of this test asserted that
+    `minimum_frequency` appeared at all, which any phrasing satisfies including the defective one.
+    """
+    monkeypatch.setattr(jax_batch, "available_device_memory_bytes", lambda: _A100_BYTES)
+    with pytest.raises(MemoryError) as excinfo:
+        jax_batch._check_batch_fits(16384, 3, 8192, earth_rotation=False)
+    message = str(excinfo.value)
+
+    assert message.index("chunk_size=") < message.index("minimum_frequency"), (
+        "the physics-altering remedy is offered before the free one"
+    )
+    # The cost has to be stated where the remedy is offered, not left to the reader's knowledge of
+    # what a low-frequency cutoff does.
+    tail = message[message.index("minimum_frequency") - 200 :]
+    assert any(word in tail for word in ("discard", "removes", "loses", "changes what")), (
+        f"raising minimum_frequency is offered without saying it changes the simulated signal: {tail!r}"
+    )
 
 
 def test_preflight_runs_before_waveform_generation(monkeypatch: pytest.MonkeyPatch) -> None:
