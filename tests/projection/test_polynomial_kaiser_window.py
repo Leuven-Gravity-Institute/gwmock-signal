@@ -162,7 +162,13 @@ def test_the_fit_holds_at_beta_between_the_documented_values(beta: float) -> Non
     search is most likely to stop one step early.
     """
     coefficients = kaiser_window_chebyshev(beta)
-    assert coefficients is not None
+    if coefficients is None:
+        # A legal outcome, and **not portable**: CI returned `None` at beta = 269.1 where this
+        # machine accepted a degree-64 fit at 0.567x the target. Acceptance inside the flicker
+        # band above beta ~250 depends on float64 least-squares details, which differ with the
+        # BLAS in use, so asserting *which* beta is served encodes one platform's arithmetic.
+        # The contract is "None, or accurate"; the accuracy half is what this test is for.
+        pytest.skip(f"beta={beta} falls back to i0 here, which the contract permits")
 
     v = np.unique(
         np.concatenate(
@@ -204,8 +210,16 @@ def test_a_large_beta_may_fall_back_and_that_is_not_an_error() -> None:
     Pinned as *behaviour*, not as a specific set: what must hold is that a fallback is a clean `None`
     the kernel can act on, not an exception and not a worse window.
     """
-    fell_back = [beta for beta in (262.0, 266.0, 268.0, 270.0) if kaiser_window_chebyshev(beta) is None]
-    served = [beta for beta in (260.0, 264.0, 272.0) if kaiser_window_chebyshev(beta) is not None]
+    # The invariant, not the split: for every beta the answer is either `None` or a fit meeting the
+    # target. Which beta lands where is platform-dependent -- CI and this machine disagree at 269.1 --
+    # so a test naming the served set passes in one place and fails in another.
+    v = np.unique(np.concatenate([np.linspace(0.0, 1.0, 20001), np.logspace(-14.0, -1.0, 1500)]).clip(0.0, 1.0))
+    for beta in (250.0, 260.0, 262.0, 264.0, 266.0, 268.0, 270.0, 272.0, 280.0):
+        coefficients = kaiser_window_chebyshev(beta)
+        if coefficients is None:
+            continue
+        error = float(np.max(np.abs(_clenshaw(coefficients, v) - _exact_window(beta, v))))
+        assert error <= _WINDOW_FIT_TOLERANCE, f"beta={beta} was served a fit off by {error:.3e}"
 
-    assert fell_back, "no large beta fell back, so the documented non-monotone boundary is stale"
-    assert served, "no large beta was served, so the fit is failing more broadly than documented"
+    # And the default must still be served, or the fit has stopped working where it matters.
+    assert kaiser_window_chebyshev(float(DEFAULT_KAISER_BETA)) is not None
