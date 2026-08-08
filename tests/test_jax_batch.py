@@ -190,7 +190,26 @@ def test_simulate_cbc_catalogue_binning_agrees_with_single_grid() -> None:
         a = np.concatenate([s[detector].value for s in unbinned])
         b = np.concatenate([s[detector].value for s in binned])
         overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
-        assert overlap > 0.99, f"{detector} binned/unbinned overlap {overlap:.4f}"
+        peak = max(np.max(np.abs(a)), np.max(np.abs(b)))
+        residual = float(np.max(np.abs(a - b)) / peak)
+
+        # The overlap is kept, but it is not the check, and measurement says so plainly: scaling one
+        # side by +0.5%, +2%, +5% and even +20% leaves this overlap at 0.9997787 to seven digits, so
+        # it passes the old 0.99 gate *and* a tightened 0.999 one. That matches the lesson
+        # `test_simulate_cbc_batch_matches_host_pipeline_static` already records in this file -- an
+        # overlap is nearly blind to a common-mode error. Tightening it would have looked stricter
+        # and discriminated no better.
+        #
+        # The residual is the check, and it is a *band* rather than a ceiling. Binning is a
+        # grid-discretization trade: the difference is supposed to be there, about 1.3e-02 of peak
+        # (H1 1.324e-02, L1 1.181e-02 measured). A ceiling alone would pass a change that made the
+        # difference vanish -- binning silently reduced to a single grid -- which is the failure the
+        # old assertion could not see either. The floor catches that; the ceiling catches drift.
+        assert overlap > 0.999, f"{detector} binned/unbinned overlap {overlap:.6f}"
+        assert 0.8e-2 < residual < 1.8e-2, (
+            f"{detector} binned/unbinned residual {residual:.3e} of peak is outside the measured "
+            "discretization band; below it, binning is not actually splitting the grid"
+        )
 
 
 def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
@@ -214,8 +233,20 @@ def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
 
 
 @pytest.mark.integration
-def test_simulate_cbc_catalogue_chunking_is_output_identical() -> None:
-    """Count-chunking yields exactly the same segments as one batch (same grid)."""
+def test_simulate_cbc_catalogue_chunking_does_not_change_the_model() -> None:
+    """Count-chunking leaves the simulated signals alone -- to 1e-9 of peak, not bit-for-bit.
+
+    The name and this docstring used to say "exactly the same segments", which the assertion below
+    has never checked and which is false. Measured on both assembly paths: a chunked run differs
+    from a whole one at a few times 1e-13 of peak, while whole-vs-whole is bit-identical run to run.
+    The cause is not superposition arithmetic -- it is per-event frequency-domain generation, where
+    XLA picks different reduction orderings for different batch shapes, so the grid-defining
+    worst-case event comes out bit-identical and the others do not.
+
+    The 1e-9 bound is therefore right and deliberately loose: the worst residual on this catalogue
+    measures 7.0e-11 of peak, leaving about a factor of fourteen for platform arithmetic. What was
+    wrong was the promise, not the number.
+    """
     from gwmock_signal.jax_batch import simulate_cbc_catalogue
 
     common = {
