@@ -388,8 +388,8 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
     residue is *not* superposition arithmetic -- it arises in the per-event frequency-domain
     generation, where XLA picks different reduction orderings for different batch shapes, so the
     grid-defining worst-case event comes out bit-identical and the others do not. The guardrail is
-    ``tests/test_jax_batch.py::test_simulate_cbc_catalogue_chunking_is_output_identical`` at 1e-9 of
-    peak, whose name is stronger than its assertion.
+    ``tests/test_jax_batch.py::test_simulate_cbc_catalogue_chunking_does_not_change_the_model`` at
+    1e-9 of peak.
 
     Two caveats on the middle remedy, both measured, because a user who tries it and gains nothing
     has spent a run finding out. Binning stops shortening buffers when the backend pins
