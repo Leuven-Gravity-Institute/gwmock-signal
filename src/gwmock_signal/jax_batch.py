@@ -372,22 +372,38 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
     with nothing about which knob to turn. This names the estimate, the limit, the factors
     the estimate is made of, and a chunk size that should work.
 
-    The two remedies are **not** equivalent and the message says so. ``chunk_size`` splits the batch
-    and leaves the model untouched, so it costs only wall-clock. Raising ``minimum_frequency`` also
-    fits, by shortening the buffer -- but it does so by discarding the early inspiral, which changes
-    what was simulated rather than how it was computed. Offering them in one breath, as this message
-    once did, invites a user to damage every waveform in a run to satisfy a memory limit.
+    The three remedies are ranked, because they are **not** equivalent and the message says so.
+    ``chunk_size`` splits the batch and leaves the model untouched, so it costs only wall-clock.
+    ``n_chirp_mass_bins`` sits in the middle: it shortens the buffers themselves, at a per-event grid
+    discretization measured at 0.014% and 0.022% mismatch on this repository's wide-mass catalogue.
+    Raising ``minimum_frequency`` is last, and is not an equal option: it fits by discarding the
+    early inspiral, changing what was simulated rather than how it was computed. Offering the first
+    and the last in one breath, as this message once did, invites a user to damage every waveform in
+    a run to satisfy a memory limit.
 
-    "The same output" is deliberate and is as strong as the evidence: chunking is pinned against a
-    single batch at **1e-9 of peak**, not bit-for-bit
-    (``tests/test_jax_batch.py::test_simulate_cbc_catalogue_chunking_is_output_identical`` -- whose
-    name is stronger than its assertion). The residue is summation order, which is why the message
-    does not promise identical bits.
+    "The same output" is deliberate and is as strong as the evidence. Chunking is **not** bitwise:
+    reviewers measured a chunked run against a whole one at a few times 1e-13 of peak on both the
+    aligned and unaligned assembly paths, while whole-vs-whole is bit-identical run to run. The
+    residue is *not* superposition arithmetic -- it arises in the per-event frequency-domain
+    generation, where XLA picks different reduction orderings for different batch shapes, so the
+    grid-defining worst-case event comes out bit-identical and the others do not. The guardrail is
+    ``tests/test_jax_batch.py::test_simulate_cbc_catalogue_chunking_is_output_identical`` at 1e-9 of
+    peak, whose name is stronger than its assertion.
 
-    ``earth_rotation=False`` and ``n_chirp_mass_bins`` are in the same class as the cutoff and are
-    deliberately not offered at all: each changes the model rather than the cost of evaluating it.
-    ``memory_fraction`` is not a remedy either -- it sizes automatically chosen chunks and cannot
-    make an oversized explicit batch fit.
+    Two caveats on the middle remedy, both measured, because a user who tries it and gains nothing
+    has spent a run finding out. Binning stops shortening buffers when the backend pins
+    ``segment_duration`` -- it still splits the catalogue into per-bin calls, so peak memory can
+    fall, but the buffers do not. And it barely helps a *narrow* chirp-mass catalogue: 29.5-31.0
+    solar masses gives 25600 samples at one bin against 25300 at four, about 1%. Its leverage comes
+    from mass spread, not from the number of bins.
+
+    ``earth_rotation=False`` is *not* offered: it is a different physical model, not a cheaper route
+    to the same one. ``memory_fraction`` is not a remedy either -- it sizes automatically chosen
+    chunks and cannot make an oversized explicit batch fit.
+
+    The 0.014-0.022% figures are *overlap* mismatch, the measure the message names. Pointwise, the
+    largest difference reaches about 1.3% of peak at three or more bins, so the phrase must not be
+    read as a bound on sample-by-sample agreement.
     """
     limit = available_device_memory_bytes()
     if not limit:
@@ -401,10 +417,11 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
         f"device reports {limit / 2**30:.1f} GiB: {n_events} events x {n_detectors} detectors x "
         f"{n_samples} samples, earth_rotation={earth_rotation}. Generate the catalogue through "
         f"simulate_cbc_catalogue(chunk_size={suggestion}): it splits the batch and produces the "
-        f"same output, costing only wall-clock. If that is not enough, n_chirp_mass_bins shortens "
-        f"the buffers themselves and agrees with a single grid to a fraction of a percent in "
-        f"overlap -- the resolution the per-event path already uses -- though it saves nothing when "
-        f"the backend pins segment_duration. Raising minimum_frequency would also fit, and is the "
+        f"same output, costing only wall-clock. If that is not enough and the catalogue spans a "
+        f"range of chirp masses, n_chirp_mass_bins shortens the buffers themselves and agrees with "
+        f"a single grid to a fraction of a percent in overlap; it gains little on a narrow mass "
+        f"range, or when the backend pins segment_duration. Raising minimum_frequency would also "
+        f"fit, and is the "
         f"last resort rather than an equal option: it discards the early inspiral, so it changes "
         f"what is simulated rather than how it is computed. The estimate is approximate (see "
         f"estimate_batch_memory_bytes); pass a larger chunk_size explicitly if you believe it is "
@@ -1016,7 +1033,12 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
 
     - ``chunk_size`` bounds the *peak* generation memory by processing at most that
       many events per batched call. All chunks of a bin share that bin's grid, so
-      chunking is **output-identical** to processing the whole bin at once.
+      chunking leaves the *model* untouched -- it agrees with processing the whole
+      bin at once to a few times 1e-13 of peak, measured on both the aligned and
+      unaligned assembly paths. It is **not** bit-for-bit: XLA picks different
+      reduction orderings for different batch shapes, so the same event generated in
+      a batch of four and a batch of two differs in the last few bits. Nothing
+      physical changes; see :func:`_check_batch_fits`.
     - ``n_chirp_mass_bins`` bounds the *buffer length* by generating heavier events
       on shorter grids. Because each bin uses a different frequency resolution,
       binning is **not** bit-identical to a single grid (see below).
@@ -1036,7 +1058,8 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             first one whose span reaches or passes ``end_time``.
         backend: Optional configured :class:`RippleBackend`. If it pins a
             ``segment_duration`` that grid is used for every bin (binning then
-            saves no buffer memory but the run stays output-identical).
+            saves no *buffer* memory, though it still splits the catalogue into
+            per-bin calls, and the run keeps the single-grid model).
         earth_rotation: Forwarded to :func:`simulate_cbc_batch`. Defaults to ``True``, and
             also makes the automatic chunk size smaller, because the rotating path holds
             more buffers per detector.
@@ -1047,7 +1070,8 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             the per-event grid discretization level (a fraction of a percent in
             overlap) — the resolution the per-event path uses.
         chunk_size: Generate at most this many events per batched call (within each bin).
-            Output-identical whatever the value; it only bounds peak memory. When omitted,
+            Model-preserving whatever the value -- it only bounds peak memory, and agrees
+            with an unchunked run to a few times 1e-13 of peak rather than bitwise. When omitted,
             a size is chosen from the device memory limit and the grid actually selected
             (see :func:`recommend_chunk_size`) — previously the default was no chunking at
             all, which is what made a large catalogue abort with a bare XLA
@@ -1104,7 +1128,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     segments: list[DetectorStrainStack] | None = None
     for bin_indices in _chirp_mass_bins(parameters, n_chirp_mass_bins):
         # Pin the grid to this bin's worst case so every chunk of the bin shares it
-        # (chunking stays output-identical). A user-pinned backend is left as-is.
+        # (so chunking within the bin does not change the model). A user-pinned backend is left as-is.
         bin_backend = _bin_backend(backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
         # Size the chunk from this bin's own grid: bins differ in n_samples by design, so a
         # single catalogue-wide chunk size would be wrong for all but one of them.
