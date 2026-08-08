@@ -381,7 +381,8 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
     and the last in one breath, as this message once did, invites a user to damage every waveform in
     a run to satisfy a memory limit.
 
-    "The same output" is deliberate and is as strong as the evidence. Chunking is **not** bitwise:
+    The wording is deliberate and is as strong as the evidence: chunking preserves the *model*, not
+    the bits. Chunking is **not** bitwise:
     reviewers measured a chunked run against a whole one at a few times 1e-13 of peak on both the
     aligned and unaligned assembly paths, while whole-vs-whole is bit-identical run to run. The
     residue is *not* superposition arithmetic -- it arises in the per-event frequency-domain
@@ -416,8 +417,9 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
         f"This batch is estimated to need {estimate / 2**30:.1f} GiB of device memory but the "
         f"device reports {limit / 2**30:.1f} GiB: {n_events} events x {n_detectors} detectors x "
         f"{n_samples} samples, earth_rotation={earth_rotation}. Generate the catalogue through "
-        f"simulate_cbc_catalogue(chunk_size={suggestion}): it splits the batch and produces the "
-        f"same output, costing only wall-clock. If that is not enough and the catalogue spans a "
+        f"simulate_cbc_catalogue(chunk_size={suggestion}): it splits the batch without changing the "
+        f"simulated signals, which agree to ~1e-13 of peak rather than bitwise, and costs only "
+        f"wall-clock. If that is not enough and the catalogue spans a "
         f"range of chirp masses, n_chirp_mass_bins shortens the buffers themselves and agrees with "
         f"a single grid to a fraction of a percent in overlap; it gains little on a narrow mass "
         f"range, or when the backend pins segment_duration. Raising minimum_frequency would also "

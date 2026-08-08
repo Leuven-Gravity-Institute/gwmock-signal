@@ -116,12 +116,14 @@ def test_preflight_error_names_the_numbers_and_a_remedy(monkeypatch: pytest.Monk
 
 
 def test_the_free_remedy_comes_before_the_one_that_costs_signal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two remedies, one of them free, and the message must not present them as equivalent.
+    """Three remedies with different costs, and the message must not present them as equivalent.
 
-    `chunk_size` splits the batch and costs wall-clock alone: the output is identical. Raising
-    `minimum_frequency` shortens the buffer by discarding the early inspiral, which is a *different
-    simulation*, not a smaller one. A user reading "or" as "equivalently" damages every waveform in
-    the run to fit a memory limit -- and gets no warning that they did.
+    `chunk_size` splits the batch and costs wall-clock alone: the simulated signals do not change,
+    agreeing to ~1e-13 of peak. It is not bitwise, so this test does not accept a message promising
+    identical output either. Raising `minimum_frequency` shortens the buffer by discarding the early
+    inspiral, which is a *different simulation*, not a smaller one. A user reading "or" as
+    "equivalently" damages every waveform in the run to fit a memory limit -- and gets no warning
+    that they did.
 
     Order is asserted, not merely presence: the previous version of this test asserted that
     `minimum_frequency` appeared at all, which any phrasing satisfies including the defective one.
@@ -142,10 +144,14 @@ def test_the_free_remedy_comes_before_the_one_that_costs_signal(monkeypatch: pyt
     free = message[message.index("chunk_size=") : message.index("minimum_frequency")]
     tail = message[message.index("minimum_frequency") :]
 
-    assert any(phrase in free for phrase in ("same output", "identical", "output-identical")), (
-        f"the free remedy is not described as leaving the output alone: {free!r}"
+    # "model-preserving", not "output-identical": chunking is measurably *not* bitwise -- XLA picks
+    # different reduction orderings for different batch shapes -- so a message promising identical
+    # output would be wrong in the other direction. What the free remedy must convey is that the
+    # simulated signals do not change.
+    assert any(phrase in free for phrase in ("without changing the simulated", "same output", "same signals")), (
+        f"the free remedy is not described as leaving the simulated signals alone: {free!r}"
     )
-    assert not any(phrase in tail for phrase in ("identical", "same output")), (
+    assert not any(phrase in tail for phrase in ("identical", "same output", "same signals")), (
         f"the costly remedy is described as output-preserving, which it is not: {tail!r}"
     )
     assert ("changes" in tail and ("simulated" in tail or "signal" in tail)) or (
