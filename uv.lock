@@ -721,7 +721,7 @@ wheels = [
 
 [[package]]
 name = "gwmock-noise"
-version = "0.10.1"
+version = "0.10.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py" },
@@ -731,9 +731,9 @@ dependencies = [
     { name = "scipy" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/89/cd8125b3fc7a8c3e6aa26b50cb9a138ba5ff4841c6b2f1aa245c49fd7a2c/gwmock_noise-0.10.1.tar.gz", hash = "sha256:460adde792891929dbb4bf3c287e2f0dd9bd618919afd07284ef7f3c937a4fba", size = 785859, upload-time = "2026-08-04T02:04:36.469Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/87/9dcbe10283703c072c93223b7ae4a730712818f9e9bb66bed5406b95dadb/gwmock_noise-0.10.2.tar.gz", hash = "sha256:0b91fbacac4311a4666e21c83aa9984debe6b8da6316f2b6dfc9903dda395958", size = 791898, upload-time = "2026-08-11T01:19:15.896Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/45/cfe5a1b4396ed76ed19d229b0fc32afea7a413ced40befdd26aa6cc5b09d/gwmock_noise-0.10.1-py3-none-any.whl", hash = "sha256:3d6f3a1eca950c566bd9e1aeeed6ac6ad9949d2297775c9632ce87c0cd36e7ac", size = 543083, upload-time = "2026-08-04T02:04:35.003Z" },
+    { url = "https://files.pythonhosted.org/packages/84/4f/a1623b89633ad53545a75cf90c6aa9a50f1675179e0298ef55953e22053d/gwmock_noise-0.10.2-py3-none-any.whl", hash = "sha256:185cfcebb06acd603fb169c7bb56d9dcc099188b0f17b4c1fd2e22cf76292e7b", size = 543083, upload-time = "2026-08-11T01:19:14.491Z" },
 ]
 
 [[package]]
@@ -779,7 +779,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.10.1" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.10.2" },
     { name = "gwpy", specifier = ">=4.0.0" },
     { name = "lalsuite", specifier = ">=7.23" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.5.0" },
