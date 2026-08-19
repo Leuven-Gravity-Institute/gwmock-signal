@@ -63,6 +63,7 @@ dev = [
   "pytest-mock>=3.15.1",
   "pytest>=9.1.1",
   "pytest-github-actions-annotate-failures>=0.4.2",
+  "mutmut>=3.7.0",
 ]
 docs = ["zensical>=0.0.54", "mkdocstrings-python>=2.0.5"]
 build = ["hatch>=1.18.0"]
@@ -103,6 +104,36 @@ markers = [
   "slow: marks tests as slow",
   "unit: fast offline tests",
 ]
+
+[tool.mutmut]
+# mutmut copies the project into `mutants/` and mutates the copy, so the working tree is untouched.
+source_paths = ["src/gwmock_signal"]
+# `tests/`, `pyproject.toml` and `uv.lock` are copied by default. `examples/` is not, and
+# tests/unit/test_network_file.py reads the real examples tree, so it has to come along or every
+# mutant is judged against a suite that errors for reasons unrelated to the mutation.
+also_copy = ["examples/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+# The default `addopts` turn on coverage and an XML report. Under mutation testing they cost more
+# than the test run itself and the report gets overwritten once per mutant, so the ini value is
+# cleared and only the marker filter is restated. Integration and slow tests are excluded as well:
+# a mutant is judged by the fast unit suite.
+pytest_add_cli_args = [
+  "--override-ini=addopts=",
+  # `pythonpath = ["src"]` has to go too, and this one is load-bearing rather than a speed-up.
+  # mutmut puts `mutants/src` at the front of `sys.path` and deletes `src` from it, but pytest
+  # re-inserts its `pythonpath` entries when it builds its config, so the real `src` lands back in
+  # front of the mutated copy and every test imports unmutated code. mutmut then records no test
+  # for any function and reports the whole package as "no tests". Clearing the ini leaves
+  # `mutants/src` as the only source on the path.
+  "--override-ini=pythonpath=",
+  "-m",
+  "not integration and not slow and not gpu and not spark and not notebooks",
+]
+# `mutate_only_covered_lines` is deliberately left off. It would cut the mutant count, but its
+# coverage pass ends in `_unload_modules_not_in()`, which drops every module from `sys.modules`;
+# the next in-process pytest run then re-imports numpy and dies with
+# "ImportError: cannot load module more than once per process", because a C extension cannot be
+# initialised twice in one interpreter.
 
 [tool.ruff]
 line-length = 120 # Matches Black's default
