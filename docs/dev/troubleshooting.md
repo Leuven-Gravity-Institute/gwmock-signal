@@ -111,7 +111,8 @@ agreement.
 ### Nothing collected or import errors
 
 - Tests live under `tests/`; discovery is configured in
-  `[tool.pytest.ini_options]` in `pyproject.toml` (`pythonpath = ["src"]`).
+  `[tool.pytest.ini_options]` in `pyproject.toml`
+  (`pythonpath = ["src", "scripts"]`).
 - Run from **repo root**:
 
     ```bash
