@@ -230,14 +230,17 @@ that matters, and dropping that was confirmed to break the tests by O(1).
   V100-specific.
 - **float32.** Everything here is float64. Nothing in this document speaks to a
   reduced-precision path.
-- **Production shapes.** The largest size timed is 2^18 output samples; full
-  segments are larger, and the NumPy path's speedup was still falling with size
-  at that point.
+- **Production shapes on the host path.** The NumPy timings stop at 2^18 output
+  samples and its speedup was still falling with size there; full segments are
+  larger. The GPU comparison does reach 2^22, and its regression had settled by
+  then.
 - **One signal.** A single tone at 0.5 x Nyquist, one amplitude. The accuracy
   figures are properties of that signal as well as of the kernel.
-- **One libm.** x86-64 glibc via numpy 2.3.5. The mechanism behind the sine's
-  error is argument-side and should carry to other libms, but the sub-ulp
-  figures will not be identical.
+- **One libm.** The accuracy figures are x86-64 glibc via numpy 2.3.5 (the
+  cluster timings ran numpy 2.5.2 / CPython 3.13, which is also why its
+  host-path ratio differs). The mechanism behind the sine's error is
+  argument-side and should carry to other libms, but the sub-ulp figures will
+  not be identical.
 
 ## Reproducing it
 
