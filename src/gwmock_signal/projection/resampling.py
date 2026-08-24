@@ -254,6 +254,24 @@ def resample_uniform_sinc(
     frac = index - base
     base_int = base.astype(np.int64)
 
+    # One sine for the whole tap loop. Every tap argument is `x = frac - offset` for an integer
+    # offset, and `sin(pi*(frac - offset)) = (-1)**offset * sin(pi*frac)` is an identity in the
+    # reals, so `taps` transcendentals collapse to one and each tap keeps only a sign flip --
+    # which is exact in IEEE 754. Reduced to [-1/2, 1/2] rather than left in [0, 1): both cost
+    # one sine, but `frac` near 1 puts the argument next to pi, where rounding the product
+    # `fl(pi)*frac` costs the result its leading digits, and the reduced form never goes there.
+    # `nearest` is 0 or 1, so the subtraction is exact (Sterbenz above 1/2, trivially below).
+    #
+    # The `(-1)**nearest` factor is **not load-bearing**: it is one sign for the whole position,
+    # so it negates `total` and `weight_sum` alike and cancels exactly in their quotient --
+    # measured bit-identical with and without it. It is kept so that each `weight` below is the
+    # kernel weight itself rather than its negation, which is what the normalisation, the
+    # `weight_sum != 0` test and any future reader are entitled to assume. A reader who takes it
+    # for a correctness guard would be wrong; a reader who removes it makes the result depend on
+    # the normalisation staying.
+    nearest = np.round(frac)
+    hoisted_sine = np.where(nearest == 0.0, 1.0, -1.0) * np.sin(np.pi * (frac - nearest))
+
     total = np.zeros(index.shape, dtype=float)
     weight_sum = np.zeros(index.shape, dtype=float)
     # Kaiser window evaluated on the kernel's own support, so the taper is a property
@@ -262,7 +280,12 @@ def resample_uniform_sinc(
     for offset in range(-half, half + 1):
         x = frac - offset
         window = np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - (x / denominator) ** 2))) / np.i0(beta)
-        weight = np.sinc(x) * window
+        # sinc(x) = sin(pi*x)/(pi*x), from the hoisted sine. `x == 0` happens only at `frac == 0`
+        # and `offset == 0`, where sinc is 1; the divisor is substituted there rather than the
+        # quotient patched afterwards, so the invalid division never happens at all.
+        numerator = hoisted_sine if offset % 2 == 0 else -hoisted_sine
+        at_zero = x == 0.0
+        weight = np.where(at_zero, 1.0, numerator / (np.pi * np.where(at_zero, 1.0, x))) * window
         gathered = samples[np.clip(base_int + offset, 0, n - 1)]
         total += weight * gathered
         weight_sum += weight

@@ -351,11 +351,26 @@ def _interpolate_uniform_sinc(
     frac = index - base
     base_int = base.astype(jnp.int32)
 
+    # One sine for the whole tap loop, hoisted exactly as the NumPy path does it; see
+    # :func:`gwmock_signal.projection.resampling.resample_uniform_sinc` for why the reduction is
+    # to [-1/2, 1/2] and not [0, 1). Worth more here than there: this path's window is a
+    # polynomial, so the sine was the loop's dominant cost rather than a small share of it. The
+    # `(-1)**nearest` factor cancels in the normalised quotient and is kept for the same reason
+    # as there: so each `weight` is the kernel weight and not its negation.
+    nearest = jnp.round(frac)
+    hoisted_sine = jnp.where(nearest == 0.0, 1.0, -1.0) * jnp.sin(jnp.pi * (frac - nearest))
+
     def _accumulate(step: Array, carry: tuple[Array, Array]) -> tuple[Array, Array]:
         total, weight_sum = carry
         offset = step - half
         x = frac - offset
-        weight = jnp.sinc(x) * _window(x)
+        # sin(pi*(frac - offset)) = (-1)**offset * sin(pi*frac); the sign flip is exact. `x == 0`
+        # only at `frac == 0`, `offset == 0`, where sinc is 1 and the divisor is substituted so
+        # the invalid division never happens.
+        numerator = jnp.where(offset % 2 == 0, hoisted_sine, -hoisted_sine)
+        at_zero = x == 0.0
+        sinc = jnp.where(at_zero, 1.0, numerator / (jnp.pi * jnp.where(at_zero, 1.0, x)))
+        weight = sinc * _window(x)
         gathered = samples[jnp.clip(base_int + offset, 0, n_samples - 1)]
         return total + weight * gathered, weight_sum + weight
 
