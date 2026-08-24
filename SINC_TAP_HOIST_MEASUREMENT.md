@@ -19,20 +19,29 @@ glibc, two threads, 127 taps, beta = 32).
 
 ## Bottom line
 
-**Speed is the justification; accuracy is not.**
+**Speed is the justification; accuracy is not — and the speed is host-path
+only.**
+
+**The device-path saving is an artefact of the CPU backend. On a real GPU the
+hoist is a regression:** it takes ~13% longer at 2^18 and ~29% longer at 2^22
+(speedups of 0.89x and 0.78x), and the penalty grows with size. Do not quote a
+device-path speedup from this document without reading
+[On a real GPU](#on-a-real-gpu).
 
 |                                          | direct (one sine per tap) | hoisted (one per position) |
 | ---------------------------------------- | ------------------------- | -------------------------- |
 | NumPy path, 2^18 samples                 | 1.40 s                    | 1.23 s (**1.14x**)         |
-| device path, 2^18 samples                | 0.138 s                   | 0.039 s (**3.51x**)        |
+| device path on a **CPU** backend, 2^18   | 0.138 s                   | 0.039 s (**3.51x**)        |
+| device path on a **V100 GPU**, 2^18      | 0.00351 s                 | 0.00395 s (**0.89x**)      |
+| device path on a **V100 GPU**, 2^22      | 0.04197 s                 | 0.05399 s (**0.78x**)      |
 | RMS output error vs a 50-digit reference | 6.33e-16                  | 6.01e-16                   |
 | closer to that reference                 | 32.0% of positions        | 49.0% of positions         |
 
-The two paths differ by that much because of the **window, not the sine**: the
-NumPy path still evaluates `i0(beta*sqrt(1 - v))` per tap and spends most of its
-time there, so removing the sine moves a small share of the total; the device
-path's window is a Chebyshev polynomial, which had left the sine as the loop's
-dominant cost.
+The two _CPU_ figures differ because of the **window, not the sine**: the NumPy
+path still evaluates `i0(beta*sqrt(1 - v))` per tap and spends most of its time
+there, so removing the sine moves a small share of the total; the device path's
+window is a Chebyshev polynomial, which had left the sine as the loop's dominant
+cost. On a GPU neither is the bottleneck — see below.
 
 On accuracy the honest answer is **"unchanged, with a slight tilt in the hoist's
 favour"** — not the decisive win the per-tap arithmetic suggests. A resampled
@@ -42,8 +51,12 @@ normalisation cancels part of what survives. Both forms land about **4500x below
 this kernel's own truncation error** (4.027e-12 of peak), so neither is what
 limits it.
 
-The change is therefore worth making for the device path's 3.5x, and the
-accuracy argument should not be leaned on in either direction.
+What is left, then, is a host-path gain of 1.14x-1.33x on one CPU (1.02x-1.10x
+on another, below) against a device-path loss of 0.78x-0.91x on a V100, bought
+with a kernel that is no longer bit-identical. The accuracy argument should not
+be leaned on in either direction. The commit that introduced the change argued
+it on "the device path's 3.5x": that figure is the CPU backend's, and the GPU
+measurement below supersedes it.
 
 ## Speed
 
@@ -75,6 +88,53 @@ cross-check that the timing compares what it claims to.
 JAX 0.11.0, **CPU backend** — this host has no NVIDIA GPU. Compilation is
 excluded. The 5.3x at the smallest size is partly fixed overhead; 3.3x–3.5x at
 the larger sizes is the figure to believe.
+
+### On a real GPU
+
+Two SLURM jobs on a **Tesla V100-SXM2-32GB** (driver 580.173.02, JAX 0.11.1
+reporting `default backend: gpu`, CPython 3.13, commit `eaf428d` via branch head
+`09a8cac`). The first ran the same measurement script as above; the second
+re-ran the device comparison at larger sizes, with 20 repeats and in both
+evaluation orders, because a result that reverses the CPU conclusion deserves to
+be checked before it is believed rather than after.
+
+| output samples | direct (s) | hoisted (s) | speedup   |
+| -------------- | ---------- | ----------- | --------- |
+| 16384          | 0.0008     | 0.0008      | 1.02x     |
+| 65536          | 0.0009     | 0.0009      | 1.08x     |
+| 262144         | 0.0035     | 0.0039      | **0.90x** |
+
+Confirmation run, 20 repeats per cell, both orders:
+
+| output samples | order         | direct (s) | hoisted (s) | speedup    |
+| -------------- | ------------- | ---------- | ----------- | ---------- |
+| 262144         | direct first  | 0.00351    | 0.00395     | **0.889x** |
+| 262144         | hoisted first | 0.00355    | 0.00392     | **0.907x** |
+| 1048576        | direct first  | 0.01222    | 0.01539     | **0.794x** |
+| 1048576        | hoisted first | 0.01221    | 0.01544     | **0.791x** |
+| 4194304        | direct first  | 0.04197    | 0.05399     | **0.777x** |
+| 4194304        | hoisted first | 0.04198    | 0.05388     | **0.779x** |
+
+The two orders agree to within 2%, the penalty is monotone in size, and it
+settles near 0.78x once the arrays are large enough that per-call dispatch
+cannot explain anything. The shipped kernel reproduced the hoisted transcription
+bit for bit at every size, so this compares the two kernels and not two
+transcriptions that had drifted.
+
+**Why it reverses.** On the GPU this loop is bandwidth-bound, not
+transcendental-bound. At 2^18 samples it already moves ~266 MB through 127
+gathers, and 3.5 ms against the V100's ~900 GB/s leaves it an order of magnitude
+off bandwidth peak. The hoist removes one `sin` per tap — which fp64 hardware
+handles in a unit that was not the constraint — and in exchange the precomputed
+sine becomes an extra full-length array that every one of the 127 iterations
+must read. That is the trade in one line: **hoisting a per-position array out of
+a loop removes arithmetic and adds traffic, which wins where arithmetic is
+scarce and loses where bandwidth is.** The CPU backend is the first case; the
+GPU is the second.
+
+Both figures are real; neither generalises to the other. A document quoting only
+the 3.5x would be advertising a speedup this project's own GPU path does not
+get.
 
 ### How the comparison is kept honest
 
@@ -164,9 +224,10 @@ that matters, and dropping that was confirmed to break the tests by O(1).
 
 ## What is _not_ measured here
 
-- **GPU.** The device figures are the CPU backend. What the hoist does to a real
-  GPU kernel — where the transcendental/bandwidth balance is different — is
-  unmeasured, and 3.5x should not be assumed to carry over.
+- **Other GPUs.** The GPU figures are one V100. An A100/H100 or a consumer card
+  has a different arithmetic-to-bandwidth ratio, so the size of the regression
+  will differ — but the mechanism (extra per-tap traffic) is architectural, not
+  V100-specific.
 - **float32.** Everything here is float64. Nothing in this document speaks to a
   reduced-precision path.
 - **Production shapes.** The largest size timed is 2^18 output samples; full
