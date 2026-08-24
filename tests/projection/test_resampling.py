@@ -76,9 +76,14 @@ def test_default_kernel_is_accurate_across_the_usable_band(frequency_over_nyquis
     assert error < 1e-11, error
 
 
-@pytest.mark.parametrize("shift", [0.5, 0.25, 0.1, 1.7, -0.6])
+@pytest.mark.parametrize("shift", [0.5, 0.25, 0.1, 1.7, -0.6, 2.0**-20, 1.0 - 2.0**-20])
 def test_accuracy_holds_for_any_sub_sample_shift(shift: float) -> None:
-    """Accuracy must not depend on where between samples the delay lands."""
+    """Accuracy must not depend on where between samples the delay lands.
+
+    The last two shifts sit a millionth of a sample from a whole sample, on either side. The
+    kernel reduces its sine argument about the nearest sample, so those are the two ends of the
+    reduced interval; a reduction that lost accuracy at either end would show up here.
+    """
     error = _tone_error(0.5, taps=DEFAULT_SINC_TAPS, beta=DEFAULT_KAISER_BETA, shift=shift)
     assert error < 1e-11, error
 
@@ -118,6 +123,60 @@ def test_integer_shift_reproduces_the_samples() -> None:
     got = resample_uniform_sinc(samples, np.arange(_N, dtype=float) - 3.0)
     interior = slice(DEFAULT_SINC_TAPS, _N - DEFAULT_SINC_TAPS)
     assert np.allclose(got[interior], np.roll(samples, 3)[interior], rtol=0.0, atol=1e-12)
+
+
+def _resample_with_a_sinc_per_tap(samples: np.ndarray, index: np.ndarray) -> np.ndarray:
+    """Evaluate the same kernel with ``np.sinc`` called once per tap.
+
+    Deliberately the naive form: one transcendental per tap, no identity applied. The kernel
+    itself hoists the sine out of the loop, which is exact in real arithmetic but a different
+    computation in floating point, so it needs something independent to be checked against.
+    """
+    half = (DEFAULT_SINC_TAPS - 1) // 2
+    denominator = half + 1.0
+    n = samples.shape[0]
+    base = np.floor(index)
+    frac = index - base
+    base_int = base.astype(np.int64)
+
+    total = np.zeros(index.shape, dtype=float)
+    weight_sum = np.zeros(index.shape, dtype=float)
+    for offset in range(-half, half + 1):
+        x = frac - offset
+        window = np.i0(DEFAULT_KAISER_BETA * np.sqrt(np.maximum(0.0, 1.0 - (x / denominator) ** 2)))
+        weight = np.sinc(x) * window / np.i0(DEFAULT_KAISER_BETA)
+        total += weight * samples[np.clip(base_int + offset, 0, n - 1)]
+        weight_sum += weight
+
+    interpolated = np.where(weight_sum != 0.0, total / weight_sum, 0.0)
+    return np.where((index >= 0.0) & (index <= n - 1), interpolated, 0.0)
+
+
+@pytest.mark.parametrize("shift", [0.37, 0.5, 2.0**-20, 1.0 - 2.0**-20, 0.0])
+def test_hoisted_sine_reproduces_a_sinc_per_tap(shift: float) -> None:
+    """Hoisting the sine out of the tap loop must not change what the kernel computes.
+
+    ``sin(pi*(frac - offset)) = (-1)**offset * sin(pi*frac)`` is exact in the reals, so the two
+    evaluations may differ only by round-off. Dropping the per-tap ``(-1)**offset`` was checked
+    to break this by O(1), which is the failure the change could plausibly introduce.
+
+    What it deliberately does *not* claim to guard is the one-per-position ``(-1)**nearest``
+    sign: that negates the tap sum and the weight sum alike, so it cancels in their quotient and
+    no output-level test can see it.
+
+    ``shift = 0`` covers the one tap whose argument is exactly zero, where the quotient
+    ``sin(pi*x)/(pi*x)`` is replaced by 1.
+    """
+    samples = np.cos(2.0 * np.pi * 0.21 * np.arange(_N, dtype=float) + 0.7)
+    index = np.arange(_N, dtype=float) - shift
+
+    got = resample_uniform_sinc(samples, index)
+    want = _resample_with_a_sinc_per_tap(samples, index)
+
+    interior = slice(DEFAULT_SINC_TAPS, _N - DEFAULT_SINC_TAPS)
+    # Absolute, with atol pinned: the signal is O(1) here, and a relative-only tolerance would
+    # pass trivially wherever the resampled value happens to sit near a zero crossing.
+    assert np.allclose(got[interior], want[interior], rtol=0.0, atol=1e-14)
 
 
 def test_device_and_host_kernels_agree() -> None:
