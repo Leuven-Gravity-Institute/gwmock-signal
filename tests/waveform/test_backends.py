@@ -263,7 +263,11 @@ assert LALSimulationBackend.__name__ == "LALSimulationBackend"
         cwd=REPO_ROOT,
         env=env,
         text=True,
-        timeout=30,
+        # Generous because it guards against a hang, not against slowness: the subprocess pays a
+        # cold interpreter start plus the astropy and lalsuite imports, which on a loaded macOS
+        # runner sharing cores with the xdist workers has exceeded 30 s. What the test asserts is
+        # that the import *succeeds* without PyCBC; how long it takes is not the claim.
+        timeout=300,
     )
     assert result.returncode == 0, result.stderr or result.stdout
 

@@ -260,10 +260,17 @@ def test_each_convention_reproduces_its_own_lal_function():
 
     # The two bounds differ, and the difference is the point.
     #
-    # Compact-binary side: 4.0e-08 s, measured. This package takes sidereal time from Astropy where
-    # LAL uses its own implementation, and that is the whole residue -- three orders below the
-    # 7.4e-05 s separating the conventions. Anything larger would be a geometry difference.
-    assert abs(unprecessed - cbc_reference) < 5.0e-08, (
+    # Compact-binary side: this package takes sidereal time from Astropy, which rotates the Earth in
+    # UT1, where LAL's own implementation rotates it in UTC. The residue is that UT1-UTC offset
+    # projected onto the baseline, and nothing else -- a geometry difference would be far larger.
+    # UT1-UTC is bounded by 0.9 s by the leap-second convention, which is 6.6e-05 rad of hour angle
+    # and so at most 1.4e-06 s over an Earth radius; in practice it lands near 1e-07 s, but *which*
+    # value depends on the `astropy-iers-data` release, since these epochs sit at or beyond the end
+    # of the measured table and the offset there is a prediction that each release revises. Pinning
+    # the bound to one release's measurement made this test fail on the next one. 5.0e-07 s covers
+    # that wander with room to spare and still sits two orders below the 7.4e-05 s separating the
+    # conventions, and further still below the 1.8e-04 s a lost precession would give.
+    assert abs(unprecessed - cbc_reference) < 5.0e-07, (
         f"without precession the delay is {unprecessed - cbc_reference:.3e} s from LAL's "
         f"compact-binary convention, which it is supposed to reproduce exactly up to sidereal time"
     )
