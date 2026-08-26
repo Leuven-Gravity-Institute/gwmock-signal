@@ -66,7 +66,10 @@ nav = [
   ] },
   { "Security" = "security.md" },
   { "Contributing" = "contributing.md" },
-  { "Troubleshooting" = "dev/troubleshooting.md" },
+  { "Development" = [
+    { "Troubleshooting" = "dev/troubleshooting.md" },
+    { "Sinc tap hoist measurement" = "dev/sinc-tap-hoist-measurement.md" },
+  ] },
   { "API" = [
     { "Overview" = "api/index.md" },
     { "Waveform" = "api/waveform/index.md" },
