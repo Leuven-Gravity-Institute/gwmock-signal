@@ -28,7 +28,6 @@ import gwsim_signal
 
 # How you'd like to use the new feature
 result = gwsim_signal.new_function(param="example")
-
 ```
 
 ## 🌈 Use Case & Benefits

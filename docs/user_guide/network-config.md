@@ -76,8 +76,8 @@ Load it:
 from gwmock_signal.network import Network
 
 net = Network.from_file("hlvk.yaml")
-print(net.name)           # HLVK
-print(net.detector_names) # ('H1', 'L1', 'V1', 'K1')
+print(net.name)  # HLVK
+print(net.detector_names)  # ('H1', 'L1', 'V1', 'K1')
 ```
 
 You can also use `--network hlvk.yaml` in the CLI (see

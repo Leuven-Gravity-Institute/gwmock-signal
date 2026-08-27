@@ -21,8 +21,7 @@ def simulate(
     minimum_frequency,
     earth_rotation=False,
     interpolate_if_offset=True,
-) -> DetectorStrainStack:
-    ...
+) -> DetectorStrainStack: ...
 ```
 
 The important part of the contract is the **return type**:
@@ -117,15 +116,18 @@ analytic burst models) without touching internal `WaveformFactory` details:
 from gwpy.timeseries import TimeSeries
 from gwmock_signal import CBCSimulator
 
+
 def my_callback_burst(*, waveform_model, tc, sampling_frequency, **kw):
     """Return (plus, cross) GWpy TimeSeries tuple."""
     import numpy as np
+
     dt = 1.0 / sampling_frequency
     n = int(kw.get("width", 0.1) * sampling_frequency)
     t = np.arange(n) * dt + tc
     hp = TimeSeries(np.sin(2 * np.pi * 150 * t), t0=tc, dt=dt)
     hc = TimeSeries(np.cos(2 * np.pi * 150 * t), t0=tc, dt=dt)
     return hp, hc
+
 
 sim = CBCSimulator("IMRPhenomD")
 sim.register_waveform_model("my_burst", my_callback_burst)

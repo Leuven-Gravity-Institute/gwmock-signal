@@ -68,8 +68,8 @@ assert arr.shape == (len(names), len(strains["H1"]))
 print(np.max(np.abs(arr)))
 
 # Inspect stack properties
-print(stack.t0)              # GPS start time (same for all channels)
-print(stack.sample_rate)     # Sample rate as GWpy Quantity
+print(stack.t0)  # GPS start time (same for all channels)
+print(stack.sample_rate)  # Sample rate as GWpy Quantity
 print(stack.detector_names)  # ('H1', 'L1', 'V1')
 ```
 

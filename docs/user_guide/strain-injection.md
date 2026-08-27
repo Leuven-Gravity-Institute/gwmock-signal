@@ -123,20 +123,20 @@ params = {
     "polarization_angle": 0.0,
 }
 
-background = {
-    name: TimeSeries(np.zeros(n), t0=t0, sample_rate=fs)
-    for name in ["H1", "L1"]
-}
+background = {name: TimeSeries(np.zeros(n), t0=t0, sample_rate=fs) for name in ["H1", "L1"]}
 
 result = inject_cbc_signal(
-    "IMRPhenomD", params, ["H1", "L1"], background,
+    "IMRPhenomD",
+    params,
+    ["H1", "L1"],
+    background,
     sampling_frequency=fs,
     minimum_frequency=20.0,
     earth_rotation=False,
 )
 
 for name in result.detector_names:
-    rms = float(np.sqrt(np.mean(result[name].value**2)))
+    rms = float(np.sqrt(np.mean(result[name].value ** 2)))
     print(f"{name}: rms={rms:.4e}")
 ```
 
@@ -168,10 +168,7 @@ params = {
 }
 fs = 4096.0
 n = 8192
-background = {
-    name: TimeSeries(np.zeros(n), t0=params["coa_time"] - 1, sample_rate=fs)
-    for name in ["H1", "L1"]
-}
+background = {name: TimeSeries(np.zeros(n), t0=params["coa_time"] - 1, sample_rate=fs) for name in ["H1", "L1"]}
 
 result = sim.write(
     "my_injection.h5",
