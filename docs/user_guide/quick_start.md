@@ -90,13 +90,17 @@ background = {name: TimeSeries(np.zeros(n), t0=t0, sample_rate=fs) for name in n
 
 # Run the injection pipeline
 result = inject_cbc_signal(
-    "IMRPhenomD", params, net.detector_names, background,
-    sampling_frequency=fs, minimum_frequency=20.0,
+    "IMRPhenomD",
+    params,
+    net.detector_names,
+    background,
+    sampling_frequency=fs,
+    minimum_frequency=20.0,
 )
 
 # Print RMS per detector
 for name in result.detector_names:
-    rms = float(np.sqrt(np.mean(result[name].value**2)))
+    rms = float(np.sqrt(np.mean(result[name].value ** 2)))
     print(f"{name}: rms={rms:.4e}")
 ```
 
