@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pycbc = ["pycbc>=2.5.0"]
-sgwb = ["gwmock-noise>=0.11.0"]
+sgwb = ["gwmock-noise>=0.11.1"]
 # Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
 # that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works.
 # Deliberately no upper bound, so a compatible newer ripple installs without a release here.
