@@ -78,6 +78,7 @@ nav = [
     { "Pipeline" = "api/pipeline/index.md" },
     { "Batched simulation" = "api/jax_batch/index.md" },
     { "Stochastic" = "api/stochastic/index.md" },
+    { "Continuous waves" = "api/continuous/index.md" },
     { "Multichannel" = "api/multichannel/index.md" },
     { "Network" = "api/network/index.md" },
     { "Simulator" = "api/simulator/index.md" },
