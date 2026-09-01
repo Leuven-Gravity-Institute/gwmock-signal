@@ -22,12 +22,12 @@ dynamic = ["version"]
 dependencies = [
   "typer>=0.16.0",  # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
   "gwpy>=4.0.0",
-  "lalsuite>=7.23",
+  "lalsuite>=7.24",
   "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-pycbc = ["pycbc>=2.5.0"]
+pycbc = ["pycbc>=2.6.0"]
 sgwb = ["gwmock-noise>=0.11.1"]
 # Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
 # that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works.
