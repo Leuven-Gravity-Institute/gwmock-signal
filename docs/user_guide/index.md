@@ -33,9 +33,11 @@ Under **User guide → Examples** in the sidebar:
    (default) or PyCBC (optional); registry for custom models.
 2. **[Detector projection](detector-projection.md)** — Map polarizations to each
    IFO strain using antenna patterns and delays.
-3. **[Strain injection](strain-injection.md)** — Add simulated strain into a
+3. **[Continuous waves](continuous-waves.md)** — Produce already projected $h$
+   strain via rippleGW (JAX).
+4. **[Strain injection](strain-injection.md)** — Add simulated strain into a
    longer GWpy segment (e.g. zeros or noise).
-4. **[Multichannel strains](multi-channel-strains.md)** — Stack per-detector
+5. **[Multichannel strains](multi-channel-strains.md)** — Stack per-detector
    series in a fixed order for array-oriented code.
 
 For cross-package extensibility, see **[Custom backends](custom-backends.md)**.
@@ -52,6 +54,7 @@ from docstrings):
 | Waveforms                           | [Waveforms](waveform.md)                                                                                                      | [Waveform API](../api/waveform/)                                     |
 | Projection                          | [Detector projection](detector-projection.md)                                                                                 | [Projection API](../api/projection/)                                 |
 | Injection                           | [Strain injection](strain-injection.md)                                                                                       | [Injection API](../api/injection/)                                   |
+| Continuous waves                    | [Continuous waves](continuous-waves.md)                                                                                       | [Continuous waves API](../api/continuous/)                           |
 | Multichannel                        | [Multichannel strains](multi-channel-strains.md)                                                                              | [Multichannel API](../api/multichannel/)                             |
 | CBC pipeline (Python)               | _(use strains + injection pages, or the CLI)_                                                                                 | [Pipeline API](../api/pipeline/), [Simulator API](../api/simulator/) |
 | Custom source backends              | [Custom backends](custom-backends.md)                                                                                         | [Simulator API](../api/simulator/), [Registry API](../api/registry/) |
