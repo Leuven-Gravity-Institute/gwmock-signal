@@ -58,14 +58,14 @@ lock = "minimal"
 [dependency-groups]
 dev = [
   "ruff>=0.16.5",
-  "prek>=0.5.1",
+  "prek>=0.5.2",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.15.1",
   "pytest>=9.1.1",
   "pytest-github-actions-annotate-failures>=0.4.2",
   "mutmut>=3.7.0",
 ]
-docs = ["zensical>=0.0.57", "mkdocstrings-python>=2.0.8"]
+docs = ["zensical>=0.0.58", "mkdocstrings-python>=2.0.8"]
 build = ["hatch>=1.18.0"]
 release = ["git-cliff>=2.13.1"]
 
