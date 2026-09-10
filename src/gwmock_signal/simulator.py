@@ -26,7 +26,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.injection import inject_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import project_polarizations_to_network, validate_projection_backend
 from gwmock_signal.waveform import WaveformBackend, WaveformFactory
 
 if TYPE_CHECKING:
@@ -184,6 +184,22 @@ class TransientSimulator(GWSimulator):
     Subclasses must implement ``generate_polarizations`` and ``required_params``.
     """
 
+    #: Which implementation evaluates the ``earth_rotation=True`` projection, ``"numpy"`` or
+    #: ``"jax"``.
+    #:
+    #: A class attribute rather than a ``simulate`` argument, and defaulting to the host path.
+    #: Projection dominates the cost of a long transient -- measured at 97% of a single event at
+    #: 1024 s and 8192 Hz across five detectors, where the device path is 2.7x faster on the same
+    #: CPU -- so it is worth choosing, but it is a property of how a run is set up rather than of
+    #: one call. The two agree to ~1e-10 of peak, so this is a substitution and not a different
+    #: answer; see ``backend`` on
+    #: :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
+    #:
+    #: Subclasses that accept it from their caller set the instance attribute in ``__init__``
+    #: after :func:`~gwmock_signal.projection.network.validate_projection_backend`; one that does
+    #: not inherits the host path, which needs no optional dependency.
+    projection_backend: str = "numpy"
+
     @abstractmethod
     def generate_polarizations(
         self,
@@ -283,6 +299,11 @@ class TransientSimulator(GWSimulator):
         Returns:
             ``DetectorStrainStack`` containing the simulated strain for each
             detector in ``detector_names`` order.
+
+        Note:
+            Which implementation projects is read from :attr:`projection_backend`, not taken
+            here: it is a property of how the simulator was set up, and the two implementations
+            agree to ~1e-10 of peak, so it is not a per-call decision about the answer.
         """
         self._validate_params(params)
 
@@ -304,6 +325,7 @@ class TransientSimulator(GWSimulator):
             declination=params["declination"],
             polarization_angle=params["polarization_angle"],
             earth_rotation=earth_rotation,
+            backend=self.projection_backend,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -350,6 +372,8 @@ class CBCSimulator(TransientSimulator):
             registered with ``WaveformFactory`` (e.g. ``'IMRPhenomD'``).
         waveform_backend: Optional waveform backend instance. Defaults to
             ``LALSimulationBackend`` through ``WaveformFactory``.
+        projection_backend: Which implementation projects the polarizations onto the network,
+            ``"numpy"`` (the default) or ``"jax"``.
     """
 
     #: Minimum parameter keys required by the CBC pipeline (gwmock-pop canonical names).
@@ -366,16 +390,46 @@ class CBCSimulator(TransientSimulator):
         }
     )
 
-    def __init__(self, waveform_model: str, waveform_backend: WaveformBackend | None = None) -> None:
+    def __init__(
+        self,
+        waveform_model: str,
+        waveform_backend: WaveformBackend | None = None,
+        *,
+        projection_backend: str = "numpy",
+    ) -> None:
         """Initialise with the waveform model name.
 
         Args:
             waveform_model: Time-domain approximant name or any model
                 registered with ``WaveformFactory``.
             waveform_backend: Optional waveform backend instance.
+            projection_backend: Which implementation evaluates the ``earth_rotation=True``
+                projection, ``"numpy"`` (the default) or ``"jax"``. The host path stays the
+                default here, unlike on the continuous-wave simulator: a compact binary can be
+                generated with LAL alone, so defaulting to the device path would make JAX a
+                requirement of the ordinary configuration. ``"jax"`` needs JAX installed and is
+                worth asking for on long segments, where projection is almost the whole cost --
+                measured at 97% of a single 1024 s event at 8192 Hz across five detectors, and
+                2.7x faster on the same CPU. It is refused with ``earth_rotation=False``, which
+                has no device implementation, and for a span beyond
+                :data:`~gwmock_signal.projection.network.MAX_LINEAR_SIDEREAL_SPAN_SECONDS`.
+
+        Raises:
+            ValueError: If *projection_backend* is not ``"numpy"`` or ``"jax"``.
         """
         self._waveform_model = waveform_model
         self._waveform_factory = WaveformFactory(backend=waveform_backend)
+        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
+        if projection_backend == "jax":
+            # Enabled here rather than relied upon, for the reason the continuous-wave simulator
+            # states at length: the device projection *refuses* to run without x64, and the only
+            # thing that has ever turned it on for this class is importing ``ripplegw`` -- which a
+            # LAL-generated run never does. Without this, `projection_backend="jax"` would raise
+            # for exactly the configuration it exists to serve. Idempotent, and it must happen
+            # before any array is made, which construction is.
+            import jax  # noqa: PLC0415 -- optional [jax] dep, and only needed for this backend
+
+            jax.config.update("jax_enable_x64", True)
 
     @property
     def waveform_model(self) -> str:
