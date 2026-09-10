@@ -417,10 +417,14 @@ class CBCSimulator(TransientSimulator):
         Raises:
             ValueError: If *projection_backend* is not ``"numpy"`` or ``"jax"``.
         """
+        # Checked before the factory is built, not after. `WaveformFactory` enumerates its
+        # backend's approximants at construction, which imports the waveform library and can fail
+        # on its own -- and then a run whose actual mistake is the name below would be told about
+        # the waveform stack instead, with the documented ValueError never raised.
+        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
         self._waveform_model = waveform_model
         self._waveform_factory = WaveformFactory(backend=waveform_backend)
-        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
-        if projection_backend == "jax":
+        if self.projection_backend == "jax":
             # Enabled here rather than relied upon, for the reason the continuous-wave simulator
             # states at length: the device projection *refuses* to run without x64, and the only
             # thing that has ever turned it on for this class is importing ``ripplegw`` -- which a

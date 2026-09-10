@@ -750,6 +750,29 @@ class TestTheProjectionBackend:
         with pytest.raises(ValueError, match="projection_backend must be 'numpy' or 'jax'"):
             CBCSimulator(waveform_model="IMRPhenomD", projection_backend="cuda")
 
+    def test_an_unknown_name_is_refused_before_the_waveform_stack_loads(self):
+        """Validated first, so the documented error survives a waveform library that cannot load.
+
+        ``WaveformFactory`` enumerates its backend's approximants at construction, which imports
+        the waveform library and can fail on its own. Validating after that would report the
+        library's failure for a configuration whose actual mistake is the name given here, and the
+        documented ``ValueError`` would never be raised.
+        """
+
+        class _UnusableBackend:
+            def available_approximants(self):
+                raise ImportError("the waveform library is not installed")
+
+            def generate_td_waveform(self, **_):  # pragma: no cover - never reached
+                raise NotImplementedError
+
+        with pytest.raises(ValueError, match="projection_backend must be 'numpy' or 'jax'"):
+            CBCSimulator(
+                waveform_model="IMRPhenomD",
+                waveform_backend=_UnusableBackend(),
+                projection_backend="cuda",
+            )
+
     @pytest.mark.usefixtures("_sixty_four_bit")
     def test_the_device_backend_reproduces_the_host_backend(self):
         """Same strain out of ``simulate``, so selecting it is a substitution and not a new answer.
