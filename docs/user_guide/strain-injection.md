@@ -188,11 +188,17 @@ Supported write formats: `"hdf5"` (default), `"gwf"`, `"npy"`, `"txt"`.
 ## Example 6 — Inject one CW into a segment with CBC
 
 A continuous wave has no duration of its own, so the segment being generated is
-defined by the background's epoch and length. The background is an existing
-strain called `out` from example 1.
+defined by the background's epoch and length. The background is the existing
+strain called `out` from example 1, so `t0` and `fs` are that example's values:
+the injection lands on the CBC segment's own time grid, which
+`sampling_frequency` has to match. A real CW run would use a much longer segment
+than that 8 s example; the point here is only that the two signals add.
 
 ```python
 from gwmock_signal.continuous import ContinuousWaveSimulator
+
+t0 = 1_400_000_000.0  # the CBC background's epoch, from example 1
+fs = 4096.0  # and its sample rate, which sampling_frequency must match
 
 cw_sim = ContinuousWaveSimulator(
     earth_ephemeris="earth00-40-DE405.dat.gz",
@@ -208,7 +214,7 @@ params = {
     "initial_phase": 0.4,
     "amplitude_plus": 1.0e-24,
     "amplitude_cross": 7.0e-25,
-    "polarization_angle": 0.2,
+    "polarization_angle": 0.2,  # optional; defaults to 0.0
 }
 
 # The CBC time series is dimensionless.
@@ -220,8 +226,8 @@ result = cw_sim.simulate(
     detector_names=["H1"],
     background={"H1": cbc_background},  # An existing strain with the CBC signal
     sampling_frequency=fs,
-    minimum_frequency=0.0,  # Unused for CW, but required
-    earth_rotation=True,  # The only accepted value
+    minimum_frequency=0.0,  # required by the shared simulator signature; unused for CW
+    earth_rotation=True,  # the only accepted value
 )
 ```
 

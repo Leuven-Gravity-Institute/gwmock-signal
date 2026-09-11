@@ -74,6 +74,10 @@ waveform raises an `ImportError` naming the install command. `SamplingGrid` is
 pure NumPy — it is the lattice contract the batched path aligns to, and it is
 usable on its own without the extra.
 
+`ContinuousWaveSimulator` is deliberately **not** in this table: it is reached
+as `gwmock_signal.continuous.ContinuousWaveSimulator`, not from the package
+root. See the [Continuous API](continuous/).
+
 | Symbol                          | Category     | Reference                         |
 | ------------------------------- | ------------ | --------------------------------- |
 | `CBCSimulator`                  | Simulator    | [Simulator API](simulator/)       |
@@ -92,7 +96,6 @@ usable on its own without the extra.
 | `assemble_segments`             | Batched      | [Waveform API](waveform/)         |
 | `BatchedDetectorStrain`         | Batched      | [Waveform API](waveform/)         |
 | `SamplingGrid`                  | Grid         | [Waveform API](waveform/)         |
-| `ContinuousWaveSimulator`       | Simulator    | [Continuous API](continuous/)     |
 | `resolve_simulator_backend`     | Registry     | [Registry API](registry/)         |
 | `register_simulator_backend`    | Registry     | [Registry API](registry/)         |
 | `list_registered_source_types`  | Registry     | [Registry API](registry/)         |
