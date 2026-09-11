@@ -138,11 +138,13 @@ class ContinuousWaveSimulator(GWSimulator):
                 still works and the caller needs to be able to reach it.
 
                 One limit comes with the default. The device path extrapolates sidereal time
-                linearly across the span it is given and accepts up to 86400 s; a *single*
-                segment longer than that is refused and needs ``"numpy"``. The span it measures
-                is the padded one -- ``edge_padding`` adds samples at both ends, 0.11 s to 0.56 s
-                depending on sample rate -- so the usable background is that much shorter. A run
-                of any length made of ordinary segments is unaffected, since each re-anchors.
+                linearly across the span it is given and refuses a span over 86400 s, which is a
+                *single* segment and needs ``"numpy"`` to go beyond. The span it measures is the
+                padded one, not the nominal segment. ``edge_padding`` adds samples at each end,
+                about 0.05 s to 4.13 s per end depending on sample rate, so the usable segment --
+                and therefore the longest nominal segment this backend accepts -- is that much
+                shorter than 86400 s. A run of any length made of ordinary segments is unaffected,
+                since each re-anchors.
 
         Raises:
             ValueError: If ``reference_time_ssb`` or any spindown term is not finite, or

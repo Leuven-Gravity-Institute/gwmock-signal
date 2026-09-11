@@ -21,18 +21,19 @@ tree (`src/gwmock_signal/`).
 
 ## Sections
 
-| Section                           | Contents                                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **[Waveform](waveform/)**         | `WaveformFactory`, `WaveformBackend`, `LALSimulationBackend`, `PyCBCBackend`, `pycbc_waveform_wrapper` |
-| **[Projection](projection/)**     | `project_polarizations_to_network`                                                                     |
-| **[Injection](injection/)**       | `inject_strain`, `inject_strains_sequential`                                                           |
-| **[Pipeline](pipeline/)**         | `inject_cbc_signal` (CBC orchestration)                                                                |
-| **[Stochastic](stochastic/)**     | `StochasticBackgroundSimulator`, power-law SGWB spectra, ORF helpers                                   |
-| **[Multichannel](multichannel/)** | `DetectorStrainStack`                                                                                  |
-| **[Network](network/)**           | `Network` (presets, `from_file`, detector lists)                                                       |
-| **[Simulator](simulator/)**       | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
-| **[Registry](registry/)**         | `resolve_simulator_backend`, `register_simulator_backend`, `list_registered_source_types`              |
-| **[Utility](utils/)**             | Logging and other helpers                                                                              |
+| Section                             | Contents                                                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **[Waveform](waveform/)**           | `WaveformFactory`, `WaveformBackend`, `LALSimulationBackend`, `PyCBCBackend`, `pycbc_waveform_wrapper` |
+| **[Projection](projection/)**       | `project_polarizations_to_network`                                                                     |
+| **[Injection](injection/)**         | `inject_strain`, `inject_strains_sequential`                                                           |
+| **[Pipeline](pipeline/)**           | `inject_cbc_signal` (CBC orchestration)                                                                |
+| **[Stochastic](stochastic/)**       | `StochasticBackgroundSimulator`, power-law SGWB spectra, ORF helpers                                   |
+| **[Continuous waves](continuous/)** | `ContinuousWaveSimulator`                                                                              |
+| **[Multichannel](multichannel/)**   | `DetectorStrainStack`                                                                                  |
+| **[Network](network/)**             | `Network` (presets, `from_file`, detector lists)                                                       |
+| **[Simulator](simulator/)**         | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
+| **[Registry](registry/)**           | `resolve_simulator_backend`, `register_simulator_backend`, `list_registered_source_types`              |
+| **[Utility](utils/)**               | Logging and other helpers                                                                              |
 
 ## Main entry points (quick links)
 
@@ -46,6 +47,8 @@ tree (`src/gwmock_signal/`).
 - **[Pipeline](pipeline/)** — One-call CBC injection (`inject_cbc_signal`).
 - **[Stochastic](stochastic/)** — SGWB signal generation as correlated
   multi-detector Gaussian strain.
+- **[Continuous waves](continuous/)** — Time-domain and already projected
+  signals `ContinuousWaveSimulator`.
 - **[Multichannel](multichannel/)** — Stacked IFO strains
   (`DetectorStrainStack`).
 - **[Network](network/)** — Named networks and YAML/JSON network configs.
@@ -70,6 +73,10 @@ the `[jax]` extra to _run_, as does `RippleBackend`; without it, generating a
 waveform raises an `ImportError` naming the install command. `SamplingGrid` is
 pure NumPy — it is the lattice contract the batched path aligns to, and it is
 usable on its own without the extra.
+
+`ContinuousWaveSimulator` is deliberately **not** in this table: it is reached
+as `gwmock_signal.continuous.ContinuousWaveSimulator`, not from the package
+root. See the [Continuous API](continuous/).
 
 | Symbol                          | Category     | Reference                         |
 | ------------------------------- | ------------ | --------------------------------- |

@@ -7,7 +7,8 @@ description:
 
 # Strain injection examples
 
-After producing detector strain (e.g. with [Waveforms](waveform.md) and
+After producing detector strain (e.g. with [Waveforms](waveform.md),
+[Continuous waves](continuous-waves.md) and
 [Detector projection](detector-projection.md)), you often need to **embed that
 strain into a longer segment** aligned to a science run—typically starting from
 **zeros** or from a **noise** realization (noise generation can live in a
@@ -184,6 +185,52 @@ result = sim.write(
 
 Supported write formats: `"hdf5"` (default), `"gwf"`, `"npy"`, `"txt"`.
 
+## Example 6 — Inject one CW into a segment with CBC
+
+A continuous wave has no duration of its own, so the segment being generated is
+defined by the background's epoch and length. The background is the existing
+strain called `out` from example 1, so `t0` and `fs` are that example's values:
+the injection lands on the CBC segment's own time grid, which
+`sampling_frequency` has to match. A real CW run would use a much longer segment
+than that 8 s example; the point here is only that the two signals add.
+
+```python
+from gwmock_signal.continuous import ContinuousWaveSimulator
+
+t0 = 1_400_000_000.0  # the CBC background's epoch, from example 1
+fs = 4096.0  # and its sample rate, which sampling_frequency must match
+
+cw_sim = ContinuousWaveSimulator(
+    earth_ephemeris="earth00-40-DE405.dat.gz",
+    sun_ephemeris="sun00-40-DE405.dat.gz",
+    reference_time_ssb=t0,
+    spindowns=(-1.0e-10,),
+)
+
+params = {
+    "right_ascension": 1.1,
+    "declination": 0.3,
+    "frequency": 20.0,
+    "initial_phase": 0.4,
+    "amplitude_plus": 1.0e-24,
+    "amplitude_cross": 7.0e-25,
+    "polarization_angle": 0.2,  # optional; defaults to 0.0
+}
+
+# The CBC time series is dimensionless.
+# Relabels CBC background to `strain` units
+cbc_background = TimeSeries(data=out.value, t0=out.t0, dt=out.dt, unit="strain")
+
+result = cw_sim.simulate(
+    params=params,
+    detector_names=["H1"],
+    background={"H1": cbc_background},  # An existing strain with the CBC signal
+    sampling_frequency=fs,
+    minimum_frequency=0.0,  # required by the shared simulator signature; unused for CW
+    earth_rotation=True,  # the only accepted value
+)
+```
+
 ## Pitfalls
 
 - **Units:** Target and injection should use compatible strain units (typically
@@ -208,6 +255,7 @@ Supported write formats: `"hdf5"` (default), `"gwf"`, `"npy"`, `"txt"`.
 - [User guide overview](index.md)
 - [Waveforms](waveform.md)
 - [Detector projection](detector-projection.md)
+- [Continuous waves](continuous-waves.md)
 - [Multichannel strains](multi-channel-strains.md)
 - [Injection API](../api/injection/)
 - [API overview](../api/index.md)
