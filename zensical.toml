@@ -60,6 +60,7 @@ nav = [
     { "Examples" = [
       { "Waveforms" = "user_guide/waveform.md" },
       { "Detector projection" = "user_guide/detector-projection.md" },
+      { "Continuous waves" = "user_guide/continuous-waves.md" },
       { "Strain injection" = "user_guide/strain-injection.md" },
       { "Multichannel strains" = "user_guide/multi-channel-strains.md" },
     ] },
