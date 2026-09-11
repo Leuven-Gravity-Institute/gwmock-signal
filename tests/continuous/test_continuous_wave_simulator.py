@@ -28,7 +28,9 @@ from gwpy.timeseries import TimeSeries
 pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
 
 from gwmock_signal.continuous import ContinuousWaveSimulator
+from gwmock_signal.projection import network
 from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.resampling import edge_padding
 
 _EARTH = "earth00-40-DE405.dat.gz"
 _SUN = "sun00-40-DE405.dat.gz"
@@ -343,6 +345,59 @@ class TestOutput:
 
         peak = float(np.max(np.abs(strain)))
         assert 0.0 < peak <= float(_SOURCE["amplitude_plus"]), f"peak {peak:.3e} is not a projected amplitude"
+
+
+class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
+    """The device path's span limit applies to the buffer, not the nominal segment.
+
+    `simulate` hands the projection a buffer padded at both ends by `edge_padding`, so the span
+    the guard measures is longer than the segment the caller asked for. Documented in
+    `ContinuousWaveSimulator`'s constructor docstring, and the reason a nominal-length segment at
+    the limit is refused: the padding is what pushes it over.
+    """
+
+    def test_the_buffer_the_simulator_generates_is_padded_at_both_ends(self, monkeypatch):
+        """Pin the sizing itself, which is what makes the guard see a longer span."""
+        simulator = _simulator()
+        seen: dict[str, float] = {}
+        real = simulator._geocentre_polarizations
+
+        def spy(params, *, epoch, n_samples, sampling_frequency):
+            seen.update(epoch=epoch, n_samples=n_samples)
+            return real(params, epoch=epoch, n_samples=n_samples, sampling_frequency=sampling_frequency)
+
+        monkeypatch.setattr(simulator, "_geocentre_polarizations", spy)
+        n_samples = int(600 * _FS)
+        _generate(simulator, _EPOCH, n_samples)
+
+        margin = edge_padding(_FS)
+        assert margin > 0
+        assert seen["n_samples"] == n_samples + 2 * margin
+        # And it starts before the background's epoch, by the same margin.
+        assert seen["epoch"] < _EPOCH
+        assert seen["epoch"] == pytest.approx(_EPOCH - margin / _FS)
+
+    def test_the_jax_guard_refuses_between_the_nominal_and_padded_spans(self, monkeypatch):
+        """With the limit set between the two, only a padded-span guard refuses.
+
+        This is the documented consequence, tested end to end rather than recomputed: the same
+        call is refused when the limit sits above its nominal span but below its padded one.
+        """
+        pytest.importorskip("jax", reason="the [jax] extra is not installed")
+        seconds = 120.0
+        n_samples = int(seconds * _FS)
+        margin = edge_padding(_FS)
+        nominal = (n_samples - 1) / _FS
+        padded = (n_samples + 2 * margin - 1) / _FS
+        assert nominal < padded
+
+        monkeypatch.setattr(network, "MAX_LINEAR_SIDEREAL_SPAN_SECONDS", 0.5 * (nominal + padded))
+        simulator = _simulator()  # defaults to the device backend
+
+        with pytest.raises(ValueError, match="accepts spans up to"):
+            simulator.simulate(
+                _SOURCE, _DETECTORS, _zeros(_EPOCH, n_samples), sampling_frequency=_FS, minimum_frequency=0.0
+            )
 
 
 class TestANonFinitePolarizationIsRefused:
