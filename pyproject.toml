@@ -22,13 +22,13 @@ dynamic = ["version"]
 dependencies = [
   "typer>=0.16.0",  # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
   "gwpy>=4.0.0",
-  "lalsuite>=7.23",
+  "lalsuite>=7.24",
   "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-pycbc = ["pycbc>=2.5.0"]
-sgwb = ["gwmock-noise>=0.11.1"]
+pycbc = ["pycbc>=2.6.0"]
+sgwb = ["gwmock-noise>=0.11.3"]
 # Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
 # that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works.
 # Deliberately no upper bound, so a compatible newer ripple installs without a release here.
@@ -57,15 +57,15 @@ lock = "minimal"
 
 [dependency-groups]
 dev = [
-  "ruff>=0.16.4",
-  "prek>=0.5.0",
+  "ruff>=0.16.6",
+  "prek>=0.5.2",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.15.1",
   "pytest>=9.1.1",
   "pytest-github-actions-annotate-failures>=0.4.2",
   "mutmut>=3.7.0",
 ]
-docs = ["zensical>=0.0.57", "mkdocstrings-python>=2.0.7"]
+docs = ["zensical>=0.0.60", "mkdocstrings-python>=2.0.8"]
 build = ["hatch>=1.18.0"]
 release = ["git-cliff>=2.13.1"]
 

@@ -72,7 +72,7 @@ import numpy as np
 from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import project_polarizations_to_network, validate_projection_backend
 from gwmock_signal.projection.resampling import edge_padding
 from gwmock_signal.simulator import GWSimulator
 
@@ -148,9 +148,7 @@ class ContinuousWaveSimulator(GWSimulator):
             ValueError: If ``reference_time_ssb`` or any spindown term is not finite, or
                 ``projection_backend`` is not one of the two names.
         """
-        if projection_backend not in {"numpy", "jax"}:
-            raise ValueError(f"projection_backend must be 'numpy' or 'jax', got {projection_backend!r}.")
-        self.projection_backend = projection_backend
+        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
         if projection_backend == "jax":
             # Enabled here rather than relied upon. The device projection refuses to run without
             # x64, and it has always happened to be on because importing ``ripplegw`` sets it --
