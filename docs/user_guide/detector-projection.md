@@ -114,6 +114,52 @@ types.
   injections, prefer waveforms that are windowed or long enough that edge
   effects are negligible.
 
+## Choosing the projection implementation
+
+The `earth_rotation=True` branch has two implementations of the same algorithm,
+selected by `backend` on `project_polarizations_to_network`, or by
+`projection_backend` on a simulator that projects for you:
+
+```python
+from gwmock_signal import CBCSimulator
+
+simulator = CBCSimulator(waveform_model="IMRPhenomD", projection_backend="jax")
+```
+
+- `"numpy"` — the default on `CBCSimulator` and on the projection function. Runs
+  on the host, needs no optional dependency, and asks Astropy for sidereal time
+  at every sample.
+- `"jax"` — the same algorithm compiled into one fused kernel. Requires JAX
+  (`pip install 'gwmock-signal[jax]'`), and **runs on whatever JAX backend is
+  installed**: on a CPU with the plain wheel, on a GPU with a CUDA build. The
+  continuous-wave simulator already defaults to it.
+
+**What it buys.** Projection is where a long transient spends its time: measured
+at 1024 s and 8192 Hz across five ET detectors, it was 604 s of a 620 s
+single-event run — 97% — and the device path did the same work in 225 s, **2.7x
+faster on the same CPU**. A short segment will not show this, since the fixed
+compilation cost is then a larger share.
+
+**It is not a different answer.** The two agree to ~1e-10 of peak, and through
+`CBCSimulator.simulate` at 32 s and 256 Hz the measured worst disagreement was
+8.0e-13 of peak. The difference is floating-point reassociation.
+
+Two constraints come with `"jax"`:
+
+- It is only available with `earth_rotation=True`. The constant-pattern branch
+  is a single frequency-domain phase shift with no device implementation, and it
+  is already the cheap branch; asking for both is refused rather than silently
+  served from the host.
+- One call may span at most `MAX_LINEAR_SIDEREAL_SPAN_SECONDS` (86400 s). The
+  device path extrapolates sidereal time linearly from a single Astropy anchor,
+  which is validated to that span and refused beyond it. Consecutive segments
+  are unaffected at any run length, because each one re-anchors.
+
+It also requires JAX in 64-bit mode, which the simulators enable for you when
+you select it. Calling the projection function directly does not: in 32-bit mode
+it raises rather than returning a series that is wrong by ~1% of peak while
+still looking like strain.
+
 ## Scientific notes
 
 - Antenna patterns and delays follow **PyCBC/LAL** conventions, consistent with

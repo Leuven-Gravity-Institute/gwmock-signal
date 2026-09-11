@@ -222,7 +222,38 @@ _KERNEL_CACHE_SIZE = 32
 #: One day is therefore not a physical limit but the point beyond which nothing has been measured
 #: and a single segment stops being a plausible way to use this. Consecutive segments are
 #: unaffected at any run length: each one re-anchors against Astropy.
-_MAX_LINEAR_SIDEREAL_SPAN_SECONDS = 86400.0
+#:
+#: Public because a caller that *configures* the backend needs it before projecting: gwmock reads
+#: it to refuse a segment longer than this while validating a configuration, rather than letting
+#: the run reach the projection and fail there. A caller that hard-coded the number instead would
+#: drift from it silently the first time the error budget above is revisited.
+MAX_LINEAR_SIDEREAL_SPAN_SECONDS = 86400.0
+
+#: The two implementations of the rotating projection, by name.
+PROJECTION_BACKENDS: frozenset[str] = frozenset({"numpy", "jax"})
+
+
+def validate_projection_backend(value: str, *, parameter: str = "backend") -> str:
+    """Return *value* if it names a projection implementation, else raise.
+
+    Shared so the name is checked identically wherever it is accepted -- this function, and the
+    simulators that take it at construction time and only reach the projection later. Checking it
+    in each place separately is how one of them ends up accepting a name the projection does not.
+
+    Args:
+        value: The candidate backend name.
+        parameter: What to call it in the error message, since callers spell the argument
+            differently (``backend`` here, ``projection_backend`` on a simulator).
+
+    Returns:
+        *value* unchanged.
+
+    Raises:
+        ValueError: If *value* is not one of :data:`PROJECTION_BACKENDS`.
+    """
+    if value not in PROJECTION_BACKENDS:
+        raise ValueError(f"{parameter} must be 'numpy' or 'jax', got {value!r}.")
+    return value
 
 
 @functools.lru_cache(maxsize=_KERNEL_CACHE_SIZE)
@@ -350,9 +381,9 @@ def _project_rotating_on_device(  # noqa: PLR0913
     # 8192 s, which is where this refuses, rather than letting the public API accept a span the
     # model was never checked against and returning a quietly degraded answer.
     span = float(time_array[-1] - time_array[0])
-    if span > _MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
+    if span > MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
         raise ValueError(
-            f"backend='jax' accepts spans up to {_MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
+            f"backend='jax' accepts spans up to {MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
             f"and this one is {span:.0f} s. The device path extrapolates sidereal time linearly "
             f"from one anchor, which is exact to 1.2e-15 s of delay over the validated range and "
             f"degrades beyond it. Project in segments, or use backend='numpy', which asks Astropy "
@@ -474,8 +505,7 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
             recognized, ``backend`` is unknown, or ``backend="jax"`` is combined with
             ``earth_rotation=False``.
     """
-    if backend not in {"numpy", "jax"}:
-        raise ValueError(f"backend must be 'numpy' or 'jax', got {backend!r}.")
+    validate_projection_backend(backend)
     if backend == "jax" and not earth_rotation:
         # The constant-pattern branch is a frequency-domain phase shift, and no device
         # counterpart exists. Refused rather than silently served from the host path, which

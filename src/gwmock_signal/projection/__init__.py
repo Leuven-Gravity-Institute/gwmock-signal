@@ -15,6 +15,16 @@
 
 from __future__ import annotations
 
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import (
+    MAX_LINEAR_SIDEREAL_SPAN_SECONDS,
+    PROJECTION_BACKENDS,
+    project_polarizations_to_network,
+    validate_projection_backend,
+)
 
-__all__ = ["project_polarizations_to_network"]
+__all__ = [
+    "MAX_LINEAR_SIDEREAL_SPAN_SECONDS",
+    "PROJECTION_BACKENDS",
+    "project_polarizations_to_network",
+    "validate_projection_backend",
+]

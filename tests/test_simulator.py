@@ -16,6 +16,7 @@ from gwpy.timeseries import TimeSeries
 import gwmock_signal
 from gwmock_signal import GWSimulator, register_simulator_backend, resolve_simulator_backend
 from gwmock_signal.multichannel.stack import DetectorStrainStack
+from gwmock_signal.projection.network import project_polarizations_to_network
 from gwmock_signal.simulator import CBCSimulator, TransientSimulator, _json_default
 from gwmock_signal.waveform import LALSimulationBackend
 
@@ -688,3 +689,139 @@ class TestCBCSimulatorWrite:
         assert params_sidecar.exists()
         saved = json.loads(params_sidecar.read_text())
         assert saved["distance"] == pytest.approx(_MINIMAL_PARAMS["distance"])
+
+
+class TestTheProjectionBackend:
+    """``projection_backend`` chooses an implementation, and must not choose a different answer."""
+
+    #: Long enough that the rotating branch resamples at a delay that actually moves across the
+    #: buffer, short enough that the host path's per-sample Astropy call stays affordable in a
+    #: unit test. The device path's agreement over minutes-long spans is pinned separately, in
+    #: ``tests/projection/test_projection_network.py``.
+    _DURATION = 32.0
+    _SAMPLING_FREQUENCY = 256.0
+
+    @pytest.fixture
+    def _sixty_four_bit(self):
+        """Restore ``jax_enable_x64`` around a test that constructs a jax-backed simulator.
+
+        The constructor turns x64 on deliberately and process-wide, which is right for a run and
+        wrong to leave behind in a test session: tests run in random order and the flag changes
+        the dtype of unrelated JAX work.
+        """
+        jax = pytest.importorskip("jax")
+        previous = jax.config.jax_enable_x64
+        yield
+        jax.config.update("jax_enable_x64", previous)
+
+    @classmethod
+    def _simulator(cls, projection_backend: str) -> CBCSimulator:
+        """Return a simulator whose polarizations are a deterministic chirp, not a waveform model.
+
+        The projection is what is under test, so the generator is replaced by something cheap and
+        reproducible; a real approximant would make the comparison depend on the waveform library
+        as well.
+        """
+        sim = CBCSimulator(waveform_model="toy-chirp", projection_backend=projection_backend)
+        sim.register_waveform_model("toy-chirp", cls._chirp)
+        return sim
+
+    @classmethod
+    def _chirp(cls, *, tc: float, sampling_frequency: float, **_: object) -> tuple[TimeSeries, TimeSeries]:
+        n = int(cls._DURATION * sampling_frequency)
+        t = np.arange(n) / sampling_frequency
+        phase = 2.0 * np.pi * (20.0 * t + 0.5 * t**2)
+        envelope = np.hanning(n)
+        return (
+            TimeSeries(envelope * np.cos(phase), t0=tc, sample_rate=sampling_frequency),
+            TimeSeries(envelope * np.sin(phase), t0=tc, sample_rate=sampling_frequency),
+        )
+
+    def test_it_defaults_to_the_host_path(self):
+        """Unchanged behaviour for every caller that does not ask: no JAX, no device path."""
+        assert CBCSimulator(waveform_model="IMRPhenomD").projection_backend == "numpy"
+
+    def test_a_transient_subclass_that_never_sets_it_projects_on_the_host(self):
+        """The attribute is inherited, so a third-party subclass needs no optional dependency."""
+        assert TransientSimulator.projection_backend == "numpy"
+
+    def test_an_unknown_name_is_refused_at_construction(self):
+        """Named at construction and used much later, so an unchecked typo would surface far away."""
+        with pytest.raises(ValueError, match="projection_backend must be 'numpy' or 'jax'"):
+            CBCSimulator(waveform_model="IMRPhenomD", projection_backend="cuda")
+
+    def test_an_unknown_name_is_refused_before_the_waveform_stack_loads(self):
+        """Validated first, so the documented error survives a waveform library that cannot load.
+
+        ``WaveformFactory`` enumerates its backend's approximants at construction, which imports
+        the waveform library and can fail on its own. Validating after that would report the
+        library's failure for a configuration whose actual mistake is the name given here, and the
+        documented ``ValueError`` would never be raised.
+        """
+
+        class _UnusableBackend:
+            def available_approximants(self):
+                raise ImportError("the waveform library is not installed")
+
+            def generate_td_waveform(self, **_):  # pragma: no cover - never reached
+                raise NotImplementedError
+
+        with pytest.raises(ValueError, match="projection_backend must be 'numpy' or 'jax'"):
+            CBCSimulator(
+                waveform_model="IMRPhenomD",
+                waveform_backend=_UnusableBackend(),
+                projection_backend="cuda",
+            )
+
+    @pytest.mark.usefixtures("_sixty_four_bit")
+    def test_the_device_backend_reproduces_the_host_backend(self):
+        """Same strain out of ``simulate``, so selecting it is a substitution and not a new answer.
+
+        Measured through the whole per-event path rather than through the projection alone: what
+        this adds over the projection's own equivalence tests is that the simulator forwards the
+        selection at all. A test that only compared the two projections would pass unchanged if
+        ``simulate`` ignored the attribute.
+        """
+        pytest.importorskip("jax")
+        detectors = ["H1", "L1"]
+
+        host = self._simulator("numpy").simulate(
+            _MINIMAL_PARAMS,
+            detectors,
+            sampling_frequency=self._SAMPLING_FREQUENCY,
+            minimum_frequency=20.0,
+        )
+        with patch(
+            "gwmock_signal.simulator.project_polarizations_to_network",
+            wraps=project_polarizations_to_network,
+        ) as projection:
+            device = self._simulator("jax").simulate(
+                _MINIMAL_PARAMS,
+                detectors,
+                sampling_frequency=self._SAMPLING_FREQUENCY,
+                minimum_frequency=20.0,
+            )
+        # Without this the comparison below is vacuous: a `simulate` that dropped the selection
+        # would project on the host twice and agree with itself perfectly.
+        assert projection.call_args.kwargs["backend"] == "jax"
+
+        for index, name in enumerate(detectors):
+            host_strain = np.asarray(host.data[index], dtype=float)
+            device_strain = np.asarray(device.data[index], dtype=float)
+            peak = float(np.max(np.abs(host_strain)))
+            assert peak > 0.0, "a null response would make the comparison below vacuous"
+            worst = float(np.max(np.abs(device_strain - host_strain))) / peak
+            assert worst < 1e-10, f"{name} differs between backends by {worst:.3e} of peak"
+
+    @pytest.mark.usefixtures("_sixty_four_bit")
+    def test_the_device_backend_refuses_a_constant_pattern(self):
+        """``earth_rotation=False`` has no device implementation, and must not be served silently."""
+        pytest.importorskip("jax")
+        with pytest.raises(ValueError, match="only available with earth_rotation=True"):
+            self._simulator("jax").simulate(
+                _MINIMAL_PARAMS,
+                ["H1"],
+                sampling_frequency=self._SAMPLING_FREQUENCY,
+                minimum_frequency=20.0,
+                earth_rotation=False,
+            )

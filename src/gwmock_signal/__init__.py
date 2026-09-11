@@ -30,7 +30,12 @@ _PUBLIC_SYMBOLS = {
     "DetectorStrainStack": ("gwmock_signal.multichannel.stack", "DetectorStrainStack"),
     "GWSimulator": ("gwmock_signal.simulator", "GWSimulator"),
     "LALSimulationBackend": ("gwmock_signal.waveform.backends", "LALSimulationBackend"),
+    # Exported for callers that *configure* the projection rather than call it: the accepted
+    # backend names and the span the device path is validated for are both needed before any
+    # polarizations exist, by anything that validates a configuration up front.
+    "MAX_LINEAR_SIDEREAL_SPAN_SECONDS": ("gwmock_signal.projection.network", "MAX_LINEAR_SIDEREAL_SPAN_SECONDS"),
     "Network": ("gwmock_signal.network", "Network"),
+    "PROJECTION_BACKENDS": ("gwmock_signal.projection.network", "PROJECTION_BACKENDS"),
     "RippleBackend": ("gwmock_signal.waveform.backends", "RippleBackend"),
     "StochasticBackgroundSimulator": ("gwmock_signal.stochastic", "StochasticBackgroundSimulator"),
     "StochasticBackgroundSpectrum": ("gwmock_signal.stochastic", "StochasticBackgroundSpectrum"),
@@ -42,6 +47,7 @@ _PUBLIC_SYMBOLS = {
     "optimal_snr": ("gwmock_signal.snr._pycbc", "optimal_snr"),
     "register_simulator_backend": ("gwmock_signal.registry", "register_simulator_backend"),
     "resolve_simulator_backend": ("gwmock_signal.registry", "resolve_simulator_backend"),
+    "validate_projection_backend": ("gwmock_signal.projection.network", "validate_projection_backend"),
     # The on-device (GPU) entry points. Exported so a consumer -- gwmock's orchestration in
     # particular -- can reach the batched path without importing a submodule, which would tie it to
     # an internal layout rather than to an advertised API.
