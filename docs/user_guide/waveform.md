@@ -332,5 +332,6 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
 - [Installation](installation.md) — core vs `[pycbc]` optional extra
 - [Command-line interface](cli.md) — `inject cbc --backend` / `--approximant`
 - [Detector projection](detector-projection.md)
+- [Continuous waves](continuous-waves.md)
 - [Waveform API reference](../api/waveform/)
 - [Documentation home](../index.md)
