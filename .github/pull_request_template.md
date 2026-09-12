@@ -1,8 +1,3 @@
----
-name: 🚀 Pull Request
-about: Submit your changes for review
----
-
 ## 📝 Summary
 
 Briefly describe the changes introduced by this PR. Mention any related issues
