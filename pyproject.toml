@@ -58,9 +58,9 @@ lock = "minimal"
 [dependency-groups]
 dev = [
   "ruff>=0.16.9",
-  "prek>=0.5.3",
+  "prek>=0.5.4",
   "pytest-cov>=7.1.0",
-  "pytest-mock>=3.15.1",
+  "pytest-mock>=3.16.0",
   "pytest>=9.1.1",
   "pytest-github-actions-annotate-failures>=0.4.2",
   "mutmut>=3.8.0",
