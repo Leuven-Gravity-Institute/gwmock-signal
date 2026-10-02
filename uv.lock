@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -823,7 +823,7 @@ wheels = [
 
 [[package]]
 name = "gwmock-noise"
-version = "0.13.0"
+version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h5py" },
@@ -833,9 +833,9 @@ dependencies = [
     { name = "scipy" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/63/d5/0b21faa37ccbd9adafd001f5693e53b53f2f9fc1e8fc39d75d947d2aa61c/gwmock_noise-0.13.0.tar.gz", hash = "sha256:30deee1b43be5fd78c4a3b4edd5b9614a61bbc9863898a73cacd28c33308916c", size = 1692409, upload-time = "2026-09-22T03:01:58.037Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/7f/cbb2acb50e589288e6e06bde76237c1405d189fffa760c4489e21b084a93/gwmock_noise-0.14.0.tar.gz", hash = "sha256:90b7b2c3356332cb67da904bf12e942b55bfbbba3997f3c4538ed8eb73c9320e", size = 1705522, upload-time = "2026-09-29T03:54:41.813Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/c3/f4a67d9ae47fa7c66bdbed55360f31e088d18412abdc3bb9ef949928f200/gwmock_noise-0.13.0-py3-none-any.whl", hash = "sha256:b2b46a62821926f1d68b21f5eebcf85001b5d7ac56e46f6333f952ade9d12cf1", size = 1287920, upload-time = "2026-09-22T03:01:56.631Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/ab/7b7a2e8a21a53efdc3c361b7a244114c9b8b69a0e3ac7907d22909da2156/gwmock_noise-0.14.0-py3-none-any.whl", hash = "sha256:7ae6a8a53f04b05fa463835893b3fa84c37822894bcf4dfb3c8e61a2ceda869e", size = 1295687, upload-time = "2026-09-29T03:54:40.527Z" },
 ]
 
 [[package]]
@@ -882,7 +882,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.13.0" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.14.0" },
     { name = "gwpy", specifier = ">=4.0.0" },
     { name = "lalsuite", specifier = ">=7.24" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.6.0" },
