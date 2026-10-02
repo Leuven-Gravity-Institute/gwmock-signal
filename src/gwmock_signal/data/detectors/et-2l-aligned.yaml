@@ -4,15 +4,15 @@ detectors:
       latitude_deg: 40.5166666668747
       longitude_deg: 9.416666666888249
       elevation_m: 51.884
-      xarm_azimuth_deg: 70.56739976526205
-      yarm_azimuth_deg: 340.56739976554263
+      xarm_azimuth_deg: 19.432600234737947
+      yarm_azimuth_deg: 109.43260023445737
       xarm_tilt_rad: 2.64278457158e-10
       yarm_tilt_rad: -2.11594666113e-17
     - name: ET2_2L_ALIGNED_EMR
       latitude_deg: 50.72305555575918
       longitude_deg: 5.920555555458927
       elevation_m: 51.884
-      xarm_azimuth_deg: 70.56739976411615
-      yarm_azimuth_deg: 340.56739976382374
+      xarm_azimuth_deg: 19.432600235883854
+      yarm_azimuth_deg: 109.43260023617626
       xarm_tilt_rad: 2.93896654317e-10
       yarm_tilt_rad: 9.96198037968e-18

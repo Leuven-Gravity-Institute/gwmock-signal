@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from importlib.resources import files
 
+import lal
 import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
@@ -182,3 +183,29 @@ def test_triangle_preset_arms_lie_along_tunnel_chords(preset: str) -> None:
         x_chord, y_chord = chords
         expected_response = (np.outer(x_chord, x_chord) - np.outer(y_chord, y_chord)) / 2.0
         np.testing.assert_allclose(np.asarray(lal_det.response), expected_response, rtol=0.0, atol=1e-6)
+
+
+@pytest.mark.parametrize(("preset", "relative_angle"), [("ET-2L-Aligned", 0.0), ("ET-2L-Misaligned", np.pi / 4)])
+def test_two_l_preset_arms_follow_virgo_reference(preset: str, relative_angle: float) -> None:
+    """Each 2L x-arm has the azimuth of Virgo's arm 1, the second site turned by the relative angle.
+
+    Both detectors are oriented against their local North: the Sardinia x-arm has the azimuth of
+    LAL's V1 x-arm, the Meuse-Rhine x-arm that azimuth plus the relative angle (0 aligned, 45 degrees
+    misaligned), and each y-arm is ``x-arm x up``, i.e. 90 degrees clockwise of the x-arm. The
+    response tensor LAL builds from the stored angles is checked against those arms too.
+    """
+    virgo_azimuth = lal.cached_detector_by_prefix["V1"].frDetector.xArmAzimuthRadians
+    detectors = Network.from_preset(preset).detector_names
+
+    for det, azimuth in zip(detectors, (virgo_azimuth, virgo_azimuth + relative_angle), strict=True):
+        up = _arm_direction(det.latitude_rad, det.longitude_rad, 0.0, np.pi / 2)
+        x_expected = _arm_direction(det.latitude_rad, det.longitude_rad, azimuth, 0.0)
+        y_expected = np.cross(x_expected, up)
+        for arm_azimuth, arm_tilt, expected in (
+            (det.xarm_azimuth_rad, det.xarm_tilt_rad, x_expected),
+            (det.yarm_azimuth_rad, det.yarm_tilt_rad, y_expected),
+        ):
+            arm = _arm_direction(det.latitude_rad, det.longitude_rad, arm_azimuth, arm_tilt)
+            assert _angle(arm, expected) < 1e-6, f"{det.name}: arm misses its reference direction"
+        expected_response = (np.outer(x_expected, x_expected) - np.outer(y_expected, y_expected)) / 2.0
+        np.testing.assert_allclose(np.asarray(det.to_lal().response), expected_response, rtol=0.0, atol=1e-6)
