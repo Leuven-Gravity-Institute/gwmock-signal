@@ -4,23 +4,23 @@ detectors:
       latitude_deg: 40.5166666668747
       longitude_deg: 9.416666666888249
       elevation_m: 51.884
-      xarm_azimuth_deg: 70.56739976526205
-      yarm_azimuth_deg: 130.56739976543332
+      xarm_azimuth_deg: 19.432600234737947
+      yarm_azimuth_deg: 319.4326002345667
       xarm_tilt_rad: 2.64278457158e-10
       yarm_tilt_rad: 2.64278469515e-10
     - name: ET2_SARD
       latitude_deg: 40.60158246647564
       longitude_deg: 9.455973799867088
       elevation_m: 59.739
-      xarm_azimuth_deg: 190.5418104128176
-      yarm_azimuth_deg: 250.54184090066977
+      xarm_azimuth_deg: 259.4581895871824
+      yarm_azimuth_deg: 199.45815909933023
       xarm_tilt_rad: -0.000783862464265
       yarm_tilt_rad: -0.0015710370848
     - name: ET3_SARD
       latitude_deg: 40.585048823916765
       longitude_deg: 9.339849816516432
       elevation_m: 59.73
-      xarm_azimuth_deg: 310.6173402960931
-      yarm_azimuth_deg: 10.61737063612216
+      xarm_azimuth_deg: 139.38265970390688
+      yarm_azimuth_deg: 79.38262936387784
       xarm_tilt_rad: -0.00156913521227
       yarm_tilt_rad: -0.000781960584882
