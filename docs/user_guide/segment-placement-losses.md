@@ -33,19 +33,15 @@ name them, and so should anything that cites the tables.
     | 30+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
     | 25+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
     | 1.4+1.35 | 30 Hz  | 57.6 s     | 115.2 s   | 64 s         | 128 s       |
-    | 2.0+1.5  | 20 Hz  | ~115 s     | 230.4 s   | 128 s        | 256 s       |
+    | 2.0+1.5  | 20 Hz  | 115.2 s    | 230.4 s   | 128 s        | 256 s       |
 
     With `ringdown_fraction` 0.2, 30+25 at 20 Hz now leads by 6.400 s. Every
     other LAL buffer quoted below is unchanged, so for 30+25 and 25+25 the
     20-to-30 Hz difference now moves the geometry as well as the content.
 
-    The h² fractions were not re-measured. A spot check with the same source and
-    sky position, comparing the old buffer length (pinned with
-    `segment_duration`) against the new one, moves them by under 0.4 percentage
-    points: 31.1% to 30.7% for 30+25 at 20 Hz with `coa_time` 0.5 s past the
-    boundary, 92.9% to 93.0% for 1.4+1.35 at 30 Hz. The orders of magnitude this
-    page is about are unchanged, but the individual percentages carry that
-    uncertainty.
+    The h² fractions below were not re-measured, and nothing on this page bounds
+    how far the longer buffers move them. Read them as figures for the previous
+    sizing, not for the current one.
 <!-- prettier-ignore-end -->
 
 ## A 30+25 solar-mass binary on LAL

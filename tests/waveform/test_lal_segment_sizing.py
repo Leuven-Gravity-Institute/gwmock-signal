@@ -13,6 +13,9 @@ coalescence read from the stationary phase of LALSimulation's own IMRPhenomXAS,
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import lal
 import lalsimulation
 import numpy as np
@@ -33,6 +36,14 @@ _WRAPPED_CASES = (
     (20.0, 1.2, 0.99, 15.0),
     (40.0, 1.4, 0.9, 7.0),
     (40.0, 1.4, 0.99, 7.0),
+)
+
+#: ``(mass1, mass2, f_min)`` where the 1PN term exceeds the 10% floor, so the margin is the 1PN term
+#: itself. None of the wrapped cases reaches that branch: their 1PN terms are all below 10%.
+_STEEP_CASES = (
+    (20.0, 1.2, 60.0),
+    (40.0, 1.4, 50.0),
+    (60.0, 3.0, 50.0),
 )
 
 
@@ -123,20 +134,39 @@ def _expected_requirement_seconds(mass1: float, mass2: float, f_min: float) -> f
     return tau0 * (1.0 + correction) * (1.0 + max(0.10, correction)) + 2.0
 
 
-@pytest.mark.parametrize(("mass1", "mass2", "chi", "f_min"), _WRAPPED_CASES)
-def test_the_shared_requirement_is_the_1pn_estimate_with_its_margin(
-    mass1: float, mass2: float, chi: float, f_min: float
-) -> None:
+@pytest.mark.parametrize(
+    ("mass1", "mass2", "f_min"),
+    [(mass1, mass2, f_min) for mass1, mass2, _, f_min in _WRAPPED_CASES] + list(_STEEP_CASES),
+)
+def test_the_shared_requirement_is_the_1pn_estimate_with_its_margin(mass1: float, mass2: float, f_min: float) -> None:
     """Pin the unrounded estimate, where dropping the 1PN term or the margin is visible.
 
     The buffer tests above cannot see either change on their own: the power-of-two rounding happens
     to leave enough room for these cases even then. The estimate is what must hold elsewhere.
+    Spin does not enter it, so each mass pair and cutoff is checked once.
     """
-    del chi  # spin does not enter the estimate
     chirp_mass = (mass1 * mass2) ** 0.6 / (mass1 + mass2) ** 0.2
     eta = mass1 * mass2 / (mass1 + mass2) ** 2
     required = float(conditioning.inspiral_requirement_seconds(chirp_mass, eta, f_min))
     assert required == pytest.approx(_expected_requirement_seconds(mass1, mass2, f_min), rel=1e-12, abs=0.0)
+
+
+@pytest.mark.parametrize(("mass1", "mass2", "f_min"), _STEEP_CASES)
+def test_the_margin_is_the_1pn_term_where_it_exceeds_the_floor(mass1: float, mass2: float, f_min: float) -> None:
+    """Where the 1PN term is above 10%, the production requirement must grow by that term, not by 10%.
+
+    Built from the production ``inspiral_seconds`` output, so a requirement that falls back to the
+    flat floor is caught even if the independent formula above were wrong in the same way.
+    """
+    chirp_mass = (mass1 * mass2) ** 0.6 / (mass1 + mass2) ** 0.2
+    eta = mass1 * mass2 / (mass1 + mass2) ** 2
+    inspiral, correction = (float(value) for value in conditioning.inspiral_seconds(chirp_mass, eta, f_min))
+    assert correction > conditioning.INSPIRAL_SAFETY_FRACTION, "test premise broken: the floor still applies"
+
+    required = float(conditioning.inspiral_requirement_seconds(chirp_mass, eta, f_min))
+    floor_only = inspiral * (1.0 + conditioning.INSPIRAL_SAFETY_FRACTION) + conditioning.SEGMENT_BUFFER_SECONDS
+    assert required == pytest.approx(inspiral * (1.0 + correction) + conditioning.SEGMENT_BUFFER_SECONDS, rel=1e-12)
+    assert required > floor_only, f"{mass1}+{mass2} at {f_min} Hz is sized with the 10% floor, not its 1PN term"
 
 
 @pytest.mark.parametrize("backend_class", [LALSimulationBackend, GWSignalBackend])
@@ -165,3 +195,58 @@ def test_segment_sample_count_requires_the_mass_ratio() -> None:
 def test_a_pinned_segment_duration_still_overrides_the_estimate() -> None:
     """An explicitly pinned duration bypasses the estimate entirely, as before."""
     assert conditioning.segment_sample_count(1.2, 10.0, _FS, eta=0.25, segment_duration=64.0) == round(64.0 * _FS)
+
+
+_PLACEMENT_PAGE = Path(__file__).resolve().parents[2] / "docs" / "user_guide" / "segment-placement-losses.md"
+
+#: One row of the page's "Measured under the previous LAL sizing" table.
+_GEOMETRY_ROW = re.compile(
+    r"^\s*\|\s*(?P<mass1>[\d.]+)\+(?P<mass2>[\d.]+)\s*\|\s*(?P<f_min>[\d.]+) Hz\s*\|"
+    r"\s*(?P<lead_then>[\d.]+) s\s*\|\s*(?P<lead_now>[\d.]+) s\s*\|"
+    r"\s*(?P<buffer_then>[\d.]+) s\s*\|\s*(?P<buffer_now>[\d.]+) s\s*\|\s*$",
+    re.MULTILINE,
+)
+
+
+def _note_rows() -> list[dict[str, float]]:
+    note = _PLACEMENT_PAGE.read_text(encoding="utf-8").split('!!! note "Measured under the previous LAL sizing"')[1]
+    note = note.split("<!-- prettier-ignore-end -->")[0]
+    return [{key: float(value) for key, value in match.groupdict().items()} for match in _GEOMETRY_ROW.finditer(note)]
+
+
+def test_the_documented_geometry_change_matches_the_sizing() -> None:
+    """The user guide's then/now table must be what the old rule and the current backend produce.
+
+    Read from the page itself, so a sizing change that moves any quoted buffer fails here instead of
+    leaving the page describing a geometry the backend no longer has.
+    """
+    rows = _note_rows()
+    assert len(rows) == 4, f"expected the four documented rows, parsed {len(rows)}"
+    for row in rows:
+        source = {
+            "detector_frame_mass_1": row["mass1"],
+            "detector_frame_mass_2": row["mass2"],
+            "luminosity_distance": 1.0,
+        }
+        backend = LALSimulationBackend()
+        lead_now = backend.pre_coalescence_duration("IMRPhenomD", _FS, row["f_min"], **source)
+        post_now = backend.post_coalescence_duration("IMRPhenomD", _FS, row["f_min"], **source)
+        assert lead_now is not None
+        assert post_now is not None
+        lead_then = _previous_pre_coalescence_seconds(row["mass1"], row["mass2"], row["f_min"])
+        label = f"{row['mass1']:g}+{row['mass2']:g} at {row['f_min']:g} Hz"
+        # The page quotes leads to the precision shown, so compare at that precision.
+        assert row["lead_now"] == pytest.approx(lead_now, abs=0.05), f"{label}: page says {row['lead_now']} s now"
+        assert row["lead_then"] == pytest.approx(lead_then, abs=0.05), f"{label}: page says {row['lead_then']} s then"
+        assert row["buffer_now"] == pytest.approx(lead_now + post_now, abs=0.01), f"{label}: buffer now"
+        assert row["buffer_then"] == pytest.approx(lead_then / (1.0 - conditioning.DEFAULT_RINGDOWN_FRACTION), abs=0.01)
+
+
+def test_the_documented_ringdown_fraction_lead_matches_the_sizing() -> None:
+    """The note's ``ringdown_fraction`` 0.2 figure must be what the backend reports."""
+    text = _PLACEMENT_PAGE.read_text(encoding="utf-8")
+    match = re.search(r"With `ringdown_fraction` 0\.2, 30\+25 at 20 Hz now leads by ([\d.]+) s", text)
+    assert match is not None, "the ringdown_fraction sentence is no longer on the page"
+    source = {"detector_frame_mass_1": 30.0, "detector_frame_mass_2": 25.0, "luminosity_distance": 1.0}
+    lead = LALSimulationBackend(ringdown_fraction=0.2).pre_coalescence_duration("IMRPhenomD", _FS, 20.0, **source)
+    assert float(match.group(1)) == pytest.approx(lead, abs=0.0005)
