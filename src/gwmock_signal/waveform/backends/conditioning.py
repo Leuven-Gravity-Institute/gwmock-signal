@@ -99,10 +99,11 @@ def inspiral_seconds(
 
     Spin is not included. Aligned spin lengthens the inspiral, but it enters at 1.5PN alongside the
     negative tail term, which outweighs it. Measured against the stationary-phase duration of
-    LALSimulation's IMRPhenomXAS on 420 cases -- primary masses 1.4, 3, 5, 10, 20 and 40 and
-    secondary masses 1.2, 1.4, 2 and 5 solar masses, equal aligned spins of 0, 0.5, 0.9 and 0.99
-    on both components, and cutoffs of 5, 7, 10, 15 and 20 Hz -- this estimate is an upper bound
-    in every case before any margin is added.
+    LALSimulation's IMRPhenomXAS on 420 cases, this estimate is an upper bound in every case
+    before any margin is added. The cases are primary masses 1.4, 3, 5, 10, 20 and 40 and
+    secondary masses 1.2, 1.4, 2 and 5 solar masses, keeping only pairs with the secondary no
+    heavier than the primary (21 of the 24), times equal aligned spins of 0, 0.5, 0.9 and 0.99 on
+    both components, times cutoffs of 5, 7, 10, 15 and 20 Hz: 21 x 4 x 5 = 420.
 
     Args:
         chirp_mass_solar: Detector-frame chirp mass(es) in solar masses.
