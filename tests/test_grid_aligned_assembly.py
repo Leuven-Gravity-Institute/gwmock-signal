@@ -1,10 +1,10 @@
 """Assembly must be exact when the batch is generated against an output lattice.
 
 The device projection is accurate to ~1e-12, but superposing its output onto a segment used
-to resample with a cubic spline whenever a signal started between samples — which, since
-coalescence times are continuous, is essentially always. Measured on a real IMRPhenomD signal
-the two paths differ by 18%, so the assembly step was setting the accuracy of the pipeline
-and discarding what the projection achieved.
+resampled a second time whenever a signal started between samples — which, since
+coalescence times are continuous, is essentially always. With the cubic spline that step once
+used, the two paths differed by 18% on a real IMRPhenomD signal, so the assembly step was
+setting the accuracy of the pipeline and discarding what the projection achieved.
 
 Generating against a :class:`~gwmock_signal.sampling_grid.SamplingGrid` folds the sub-sample
 offset into the shift the projection already applies, so superposition becomes an integer add.
@@ -21,7 +21,9 @@ jax = pytest.importorskip("jax", reason="jax not installed")
 jax.config.update("jax_enable_x64", True)
 pytest.importorskip("ripplegw", reason="ripple not installed")
 
+import gwmock_signal.injection.core as injection_core  # noqa: E402
 from gwmock_signal.jax_batch import assemble_segments, simulate_cbc_batch  # noqa: E402
+from gwmock_signal.projection.resampling import edge_padding  # noqa: E402
 from gwmock_signal.sampling_grid import SamplingGrid  # noqa: E402
 
 _FS = 2048.0
@@ -46,6 +48,19 @@ _OFF_LATTICE = np.array([_T0 + 20.3179, _T0 + 41.77123])
 
 def _grid() -> SamplingGrid:
     return SamplingGrid.from_segment_starts(np.array(_STARTS), _FS)
+
+
+def _count_assembly_resampling(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Count calls to the resampler assembly falls back on for an off-lattice signal."""
+    calls = [0]
+    resample = injection_core.resample_uniform_sinc
+
+    def counting(*args, **kwargs):
+        calls[0] += 1
+        return resample(*args, **kwargs)
+
+    monkeypatch.setattr(injection_core, "resample_uniform_sinc", counting)
+    return calls
 
 
 def _assembled(coa_time: np.ndarray, *, grid: SamplingGrid | None, earth_rotation: bool = True) -> np.ndarray:
@@ -78,16 +93,33 @@ def test_aligned_and_unaligned_agree_when_nothing_needs_resampling(earth_rotatio
     assert np.max(np.abs(aligned - unaligned)) < 1e-12 * scale
 
 
-def test_alignment_changes_the_result_when_coalescence_is_off_lattice() -> None:
-    """The fix must actually change the off-lattice case, or it is doing nothing.
+def test_off_lattice_paths_agree_away_from_buffer_edges() -> None:
+    """Resampling during assembly and aligning on the device must give the same signal.
 
-    The difference is the cubic resampling the aligned path removes; on a real IMRPhenomD
-    signal it is of order 10%, not a rounding detail.
+    Both now shift with a band-limited kernel, so they agree to the kernel's accuracy except
+    near each buffer's first and last sample, where the waveform is cut off with a step that the
+    two resamplers handle differently. An assembly step that snapped to a whole sample, or
+    resampled with a cubic, would differ by of order 10% across the whole signal.
     """
+    grid = _grid()
     unaligned = _assembled(_OFF_LATTICE, grid=None)
-    aligned = _assembled(_OFF_LATTICE, grid=_grid())
-    scale = max(np.max(np.abs(unaligned)), np.max(np.abs(aligned)))
-    assert np.max(np.abs(aligned - unaligned)) > 0.01 * scale
+    aligned = _assembled(_OFF_LATTICE, grid=grid)
+    parameters = dict(_BASE)
+    parameters["coa_time"] = _OFF_LATTICE
+    batch = simulate_cbc_batch(
+        "IMRPhenomD", ["E1"], sampling_frequency=_FS, minimum_frequency=_F_MIN, parameters=parameters, output_grid=grid
+    )
+    near_edge = np.zeros(aligned.size, dtype=bool)
+    # Either kernel can see a cut-off edge from up to the projection's own edge padding away:
+    # its half-width plus the largest geocentre delay the device shift adds to it.
+    half_width = edge_padding(_FS)
+    n_samples = batch.strain.shape[-1]
+    for start in batch.start_index:
+        for edge in (start, start + n_samples - 1):
+            near_edge[max(edge - half_width, 0) : edge + half_width + 1] = True
+    scale = np.max(np.abs(aligned))
+    assert scale > 0.0
+    assert np.max(np.abs(aligned - unaligned)[~near_edge]) <= 1e-9 * scale
 
 
 def test_aligned_batch_reports_lattice_indices() -> None:
@@ -149,12 +181,13 @@ def test_both_branches_report_alignment(earth_rotation: bool) -> None:
 
 
 @pytest.mark.parametrize("earth_rotation", [False, True])
-def test_alignment_changes_the_result_on_both_branches(earth_rotation: bool) -> None:
-    """Alignment must actually take effect on the static branch too, not only the rotating one."""
-    unaligned = _assembled(_OFF_LATTICE, grid=None, earth_rotation=earth_rotation)
-    aligned = _assembled(_OFF_LATTICE, grid=_grid(), earth_rotation=earth_rotation)
-    scale = max(np.max(np.abs(unaligned)), np.max(np.abs(aligned)))
-    assert np.max(np.abs(aligned - unaligned)) > 0.01 * scale
+def test_aligned_assembly_never_resamples(earth_rotation: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alignment must actually take effect on both branches: assembly is then an integer add."""
+    calls = _count_assembly_resampling(monkeypatch)
+    _assembled(_OFF_LATTICE, grid=_grid(), earth_rotation=earth_rotation)
+    assert calls[0] == 0
+    _assembled(_OFF_LATTICE, grid=None, earth_rotation=earth_rotation)
+    assert calls[0] > 0, "the unaligned path no longer resamples, so this test cannot discriminate"
 
 
 def test_overlap_uses_the_aligned_buffer_start() -> None:
@@ -184,11 +217,11 @@ def test_overlap_uses_the_aligned_buffer_start() -> None:
     assert len(segments) == len(_STARTS)
 
 
-def test_catalogue_aligns_by_default() -> None:
+def test_catalogue_aligns_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """The production entry point must use the grid, not just expose the option.
 
     It previously built its own segment starts and then called the primitive without a grid, so
-    the advertised path kept the cubic error.
+    the advertised path still resampled every signal during assembly.
     """
     from gwmock_signal.jax_batch import simulate_cbc_catalogue
 
@@ -202,13 +235,12 @@ def test_catalogue_aligns_by_default() -> None:
         "start_time": _T0,
         "end_time": _T0 + 2 * _SEGMENT,
     }
+    calls = _count_assembly_resampling(monkeypatch)
     aligned = simulate_cbc_catalogue("IMRPhenomD", ["E1"], **common)
-    legacy = simulate_cbc_catalogue("IMRPhenomD", ["E1"], align_to_output_grid=False, **common)
-    a = np.concatenate([s.to_dict()["E1"].value for s in aligned])
-    b = np.concatenate([s.to_dict()["E1"].value for s in legacy])
-    scale = max(np.max(np.abs(a)), np.max(np.abs(b)))
-    assert scale > 0.0
-    assert np.max(np.abs(a - b)) > 0.01 * scale, "default catalogue output is not aligned"
+    assert calls[0] == 0, "default catalogue output is not aligned"
+    assert max(np.max(np.abs(s.to_dict()["E1"].value)) for s in aligned) > 0.0
+    simulate_cbc_catalogue("IMRPhenomD", ["E1"], align_to_output_grid=False, **common)
+    assert calls[0] > 0, "the legacy path no longer resamples, so this test cannot discriminate"
 
 
 def test_catalogue_rejects_a_fractional_sample_segment() -> None:

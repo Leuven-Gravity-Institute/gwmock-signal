@@ -111,7 +111,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         typer.Option(
             "--interpolate-if-offset/--no-interpolate-if-offset",
             help=(
-                "Enable cubic interpolation when the injection start is not on a "
+                "Enable windowed-sinc resampling when the injection start is not on a "
                 "target-sample boundary. Use --no-interpolate-if-offset for strict "
                 "grid alignment (returns the background unchanged when off-grid)."
             ),

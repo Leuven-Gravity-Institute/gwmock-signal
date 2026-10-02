@@ -119,7 +119,7 @@ V1  rms=8.7621e-22  duration=16.0s
 | `--backend`                                              |        lal | Waveform engine: `lal` (LALSimulation, default), `pycbc`, or `ripple` |
 | `--seed`                                                 |   _(none)_ | Optional integer seed passed to `numpy.random.seed`                   |
 | `--earth-rotation` / `--no-earth-rotation`               |       true | Enable time-dependent antenna patterns (disable for short waveforms)  |
-| `--interpolate-if-offset` / `--no-interpolate-if-offset` |       true | Enable cubic resampling when injection is off-grid                    |
+| `--interpolate-if-offset` / `--no-interpolate-if-offset` |       true | Enable sinc resampling when injection is off-grid                     |
 
 ### Example
 

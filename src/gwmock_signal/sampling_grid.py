@@ -19,8 +19,8 @@ resample, and that resampling sets the accuracy of the whole pipeline.
 
 That is not hypothetical. Coalescence times are continuous, so a signal buffer starting at
 ``epoch + coa_time`` essentially never lands on the output lattice, and
-:func:`gwmock_signal.injection.inject_strain` then resamples with a cubic spline. Measured
-against an analytic reference, at a half-sample offset:
+:func:`gwmock_signal.injection.inject_strain` then has to resample. It once did so with a cubic
+spline, which measured against an analytic reference at a half-sample offset gave:
 
 | tone frequency | on-lattice | off-lattice |
 |---|---|---|
@@ -29,14 +29,15 @@ against an analytic reference, at a half-sample offset:
 | 0.8 x Nyquist | exact | 4.9e-1 |
 
 A cubic cannot represent 2.5 samples per cycle, so at high frequency the error approaches
-the signal itself. Meanwhile the device projection is accurate to ~1e-12, so without a shared
-lattice the assembly step throws that away.
+the signal itself. ``inject_strain`` now resamples with the same windowed-sinc kernel as the
+projection, but that is still a second resampling of a signal the device has already resampled
+once, and it costs a pass over every injected sample.
 
 The fix is to declare the lattice up front and have the *device* place each event on it. The
 device already resamples at ``t - tau(t)`` with a windowed-sinc kernel, so the fractional
-lattice offset folds into the shift it is already applying: one exact resampling instead of an
-exact one followed by a cubic one. Measured that way the alignment costs ~1e-12 across the
-band, and assembly becomes an integer add again.
+lattice offset folds into the shift it is already applying: one exact resampling instead of
+two. Measured that way the alignment costs ~1e-12 across the band, and assembly becomes an
+integer add again.
 
 This module holds only the lattice arithmetic and its validation, so it imports neither JAX
 nor GWpy and can be used from either side of the device boundary.
@@ -148,7 +149,7 @@ class SamplingGrid:
 
         Rejected rather than silently rounded: rounding would move a signal by up to half a
         sample without telling anyone, and silently accepting an off-lattice time is exactly
-        how the cubic-resampling error described in this module's docstring got in.
+        how the off-lattice resampling error described in this module's docstring got in.
 
         Args:
             gps_time: Time(s) that must coincide with lattice samples.

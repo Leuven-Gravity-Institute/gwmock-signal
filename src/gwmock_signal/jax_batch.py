@@ -981,8 +981,9 @@ def _superpose_on_lattice(
 
     Exact by construction: every signal already starts on the segment's own lattice, so this
     is a slice addition with no resampling. The alternative -- letting a signal land between
-    samples and interpolating -- reaches 12% error at half Nyquist and 49% at 0.8 Nyquist,
-    which would discard the accuracy the device projection was built for.
+    samples and resampling it during assembly -- costs a second pass over every signal; with
+    the cubic spline once used for it, it reached 12% error at half Nyquist and 49% at 0.8
+    Nyquist, discarding the accuracy the device projection was built for.
 
     Args:
         data: Accumulator for one segment and detector, shape ``(n_segment_samples,)``,
@@ -1082,9 +1083,9 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             occupy. Ignored when ``chunk_size`` is given.
         align_to_output_grid: Generate every batch on the lattice defined by this function's
             own segment starts, so superposition is an exact integer-offset add. Defaults to
-            ``True`` because the alternative resamples each signal with a cubic spline, which
-            reaches 12% error at half Nyquist. Set ``False`` only to reproduce that older
-            behaviour deliberately; it is a legacy mode, not a fallback.
+            ``True`` because the alternative resamples each already-projected signal a second
+            time during assembly. Set ``False`` only to reproduce that older behaviour
+            deliberately; it is a legacy mode, not a fallback.
         interpolate_if_offset: Forwarded to :func:`assemble_segments`.
 
     Returns:
