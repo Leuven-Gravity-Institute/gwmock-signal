@@ -313,16 +313,25 @@ class LALSimulationBackend(WaveformBackend):
             The buffer's sample count and the index coalescence sits on within it.
         """
         p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
-        chirp_mass = (p.mass1 * p.mass2) ** 0.6 / (p.mass1 + p.mass2) ** 0.2
-        n_samples = conditioning.segment_sample_count(
-            chirp_mass,
+        n_samples = self._segment_samples(p, sampling_frequency, minimum_frequency)
+        merger_index, _ = conditioning.coalescence_placement(n_samples, sampling_frequency, self._ringdown_fraction)
+        return n_samples, merger_index
+
+    def _segment_samples(self, p: _ResolvedParameters, sampling_frequency: float, minimum_frequency: float) -> int:
+        """Return the buffer length for resolved source parameters, as generation sizes it.
+
+        One call site for :func:`~gwmock_signal.waveform.backends.conditioning.segment_sample_count`,
+        so the duration queries and generation cannot pass it different mass parameters.
+        """
+        total_mass = p.mass1 + p.mass2
+        return conditioning.segment_sample_count(
+            (p.mass1 * p.mass2) ** 0.6 / total_mass**0.2,
             minimum_frequency,
             sampling_frequency,
+            eta=p.mass1 * p.mass2 / total_mass**2,
             ringdown_fraction=self._ringdown_fraction,
             segment_duration=self._segment_duration,
         )
-        merger_index, _ = conditioning.coalescence_placement(n_samples, sampling_frequency, self._ringdown_fraction)
-        return n_samples, merger_index
 
     def generate_td_waveform(
         self,
@@ -335,14 +344,7 @@ class LALSimulationBackend(WaveformBackend):
         """Generate plus/cross polarizations, conditioned from frequency to time domain."""
         p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
 
-        chirp_mass = (p.mass1 * p.mass2) ** 0.6 / (p.mass1 + p.mass2) ** 0.2
-        n_samples = conditioning.segment_sample_count(
-            chirp_mass,
-            minimum_frequency,
-            sampling_frequency,
-            ringdown_fraction=self._ringdown_fraction,
-            segment_duration=self._segment_duration,
-        )
+        n_samples = self._segment_samples(p, sampling_frequency, minimum_frequency)
         delta_f = sampling_frequency / n_samples
         f_max = sampling_frequency / 2.0
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency

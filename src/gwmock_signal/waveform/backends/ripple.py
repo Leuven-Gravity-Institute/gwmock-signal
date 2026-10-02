@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 if TYPE_CHECKING:
@@ -208,13 +209,6 @@ _SUPPORTED_APPROXIMANTS = _ALIGNED_SPIN_MODELS + _TIDAL_MODELS + _PRECESSING_MOD
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 _DEFAULT_RINGDOWN_FRACTION = 0.1
-#: Absolute headroom (seconds) added to the estimated inspiral duration.
-_SEGMENT_BUFFER_SECONDS = 2.0
-#: Floor on the segment length (seconds) for very short signals.
-_MIN_SEGMENT_SECONDS = 1.0
-
-#: Largest physical symmetric mass ratio, attained at equal masses.
-_MAXIMUM_ETA = 0.25
 
 #: Width of the amplitude taper below ``minimum_frequency``, as a fraction of it.
 #:
@@ -234,48 +228,6 @@ _MAXIMUM_ETA = 0.25
 #: 0.02 a 30+28 binary improves only 16x, against 63x at 0.05 and 259x at 0.10. Lighter systems
 #: saturate by 0.02, so the wider default costs them nothing but buffer.
 _DEFAULT_TAPER_FRACTION = 0.05
-
-#: Minimum fractional headroom beyond the 1PN chirp time.
-#:
-#: A *proportional* margin, because the omitted terms scale with the duration. The flat
-#: :data:`_SEGMENT_BUFFER_SECONDS` alone left only 2.8% of headroom for a 10+1.4 system at 10 Hz,
-#: less than the 4.9% the 1PN term contributes there, and that case wrapped its inspiral around the
-#: buffer -- measurably, at 1.8% of peak amplitude in the region after the ringdown.
-#:
-#: This is a *floor*, not the whole margin -- see :func:`_inspiral_margin`. A fixed fraction would
-#: be indefensible wherever the PN series stops converging, and nothing here restricts callers to
-#: the regime where it does: a 60+3 binary at 512 Hz is accepted, and its expansion parameter is
-#: already about 0.79.
-_INSPIRAL_SAFETY_FRACTION = 0.10
-
-
-def _inspiral_margin(relative_correction: np.ndarray | float) -> np.ndarray | float:
-    """Return the fractional headroom to add to the 1PN duration estimate, per event.
-
-    At least :data:`_INSPIRAL_SAFETY_FRACTION`, and never smaller than the 1PN term itself.
-
-    The 1PN term is the last one *retained*. While the series converges the next term is smaller
-    than it, so the 10% floor covers what is omitted. Where the term is large the series is not
-    converging and the omitted terms are the same order as the one kept, so the margin has to grow
-    with it. That makes the headroom self-scaling rather than resting on an unstated assumption
-    about which masses and frequencies a caller will choose.
-
-    Elementwise, so each event is sized against its own correction. Reducing to a single margin
-    would apply one event's correction to another's duration, and the correction grows with total
-    mass.
-
-    Args:
-        relative_correction: The 1PN term relative to the 0PN one, from :func:`_inspiral_seconds`.
-
-    Returns:
-        The fractional margin(s), broadcast over the input: a plain ``float`` for a scalar or 0-d
-        input, an array otherwise. Scalar input returns a ``float`` so callers can format the value
-        into a message; a bare ndarray raises ``TypeError`` on ``:.1%``, which is a poor way to
-        discover the return type.
-    """
-    margin = np.maximum(_INSPIRAL_SAFETY_FRACTION, np.asarray(relative_correction, dtype=float))
-    return float(margin) if margin.ndim == 0 else margin
-
 
 #: Prime factors an FFT length may contain. Transform libraries are efficient for 5-smooth sizes,
 #: of which a power of two is one needlessly strict special case.
@@ -340,62 +292,6 @@ def _cutoff_window(
     low = minimum_frequency / (1.0 + taper_fraction)
     ramp = array_module.clip((frequencies - low) / (minimum_frequency - low), 0.0, 1.0)
     return array_module.where(frequencies < low, 0.0, 0.5 * (1.0 - array_module.cos(array_module.pi * ramp)))
-
-
-def _inspiral_seconds(
-    chirp_mass_solar: np.ndarray | float,
-    eta: np.ndarray | float,
-    minimum_frequency: float,
-    mtsun: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return the inspiral duration from *minimum_frequency* to coalescence, and the 1PN term.
-
-    The leading-order (Newtonian) chirp time with its 1PN correction,
-    ``tau0 * (1 + (743/252 + 11 eta/3) (pi M f)^(2/3))``. That correction is *positive*, so the 0PN
-    term alone always underestimates the duration, which is why it cannot size a buffer by itself.
-
-    Args:
-        chirp_mass_solar: Detector-frame chirp mass(es) in solar masses.
-        eta: Symmetric mass ratio(es), ``m1 m2 / (m1 + m2)^2``, in ``(0, 0.25]``.
-        minimum_frequency: Low-frequency cutoff in Hz.
-        mtsun: Solar mass in seconds, passed in from ``ripplegw.constants`` so this module does not
-            keep a second copy of a physical constant.
-
-    Returns:
-        ``(duration, relative_correction)``, both broadcast over the inputs. The second is the
-        1PN term's size relative to the 0PN one, which the caller needs: it is the last *retained*
-        term, so where it is not small the omitted terms are not small either and a fixed margin
-        would be meaningless.
-
-    Raises:
-        ValueError: If any mass or ratio is non-finite, non-positive, or outside ``(0, 0.25]``, or
-            if ``minimum_frequency`` is not positive and finite.
-    """
-    chirp_mass_solar = np.asarray(chirp_mass_solar, dtype=float)
-    eta = np.asarray(eta, dtype=float)
-    # Rejected here, where the message can name the cause. `np.all`/`np.any` are vacuously true on
-    # an empty array, so the checks below would pass and the caller would instead see numpy's
-    # "zero-size array reduction has no identity" from the max in _segment_samples.
-    if chirp_mass_solar.size == 0 or eta.size == 0:
-        raise ValueError("chirp_mass_solar and eta must be non-empty; a grid cannot be sized for no events.")
-    if not np.isfinite(minimum_frequency) or minimum_frequency <= 0.0:
-        raise ValueError(f"minimum_frequency must be positive and finite; got {minimum_frequency}.")
-    if not np.all(np.isfinite(chirp_mass_solar)) or np.any(chirp_mass_solar <= 0.0):
-        raise ValueError("chirp_mass_solar must be positive and finite.")
-    # eta > 0.25 is unphysical (0.25 is the equal-mass maximum); without this a bad value produces a
-    # plausible-looking duration rather than an error.
-    if not np.all(np.isfinite(eta)) or np.any(eta <= 0.0) or np.any(eta > _MAXIMUM_ETA):
-        raise ValueError(f"eta must be finite and in (0, {_MAXIMUM_ETA}].")
-
-    chirp_mass_seconds = chirp_mass_solar * mtsun
-    tau0 = (5.0 / 256.0) * (np.pi * minimum_frequency) ** (-8.0 / 3.0) * chirp_mass_seconds ** (-5.0 / 3.0)
-    # M = Mc * eta^(-3/5): at fixed chirp mass a more asymmetric binary is heavier and so carries a
-    # larger 1PN correction. That is why eta cannot be assumed equal-mass here, and why the
-    # lightest chirp mass in a batch is not necessarily its longest inspiral.
-    total_mass_seconds = chirp_mass_seconds * eta ** (-3.0 / 5.0)
-    x = (np.pi * total_mass_seconds * minimum_frequency) ** (2.0 / 3.0)
-    relative_correction = (743.0 / 252.0 + 11.0 * eta / 3.0) * x
-    return tau0 * (1.0 + relative_correction), relative_correction
 
 
 #: Distinct batched-kernel configurations kept compiled. Each entry holds one XLA
@@ -1035,8 +931,9 @@ class RippleBackend(WaveformBackend):
     ) -> int:
         """Return an even sample count whose duration contains the longest inspiral given.
 
-        Sized from the 1PN chirp time (:func:`_inspiral_seconds`) plus a proportional margin, then
-        rounded up to a power of two seconds.
+        Sized from :func:`~gwmock_signal.waveform.backends.conditioning.inspiral_requirement_seconds`
+        -- the 1PN chirp time plus a proportional margin, the estimate the LAL and gwsignal backends
+        share -- then rounded up to a 5-smooth sample count.
 
         Previously the estimate was the *0PN* chirp time with a flat 2 s pad, which left the real
         safety margin to be whatever the power-of-two rounding happened to supply -- between 2.8%
@@ -1060,32 +957,24 @@ class RippleBackend(WaveformBackend):
                 this sizing exists to prevent.
 
         Returns:
-            An even sample count, a power of two in duration.
+            An even, 5-smooth sample count.
         """
         if self._segment_duration is not None:
             seconds = self._segment_duration
         else:
             # From where the signal actually starts, not from the requested cutoff: the taper puts
             # real content below it, which lengthens the inspiral.
-            inspiral, relative_correction = _inspiral_seconds(
+            # Each event gets *its own* margin, and the maximum is taken over the resulting
+            # requirements -- see inspiral_requirement_seconds. This also keeps the invariant that a
+            # batch sizes to the same grid as the single-event call for whichever event dominates.
+            required = conditioning.inspiral_requirement_seconds(
                 chirp_mass_solar,
                 eta,
                 self.signal_start_frequency(minimum_frequency),
                 float(self._constants.MTSUN),
             )
-            # Each event gets *its own* margin, and the maximum is taken over the resulting
-            # requirements. Taking max(duration) and max(margin) separately would apply one event's
-            # 1PN correction to another event's duration -- and since the correction grows with total
-            # mass, a heavy short event would inflate the grid chosen for a light long one. That is
-            # conservative rather than unsafe, but it makes the batch grid depend on events that do
-            # not set it, and it broke the invariant that a batch sizes to the same grid as the
-            # single-event call for whichever event dominates.
-            required = (
-                np.asarray(inspiral, dtype=float) * (1.0 + _inspiral_margin(relative_correction))
-                + _SEGMENT_BUFFER_SECONDS
-            )
             inspiral_room = 1.0 - self._ringdown_fraction
-            seconds = max(float(np.max(required)) / inspiral_room, _MIN_SEGMENT_SECONDS)
+            seconds = max(float(np.max(required)) / inspiral_room, conditioning.MIN_SEGMENT_SECONDS)
         # Rounded up to the next 5-smooth length, not to a power of two.
         #
         # The margin still governs accuracy as well as safety -- ringing at the inspiral onset bleeds
