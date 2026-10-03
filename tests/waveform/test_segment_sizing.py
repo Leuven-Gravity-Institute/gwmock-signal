@@ -19,12 +19,12 @@ import pytest
 pytest.importorskip("jax", reason="jax not installed")
 pytest.importorskip("ripplegw", reason="ripple not installed")
 
-from gwmock_signal.waveform.backends.ripple import (
-    _INSPIRAL_SAFETY_FRACTION,
-    RippleBackend,
-    _inspiral_margin,
-    _inspiral_seconds,
+from gwmock_signal.waveform.backends.conditioning import (
+    INSPIRAL_SAFETY_FRACTION,
+    inspiral_margin,
+    inspiral_seconds,
 )
+from gwmock_signal.waveform.backends.ripple import RippleBackend
 
 _FS = 2048.0
 
@@ -58,7 +58,7 @@ def test_the_1pn_estimate_always_exceeds_the_newtonian_one() -> None:
     for mass1, mass2, f_min in _CASES:
         chirp_mass, eta = _chirp_mass_and_eta(mass1, mass2)
         newtonian = _newtonian_seconds(chirp_mass, f_min, mtsun)
-        corrected = float(_inspiral_seconds(chirp_mass, eta, f_min, mtsun)[0])
+        corrected = float(inspiral_seconds(chirp_mass, eta, f_min, mtsun)[0])
         assert corrected > newtonian, f"{mass1}+{mass2} at {f_min} Hz: 1PN estimate is not longer"
 
 
@@ -71,8 +71,8 @@ def test_duration_depends_on_mass_ratio_at_fixed_chirp_mass() -> None:
     """
     backend = RippleBackend()
     mtsun = float(backend._constants.MTSUN)
-    equal = float(_inspiral_seconds(3.0, 0.25, 10.0, mtsun)[0])
-    asymmetric = float(_inspiral_seconds(3.0, 0.10, 10.0, mtsun)[0])
+    equal = float(inspiral_seconds(3.0, 0.25, 10.0, mtsun)[0])
+    asymmetric = float(inspiral_seconds(3.0, 0.10, 10.0, mtsun)[0])
     assert asymmetric > equal, "the asymmetric binary is not longer at equal chirp mass"
 
 
@@ -92,8 +92,8 @@ def test_a_heavier_but_more_asymmetric_binary_can_be_the_longest() -> None:
     lighter = (2.18, 0.25)
     heavier = (2.18 * 1.005, 0.10)
 
-    lighter_seconds = float(_inspiral_seconds(*lighter, f_min, mtsun)[0])
-    heavier_seconds = float(_inspiral_seconds(*heavier, f_min, mtsun)[0])
+    lighter_seconds = float(inspiral_seconds(*lighter, f_min, mtsun)[0])
+    heavier_seconds = float(inspiral_seconds(*heavier, f_min, mtsun)[0])
     assert heavier[0] > lighter[0], "test premise broken: the second event is not the heavier one"
     assert heavier_seconds > lighter_seconds, (
         "test premise broken: the heavier binary is not the longer one, so this cannot distinguish "
@@ -120,13 +120,13 @@ def test_every_buffer_holds_its_inspiral_with_the_stated_margin(mass1: float, ma
     backend = RippleBackend()
     mtsun = float(backend._constants.MTSUN)
     chirp_mass, eta = _chirp_mass_and_eta(mass1, mass2)
-    inspiral, relative_correction = _inspiral_seconds(chirp_mass, eta, f_min, mtsun)
+    inspiral, relative_correction = inspiral_seconds(chirp_mass, eta, f_min, mtsun)
     inspiral = float(inspiral)
 
     n_samples = backend._segment_samples(chirp_mass, f_min, _FS, eta=eta)
     room = (1.0 - backend._ringdown_fraction) * n_samples / _FS
     margin = room / inspiral - 1.0
-    promised = _inspiral_margin(relative_correction)
+    promised = inspiral_margin(relative_correction)
     assert margin >= promised, (
         f"{mass1}+{mass2} at {f_min} Hz has {margin:.1%} of room over a {inspiral:.1f} s inspiral, "
         f"below the {promised:.1%} the sizing promises for a 1PN term of "
@@ -194,12 +194,12 @@ def test_the_margin_grows_with_the_1pn_term_when_the_series_stops_converging() -
     mtsun = float(backend._constants.MTSUN)
     chirp_mass, eta = _chirp_mass_and_eta(60.0, 3.0)
 
-    _, gentle = _inspiral_seconds(chirp_mass, eta, 10.0, mtsun)
-    _, severe = _inspiral_seconds(chirp_mass, eta, 512.0, mtsun)
+    _, gentle = inspiral_seconds(chirp_mass, eta, 10.0, mtsun)
+    _, severe = inspiral_seconds(chirp_mass, eta, 512.0, mtsun)
     assert float(severe) > float(gentle), "test premise broken: the higher cutoff is not the harder case"
 
-    assert _inspiral_margin(gentle) >= _INSPIRAL_SAFETY_FRACTION
-    assert _inspiral_margin(severe) >= float(severe), (
+    assert inspiral_margin(gentle) >= INSPIRAL_SAFETY_FRACTION
+    assert inspiral_margin(severe) >= float(severe), (
         "where the 1PN term is large the margin must be at least as large as it, since the omitted "
         "terms are then the same order"
     )
@@ -225,7 +225,7 @@ def test_unphysical_inputs_are_rejected(chirp_mass: float, eta: float) -> None:
     """
     backend = RippleBackend()
     with pytest.raises(ValueError, match="must be"):
-        _inspiral_seconds(chirp_mass, eta, 10.0, float(backend._constants.MTSUN))
+        inspiral_seconds(chirp_mass, eta, 10.0, float(backend._constants.MTSUN))
 
 
 @pytest.mark.parametrize("minimum_frequency", [0.0, -10.0, float("nan"), float("inf")])
@@ -233,7 +233,7 @@ def test_an_invalid_cutoff_frequency_is_rejected(minimum_frequency: float) -> No
     """A non-positive or non-finite cutoff cannot define a chirp time."""
     backend = RippleBackend()
     with pytest.raises(ValueError, match="minimum_frequency"):
-        _inspiral_seconds(1.2, 0.25, minimum_frequency, float(backend._constants.MTSUN))
+        inspiral_seconds(1.2, 0.25, minimum_frequency, float(backend._constants.MTSUN))
 
 
 def test_the_mass_ratio_must_be_supplied() -> None:
@@ -260,7 +260,7 @@ def test_an_empty_batch_is_rejected_with_a_specific_message() -> None:
     mtsun = float(backend._constants.MTSUN)
     empty = np.array([])
     with pytest.raises(ValueError, match="non-empty"):
-        _inspiral_seconds(empty, empty, 10.0, mtsun)
+        inspiral_seconds(empty, empty, 10.0, mtsun)
     with pytest.raises(ValueError, match="non-empty"):
         backend._segment_samples(empty, 10.0, _FS, eta=empty)
 

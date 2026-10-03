@@ -22,12 +22,14 @@ import pytest
 pytest.importorskip("jax", reason="jax not installed")
 pytest.importorskip("ripplegw", reason="ripple not installed")
 
+from gwmock_signal.waveform.backends.conditioning import (
+    INSPIRAL_SAFETY_FRACTION,
+    inspiral_margin,
+    inspiral_seconds,
+)
 from gwmock_signal.waveform.backends.ripple import (
     _DEFAULT_TAPER_FRACTION,
-    _INSPIRAL_SAFETY_FRACTION,
     RippleBackend,
-    _inspiral_margin,
-    _inspiral_seconds,
     _next_smooth_even,
 )
 
@@ -179,13 +181,13 @@ def test_the_buffer_is_sized_from_the_signal_start_not_the_cutoff(mass1: float, 
     chirp_mass = (mass1 * mass2) ** 0.6 / (mass1 + mass2) ** 0.2
     eta = mass1 * mass2 / (mass1 + mass2) ** 2
 
-    inspiral, correction = _inspiral_seconds(chirp_mass, eta, backend.signal_start_frequency(f_min), mtsun)
+    inspiral, correction = inspiral_seconds(chirp_mass, eta, backend.signal_start_frequency(f_min), mtsun)
     n_samples = backend._segment_samples(chirp_mass, f_min, _FS, eta=eta)
     room = (1.0 - backend._ringdown_fraction) * n_samples / _FS
     margin = room / float(inspiral) - 1.0
-    assert margin >= _inspiral_margin(correction), (
+    assert margin >= inspiral_margin(correction), (
         f"{mass1}+{mass2} at {f_min} Hz has {margin:.1%} of room over the tapered inspiral, below "
-        f"the {_inspiral_margin(correction):.1%} promised"
+        f"the {inspiral_margin(correction):.1%} promised"
     )
 
 
@@ -277,18 +279,18 @@ def test_the_margin_is_a_float_for_scalar_input() -> None:
     on ``:.1%``, which is a poor way to discover a return type. The vectorised form is what the batch
     sizing needs, so both are supported explicitly rather than by accident.
     """
-    scalar = _inspiral_margin(0.02)
+    scalar = inspiral_margin(0.02)
     assert isinstance(scalar, float)
     # Formatting is the point: a 0-d ndarray raises TypeError here. Asserting the rendered value
     # rather than its truthiness, since a non-empty string is true regardless.
-    assert f"{scalar:.1%}" == f"{_INSPIRAL_SAFETY_FRACTION:.1%}"
+    assert f"{scalar:.1%}" == f"{INSPIRAL_SAFETY_FRACTION:.1%}"
 
-    zero_dimensional = _inspiral_margin(np.asarray(0.02))
+    zero_dimensional = inspiral_margin(np.asarray(0.02))
     assert isinstance(zero_dimensional, float)
 
-    batched = _inspiral_margin(np.array([0.02, 0.30, 0.05]))
+    batched = inspiral_margin(np.array([0.02, 0.30, 0.05]))
     assert isinstance(batched, np.ndarray)
     # Elementwise: the floor applies per event, and one event's large correction is not shared with
-    # the others. Written against _INSPIRAL_SAFETY_FRACTION rather than the literal, so the test
+    # the others. Written against INSPIRAL_SAFETY_FRACTION rather than the literal, so the test
     # follows the constant rather than restating a value that happens to match it today.
-    assert batched.tolist() == pytest.approx([_INSPIRAL_SAFETY_FRACTION, 0.30, _INSPIRAL_SAFETY_FRACTION])
+    assert batched.tolist() == pytest.approx([INSPIRAL_SAFETY_FRACTION, 0.30, INSPIRAL_SAFETY_FRACTION])

@@ -312,7 +312,7 @@ def test_lal_fd_td_roundtrip() -> None:
     # Reconstruct LAL's FD template on the same grid the backend used.
     m1, m2 = _CONVENTION_SOURCE["detector_frame_mass_1"], _CONVENTION_SOURCE["detector_frame_mass_2"]
     chirp_mass = (m1 * m2) ** 0.6 / (m1 + m2) ** 0.2
-    n_samples = conditioning.segment_sample_count(chirp_mass, _F_MIN, _FS)
+    n_samples = conditioning.segment_sample_count(chirp_mass, _F_MIN, _FS, eta=m1 * m2 / (m1 + m2) ** 2)
     delta_f = _FS / n_samples
     hp_fd, _ = lalsimulation.SimInspiralChooseFDWaveform(
         m1 * lal.MSUN_SI,

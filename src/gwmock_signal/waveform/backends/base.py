@@ -90,8 +90,8 @@ class WaveformBackend(ABC):
 
         **This is where the buffer starts, not where audible signal begins.** The buffer carries
         headroom beyond the estimated chirp time and is rounded up, so the first samples are
-        near-silent: a 30+25 solar-mass binary reports 3.6 s while carrying roughly 1.1 s of
-        inspiral. That is the safe direction for choosing a segment -- placing from this value
+        near-silent: on the LAL backend at 20 Hz a 30+25 solar-mass binary reports 7.2 s while
+        carrying roughly 1.1 s of inspiral. That is the safe direction for choosing a segment -- placing from this value
         never crops real signal -- but it is not a statement about signal duration.
 
         Returns:

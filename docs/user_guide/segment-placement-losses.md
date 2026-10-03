@@ -21,6 +21,29 @@ every one of them moves by **orders of magnitude** with three things:
 A percentage quoted without all three is not interpretable. The tables therefore
 name them, and so should anything that cites the tables.
 
+<!-- prettier-ignore-start -->
+!!! note "Measured under the previous LAL sizing"
+    The LAL figures on this page were measured when the LAL and gwsignal backends
+    sized their buffer from the 0PN chirp time plus a flat 2 s. They now use the
+    1PN chirp time with a proportional margin, the estimate the ripple backend
+    uses, so some of these buffers are one power of two longer. At 1024 Hz:
+
+    | binary   | cutoff | lead, then | lead, now | buffer, then | buffer, now |
+    | -------- | ------ | ---------- | --------- | ------------ | ----------- |
+    | 30+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
+    | 25+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
+    | 1.4+1.35 | 30 Hz  | 57.6 s     | 115.2 s   | 64 s         | 128 s       |
+    | 2.0+1.5  | 20 Hz  | 115.2 s    | 230.4 s   | 128 s        | 256 s       |
+
+    With `ringdown_fraction` 0.2, 30+25 at 20 Hz now leads by 6.400 s. Every
+    other LAL buffer quoted below is unchanged, so for 30+25 and 25+25 the
+    20-to-30 Hz difference now moves the geometry as well as the content.
+
+    The h² fractions below were not re-measured, and nothing on this page bounds
+    how far the longer buffers move them. Read them as figures for the previous
+    sizing, not for the current one.
+<!-- prettier-ignore-end -->
+
 ## A 30+25 solar-mass binary on LAL
 
 IMRPhenomD, 1024 Hz, into a single detector (H1), `coa_time` 0.5 s past a
