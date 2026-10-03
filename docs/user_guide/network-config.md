@@ -204,7 +204,10 @@ net = Network.from_detectors([detector], name="Migrated Site")
 ```
 
 Then save the equivalent YAML with `Network.from_file` so you can drop the
-`.interferometer` file:
+`.interferometer` file. Bilby measures arm azimuths in degrees North of East,
+whereas the YAML format follows LAL and measures them clockwise from North, so
+convert each azimuth as `(90 - azimuth) mod 360`. A legacy file with
+`xarm_azimuth = 70.0` and `yarm_azimuth = 160.0` becomes:
 
 ```yaml
 name: Migrated Site
@@ -213,8 +216,8 @@ detectors:
       latitude_deg: 40.0
       longitude_deg: 9.0
       elevation_m: 50.0
-      xarm_azimuth_deg: 70.0
-      yarm_azimuth_deg: 130.0
+      xarm_azimuth_deg: 20.0
+      yarm_azimuth_deg: 290.0
 ```
 
 ---
