@@ -26,23 +26,23 @@ directly.
 
 Each **detector object** is a mapping:
 
-| Key                | Type     | Required | Description                                 |
-| ------------------ | -------- | -------- | ------------------------------------------- |
-| `name`             | `string` | Yes      | Detector identifier (e.g. `"H1"`, `"ET1"`). |
-| `prefix`           | `string` | No       | Two-character LAL prefix (auto-generated).  |
-| `latitude_deg`     | `float`  | \*       | Geodetic latitude in degrees.               |
-| `latitude_rad`     | `float`  | \*       | Geodetic latitude in radians.               |
-| `longitude_deg`    | `float`  | \*       | Geodetic longitude in degrees.              |
-| `longitude_rad`    | `float`  | \*       | Geodetic longitude in radians.              |
-| `elevation_m`      | `float`  | \*       | Elevation above WGS-84 ellipsoid in metres. |
-| `xarm_azimuth_deg` | `float`  | \*       | X-arm azimuth in degrees.                   |
-| `xarm_azimuth_rad` | `float`  | \*       | X-arm azimuth in radians.                   |
-| `yarm_azimuth_deg` | `float`  | \*       | Y-arm azimuth in degrees.                   |
-| `yarm_azimuth_rad` | `float`  | \*       | Y-arm azimuth in radians.                   |
-| `xarm_tilt_deg`    | `float`  | No       | X-arm tilt in degrees (default `0.0`).      |
-| `xarm_tilt_rad`    | `float`  | No       | X-arm tilt in radians (default `0.0`).      |
-| `yarm_tilt_deg`    | `float`  | No       | Y-arm tilt in degrees (default `0.0`).      |
-| `yarm_tilt_rad`    | `float`  | No       | Y-arm tilt in radians (default `0.0`).      |
+| Key                | Type     | Required | Description                                                      |
+| ------------------ | -------- | -------- | ---------------------------------------------------------------- |
+| `name`             | `string` | Yes      | Detector identifier (e.g. `"H1"`, `"ET1"`).                      |
+| `prefix`           | `string` | No       | Two-character LAL prefix (auto-generated).                       |
+| `latitude_deg`     | `float`  | \*       | Geodetic latitude in degrees.                                    |
+| `latitude_rad`     | `float`  | \*       | Geodetic latitude in radians.                                    |
+| `longitude_deg`    | `float`  | \*       | Geodetic longitude in degrees.                                   |
+| `longitude_rad`    | `float`  | \*       | Geodetic longitude in radians.                                   |
+| `elevation_m`      | `float`  | \*       | Elevation above WGS-84 ellipsoid in metres.                      |
+| `xarm_azimuth_deg` | `float`  | \*       | X-arm azimuth in degrees, clockwise from North (LAL convention). |
+| `xarm_azimuth_rad` | `float`  | \*       | X-arm azimuth in radians, clockwise from North (LAL convention). |
+| `yarm_azimuth_deg` | `float`  | \*       | Y-arm azimuth in degrees, clockwise from North (LAL convention). |
+| `yarm_azimuth_rad` | `float`  | \*       | Y-arm azimuth in radians, clockwise from North (LAL convention). |
+| `xarm_tilt_deg`    | `float`  | No       | X-arm tilt in degrees (default `0.0`).                           |
+| `xarm_tilt_rad`    | `float`  | No       | X-arm tilt in radians (default `0.0`).                           |
+| `yarm_tilt_deg`    | `float`  | No       | Y-arm tilt in degrees (default `0.0`).                           |
+| `yarm_tilt_rad`    | `float`  | No       | Y-arm tilt in radians (default `0.0`).                           |
 
 \* **Required only when defining a custom geometry.** If none of the geometry
 keys are present the entry is treated as a built-in LAL detector code and the
@@ -193,7 +193,10 @@ net = Network.from_preset("ET-Triangle-Sardinia")
 ## `.interferometer` migration
 
 Legacy Bilby `.interferometer` files are **deprecated** and will be removed in a
-future major release. Use `interferometer_config_to_custom_detector` to migrate:
+future major release. Bilby measures arm azimuths in degrees North of East
+(counter-clockwise from East), whereas the YAML format follows LAL and measures
+them clockwise from North. Use `interferometer_config_to_custom_detector` to
+migrate:
 
 ```python
 from gwmock_signal.io import interferometer_config_to_custom_detector

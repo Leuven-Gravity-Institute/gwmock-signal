@@ -29,8 +29,8 @@ ground-based interferometer:
 | `latitude_rad`     | `float` | radians | `[-pi/2, pi/2]`      | Geodetic latitude of the vertex.                                  |
 | `longitude_rad`    | `float` | radians | `[-pi, pi]`          | Geodetic longitude of the vertex.                                 |
 | `elevation_m`      | `float` | metres  | `[-1e4, 1e5]`        | Vertex elevation above WGS-84 ellipsoid.                          |
-| `xarm_azimuth_rad` | `float` | radians | finite               | X-arm azimuth measured from geodetic North.                       |
-| `yarm_azimuth_rad` | `float` | radians | finite               | Y-arm azimuth measured from geodetic North.                       |
+| `xarm_azimuth_rad` | `float` | radians | finite               | X-arm azimuth, clockwise from geodetic North (LAL convention).    |
+| `yarm_azimuth_rad` | `float` | radians | finite               | Y-arm azimuth, clockwise from geodetic North (LAL convention).    |
 | `xarm_tilt_rad`    | `float` | radians | finite (default `0`) | X-arm altitude above local horizon.                               |
 | `yarm_tilt_rad`    | `float` | radians | finite (default `0`) | Y-arm altitude above local horizon.                               |
 
