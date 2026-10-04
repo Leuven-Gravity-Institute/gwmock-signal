@@ -7,6 +7,7 @@ import warnings
 from ast import literal_eval
 from pathlib import Path
 
+import lal
 import pytest
 
 from gwmock_signal.detector import CustomDetector
@@ -49,10 +50,24 @@ def test_interferometer_config_to_custom_detector_matches_golden_fixture(fixture
     assert detector.latitude_rad == pytest.approx(math.radians(float(expected["latitude"])))
     assert detector.longitude_rad == pytest.approx(math.radians(float(expected["longitude"])))
     assert detector.elevation_m == pytest.approx(float(expected["elevation"]))
-    assert detector.xarm_azimuth_rad == pytest.approx(math.radians(float(expected["xarm_azimuth"])))
-    assert detector.yarm_azimuth_rad == pytest.approx(math.radians(float(expected["yarm_azimuth"])))
+    # Bilby azimuths are North of East; CustomDetector follows LAL (clockwise from North).
+    assert detector.xarm_azimuth_rad == pytest.approx(math.radians((90.0 - float(expected["xarm_azimuth"])) % 360.0))
+    assert detector.yarm_azimuth_rad == pytest.approx(math.radians((90.0 - float(expected["yarm_azimuth"])) % 360.0))
     assert detector.xarm_tilt_rad == pytest.approx(float(expected["xarm_tilt"]))
     assert detector.yarm_tilt_rad == pytest.approx(float(expected["yarm_tilt"]))
+
+
+def test_interferometer_x_arm_matches_virgo_reference() -> None:
+    """The 2L Sardinia x-arm has the azimuth of LAL's V1 x-arm, as its fixture states."""
+    fixture_path = _FIXTURE_DIR / "E1_2L_Aligned_Sardinia.interferometer"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        detector = interferometer_config_to_custom_detector(fixture_path)
+
+    virgo_azimuth = lal.cached_detector_by_prefix["V1"].frDetector.xArmAzimuthRadians
+    assert detector.xarm_azimuth_rad == pytest.approx(virgo_azimuth, abs=1e-9)
+    assert detector.yarm_azimuth_rad == pytest.approx(virgo_azimuth + math.pi / 2, abs=1e-9)
 
 
 def test_read_interferometer_config_ignores_psd_line() -> None:

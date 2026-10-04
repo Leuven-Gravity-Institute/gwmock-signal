@@ -92,8 +92,21 @@ def _required_float(mapping: dict[str, Any], key: str) -> float:
         raise ValueError(f"Missing required field {key!r} in .interferometer config.") from exc
 
 
+def _bilby_azimuth_to_lal_rad(azimuth_deg: float) -> float:
+    """Convert a Bilby arm azimuth to LAL's convention, in radians.
+
+    Bilby measures arm azimuths in degrees North of East (counter-clockwise from East), whereas
+    :class:`CustomDetector` follows LAL and measures them clockwise from North.
+    """
+    return math.radians((90.0 - azimuth_deg) % 360.0)
+
+
 def interferometer_config_to_custom_detector(config_file: str | Path, encoding: str = "utf-8"):
-    """Convert one ``.interferometer`` file into a :class:`CustomDetector`."""
+    """Convert one ``.interferometer`` file into a :class:`CustomDetector`.
+
+    Arm azimuths are converted from Bilby's convention (degrees North of East) to LAL's
+    (clockwise from North), so the detector arms keep their physical orientation.
+    """
     from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
 
     resolved_config_file = resolve_interferometer_config_path(config_file)
@@ -110,8 +123,8 @@ def interferometer_config_to_custom_detector(config_file: str | Path, encoding: 
         latitude_rad=math.radians(_required_float(bilby_params, "latitude")),
         longitude_rad=math.radians(_required_float(bilby_params, "longitude")),
         elevation_m=_required_float(bilby_params, "elevation"),
-        xarm_azimuth_rad=math.radians(_required_float(bilby_params, "xarm_azimuth")),
-        yarm_azimuth_rad=math.radians(_required_float(bilby_params, "yarm_azimuth")),
+        xarm_azimuth_rad=_bilby_azimuth_to_lal_rad(_required_float(bilby_params, "xarm_azimuth")),
+        yarm_azimuth_rad=_bilby_azimuth_to_lal_rad(_required_float(bilby_params, "yarm_azimuth")),
         xarm_tilt_rad=float(bilby_params.get("xarm_tilt", 0.0)),
         yarm_tilt_rad=float(bilby_params.get("yarm_tilt", 0.0)),
     )
