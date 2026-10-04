@@ -76,10 +76,10 @@ class CustomDetector:
             Must be in ``[-pi, pi]``.
         elevation_m: Vertex elevation above the WGS-84 ellipsoid in metres.
             Must be in ``[-1e4, 1e5]``.
-        xarm_azimuth_rad: Azimuthal angle of the x-arm measured from
-            geodetic North in radians.
-        yarm_azimuth_rad: Azimuthal angle of the y-arm measured from
-            geodetic North in radians.
+        xarm_azimuth_rad: Azimuthal angle of the x-arm measured
+            clockwise from geodetic North (LAL convention) in radians.
+        yarm_azimuth_rad: Azimuthal angle of the y-arm measured
+            clockwise from geodetic North (LAL convention) in radians.
         xarm_tilt_rad: Altitude angle of the x-arm above the local
             horizon in radians.  Defaults to ``0.0``.
         yarm_tilt_rad: Altitude angle of the y-arm above the local
