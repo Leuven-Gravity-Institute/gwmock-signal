@@ -110,9 +110,10 @@ types.
   listing supported or loaded detectors.
 - **Unconfigured custom sites:** Custom interferometer configs must be loaded
   successfully; otherwise projection is undefined.
-- **Numerics:** Cubic interpolation (if used) can ring at edges; for production
-  injections, prefer waveforms that are windowed or long enough that edge
-  effects are negligible.
+- **Numerics:** Off-grid injection resamples with a windowed-sinc kernel, which
+  can ring at the edges of an injection that does not taper to zero; for
+  production injections, prefer waveforms that are windowed or long enough that
+  edge effects are negligible.
 
 ## Choosing the projection implementation
 

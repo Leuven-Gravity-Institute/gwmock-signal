@@ -87,7 +87,7 @@ out = inject_strains_sequential(target, [inj1, inj2], interpolate_if_offset=True
 ## Example 3 — Disable interpolation (strict grid)
 
 If you know injections are **exactly aligned** to the target grid and want to
-avoid cubic resampling at boundaries:
+avoid resampling altogether:
 
 ```python
 out = inject_strain(target, h1, interpolate_if_offset=False)
@@ -237,7 +237,9 @@ result = cw_sim.simulate(
   dimensionless); mixed units should raise a clear error.
 - **No overlap:** If the injection lies entirely outside the target span, the
   API returns a **copy** of the target (same samples, new object).
-- **Interpolation:** Cubic interpolation can ring at edges; prefer aligned
+- **Interpolation:** An off-grid injection is resampled with a band-limited
+  windowed-sinc kernel, which treats the injection as zero outside its span, so
+  an injection that does not taper to zero rings at its edges; prefer aligned
   waveforms from the same `sampling_frequency` and GPS grid when possible.
 - **Performance:** Large segments are memory-bound; avoid unnecessary copies if
   the API documents mutability (default recommendation: return a **new**

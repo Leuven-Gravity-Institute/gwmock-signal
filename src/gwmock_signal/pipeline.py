@@ -66,7 +66,7 @@ def inject_cbc_signal(  # noqa: PLR0913
         earth_rotation: If ``True``, evaluate antenna patterns at
             time-dependent GPS times (recommended for longer signals). If
             ``False``, use a single reference time at the segment midpoint.
-        interpolate_if_offset: If ``True``, use cubic interpolation when the
+        interpolate_if_offset: If ``True``, resample with a windowed-sinc kernel when the
             injection start is not on a target sample boundary. If ``False``
             and the injection is off-grid, the background is returned
             unchanged (``target.copy()``) rather than resampled.
