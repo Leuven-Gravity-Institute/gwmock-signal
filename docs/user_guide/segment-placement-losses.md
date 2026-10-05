@@ -39,9 +39,12 @@ name them, and so should anything that cites the tables.
     other LAL buffer quoted below is unchanged, so for 30+25 and 25+25 the
     20-to-30 Hz difference now moves the geometry as well as the content.
 
-    The h² fractions below were not re-measured, and nothing on this page bounds
-    how far the longer buffers move them. Read them as figures for the previous
-    sizing, not for the current one.
+    The h² fractions below were not re-measured. The one check made is for
+    30+25 at 20 Hz with `coa_time` 0.5 s past the boundary: the current 8 s
+    buffer drops 0.33 to 0.41 percentage points less than the previous 4 s one,
+    across a 6×3×3 grid in right ascension, declination and polarization.
+    Nothing on this page bounds the shift for the other binaries or offsets, so
+    read their figures as measured under the previous sizing.
 <!-- prettier-ignore-end -->
 
 ## A 30+25 solar-mass binary on LAL
@@ -165,10 +168,14 @@ baseline above.
 - **`ringdown_fraction`** (a backend constructor argument, not a per-event
   parameter) changes the lead more than the fraction: 0.05 gives a 3.800 s lead
   and 32.37%, 0.1 gives 3.600 s and 32.34%, 0.2 gives 3.200 s and 32.29%.
+- **The backend `segment_duration` pin** sets the buffer and so moves the
+  fraction. Pinning 30+25 to the previous 4 s buffer adds 0.33 to 0.41
+  percentage points over the current unpinned 8 s, across a 6×3×3 grid in right
+  ascension, declination and polarization. At 30 Hz, where the unpinned buffer
+  is 4 s, pinning 8 s takes 0.05 to 0.06 points off 0.79% to 0.95%.
 - **Distance** cancels out of a fraction entirely.
 
-**Checked and genuinely negligible:** sample rate, reference frequency, and the
-backend `segment_duration` pin.
+**Checked and genuinely negligible:** sample rate and reference frequency.
 
 The ripple leads quoted above are for its constructor defaults, including
 `taper_fraction`; changing the taper changes them.
