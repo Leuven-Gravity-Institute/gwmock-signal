@@ -126,8 +126,8 @@ not read that as zero.
 
 ## Other things that move it
 
-All measured at 20 Hz, `coa_time` 0.5 s past the boundary, against the 32.3%
-baseline above.
+Measured at 20 Hz unless a row states otherwise, `coa_time` 0.5 s past the
+boundary, against the 32.3% baseline above.
 
 **Bigger than the cutoff-independent effects listed further down:**
 
