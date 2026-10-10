@@ -26,6 +26,7 @@ _PUBLIC_SYMBOLS = {
     # was about half the cost of importing the package.
     "__version__": ("gwmock_signal.version", "__version__"),
     "BatchedDetectorStrain": ("gwmock_signal.jax_batch", "BatchedDetectorStrain"),
+    "BurstSimulator": ("gwmock_signal.burst", "BurstSimulator"),
     "CBCSimulator": ("gwmock_signal.simulator", "CBCSimulator"),
     "CustomDetector": ("gwmock_signal.detector", "CustomDetector"),
     "DetectorStrainStack": ("gwmock_signal.multichannel.stack", "DetectorStrainStack"),
