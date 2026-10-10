@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from gwmock_signal.burst import BurstSimulator
 from gwmock_signal.continuous import ContinuousWaveSimulator
 from gwmock_signal.simulator import CBCSimulator, GWSimulator
 from gwmock_signal.stochastic import StochasticBackgroundSimulator
@@ -92,6 +93,7 @@ register_simulator_backend("bns", CBCSimulator)
 register_simulator_backend("nsbh", CBCSimulator)
 register_simulator_backend("sgwb", StochasticBackgroundSimulator)
 register_simulator_backend("cw", ContinuousWaveSimulator)
+register_simulator_backend("burst", BurstSimulator)
 
 
 __all__ = [

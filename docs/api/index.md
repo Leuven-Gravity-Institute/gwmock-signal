@@ -29,6 +29,7 @@ tree (`src/gwmock_signal/`).
 | **[Pipeline](pipeline/)**           | `inject_cbc_signal` (CBC orchestration)                                                                |
 | **[Stochastic](stochastic/)**       | `StochasticBackgroundSimulator`, power-law SGWB spectra, ORF helpers                                   |
 | **[Continuous waves](continuous/)** | `ContinuousWaveSimulator`                                                                              |
+| **[Burst](burst/)**                 | `BurstSimulator`, ad hoc burst waveforms, `draw_burst_injection_set`                                   |
 | **[Multichannel](multichannel/)**   | `DetectorStrainStack`                                                                                  |
 | **[Network](network/)**             | `Network` (presets, `from_file`, detector lists)                                                       |
 | **[Simulator](simulator/)**         | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
@@ -49,6 +50,8 @@ tree (`src/gwmock_signal/`).
   multi-detector Gaussian strain.
 - **[Continuous waves](continuous/)** — Time-domain and already projected
   signals `ContinuousWaveSimulator`.
+- **[Burst](burst/)** — Burst injections: sine-Gaussian, Gaussian, white-noise
+  and file waveforms, and the test injection set.
 - **[Multichannel](multichannel/)** — Stacked IFO strains
   (`DetectorStrainStack`).
 - **[Network](network/)** — Named networks and YAML/JSON network configs.
@@ -81,6 +84,7 @@ root. See the [Continuous API](continuous/).
 | Symbol                          | Category     | Reference                         |
 | ------------------------------- | ------------ | --------------------------------- |
 | `CBCSimulator`                  | Simulator    | [Simulator API](simulator/)       |
+| `BurstSimulator`                | Simulator    | [Burst API](burst/)               |
 | `StochasticBackgroundSimulator` | Simulator    | [Stochastic API](stochastic/)     |
 | `StochasticBackgroundSpectrum`  | Spectrum     | [Stochastic API](stochastic/)     |
 | `TransientSimulator`            | Simulator    | [Simulator API](simulator/)       |

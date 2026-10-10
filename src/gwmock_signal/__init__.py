@@ -25,6 +25,7 @@ from gwmock_signal.version import __version__
 #: device symbols may.
 _PUBLIC_SYMBOLS = {
     "BatchedDetectorStrain": ("gwmock_signal.jax_batch", "BatchedDetectorStrain"),
+    "BurstSimulator": ("gwmock_signal.burst", "BurstSimulator"),
     "CBCSimulator": ("gwmock_signal.simulator", "CBCSimulator"),
     "CustomDetector": ("gwmock_signal.detector", "CustomDetector"),
     "DetectorStrainStack": ("gwmock_signal.multichannel.stack", "DetectorStrainStack"),

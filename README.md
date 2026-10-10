@@ -185,9 +185,10 @@ backend_cls = resolve_simulator_backend("bbh")
 simulator = backend_cls(waveform_model="IMRPhenomD")
 ```
 
-The built-in compact-binary backend is registered under `bbh`. Future source
-families keep the same downstream lookup contract by registering a new
-`GWSimulator` subclass inside `gwmock-signal` with
+The built-in compact-binary backend is registered under `bbh`, and bursts
+(sine-Gaussian, Gaussian, white-noise and numerical waveforms) under `burst`.
+Future source families keep the same downstream lookup contract by registering a
+new `GWSimulator` subclass inside `gwmock-signal` with
 `register_simulator_backend(source_type, backend_cls)`.
 
 The stable backend boundary is

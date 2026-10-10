@@ -585,10 +585,10 @@ class TestSourceTypeRegistry:
             def simulate(self, strain, params, detector) -> DetectorStrainStack:  # type: ignore[override]
                 raise NotImplementedError
 
-        register_simulator_backend("burst", _FirstStub)
+        register_simulator_backend("duplicate-check", _FirstStub)
 
         with pytest.raises(ValueError, match="already registered"):
-            register_simulator_backend("burst", _SecondStub)
+            register_simulator_backend("duplicate-check", _SecondStub)
 
     def test_resolve_unknown_source_type_raises_key_error(self):
         """Unknown source types fail with a clear lookup error."""
