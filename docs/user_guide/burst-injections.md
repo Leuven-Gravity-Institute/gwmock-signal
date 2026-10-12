@@ -18,10 +18,12 @@ the burst test injection set** it produces.
 
 !!! warning "Status: draft"
 
-    The injection set below is a draft. The families follow the LVK O3
-    all-sky short-burst search; the values marked *open* in
-    [Open items](#open-items) still need to be agreed for a given data set
-    before an injection campaign is generated from it.
+    The injection set below is a draft. It follows the first Einstein
+    Telescope mock data challenge (MDC-1) wherever MDC-1 made a choice, and
+    the LVK O3 all-sky short-burst search where MDC-1 made none; every row and
+    its source are in [Relation to MDC-1](#relation-to-mdc-1). The values
+    marked *open* in [Open items](#open-items) still need to be agreed for a
+    given data set before an injection campaign is generated from it.
 
 !!! tip "API reference"
 
@@ -76,7 +78,7 @@ polarizations, then projection onto each detector, then injection.
 | `declination`        | rad                                                                           | all             |
 | `polarization_angle` | rad                                                                           | all             |
 | `hrss`               | $\sqrt{\int (h_+^2 + h_\times^2)\,dt}$ at the Earth                           | ad hoc families |
-| `inclination`        | rad; sets the polarization ellipse                                            | SG, WNB         |
+| `inclination`        | rad; sets the polarization ellipse, or the file waveform's angular factor     | SG, WNB, files  |
 | `frequency`          | central frequency $f_0$, Hz                                                   | SG              |
 | `quality_factor`     | $Q$                                                                           | SG              |
 | `duration`           | GA: standard deviation $\tau$ of $h_+(t)$; WNB: time envelope, s              | GA, WNB         |
@@ -104,9 +106,9 @@ family is normalised by `hrss`.
 
 The Gaussian durations and white-noise parameters are those of the O3 all-sky
 search (Phys. Rev. D **104**, 122004, Table I). The sine-Gaussian $Q$ values are
-O3's; their central frequency is drawn instead of gridded, over 30–1800 Hz,
-which keeps every $f_0$ far below the 4096 Hz Nyquist frequency of 8192 Hz data.
-`DRAFT_BURST_FAMILIES` holds this table.
+a subset of O3's, which also include $Q = 8.9$; their central frequency is drawn
+instead of gridded, over 30–1800 Hz, which keeps every $f_0$ far below the 4096
+Hz Nyquist frequency of 8192 Hz data. `DRAFT_BURST_FAMILIES` holds this table.
 
 A source at inclination $\iota$ radiates $h_\times / h_+ = 2\cos\iota / (1 +
 \cos^2\iota)$: circular when face-on, linear when edge-on. A circularly
@@ -138,22 +140,29 @@ results from it must not be read as an astrophysical population.
 
 ## Numerical waveforms
 
-Numerical waveforms, such as three-dimensional core-collapse supernova
-simulations, are supplied as text files with three whitespace-separated columns
-— time (s, relative to the waveform's reference instant), $h_+$ and $h_\times$ —
-at a common reference distance:
+Numerical waveforms, such as core-collapse supernova simulations, are supplied
+as text files with three whitespace-separated columns — time (s, relative to the
+waveform's reference instant), $h_+$ and $h_\times$. Each file is described by a
+`WaveformFile`: its path, the distance its strain is given at, and how that
+strain depends on the viewing angle:
 
 ```python
-from gwmock_signal.burst import BurstSimulator
+from gwmock_signal.burst import BurstSimulator, WaveformFile
 
 simulator = BurstSimulator(
-    waveform_files={"s18": "waveforms/s18.txt"},
-    reference_distance=0.01,  # Mpc, i.e. the files are at 10 kpc
+    waveform_files={
+        "model_a": WaveformFile(
+            "waveforms/model_a.txt",
+            reference_distance=0.01,  # Mpc, i.e. the file is at 10 kpc
+            inclination_dependence="axisymmetric",
+        ),
+    }
 )
 event = {
-    "burst_model": "s18",
+    "burst_model": "model_a",
     "peak_time": 1_000_000_150.0,
     "distance": 0.005,  # 5 kpc
+    "inclination": 1.2,
     "right_ascension": 1.0,
     "declination": -0.4,
     "polarization_angle": 0.3,
@@ -161,9 +170,19 @@ event = {
 ```
 
 The file's time origin is placed at `peak_time`, the strain is scaled by
-`reference_distance / distance`, and the waveform is resampled to the requested
-rate if the file's differs. The file holds the strain for one viewing direction,
-so no inclination is applied to it; a set covering several directions is several
+`reference_distance / distance` and by the angular factors below, and the
+waveform is resampled to the requested rate if the file's differs.
+
+| `inclination_dependence` | The file holds        | $h_+$ factor          | $h_\times$ factor |
+| ------------------------ | --------------------- | --------------------- | ----------------- |
+| `"none"` (default)       | one viewing direction | 1                     | 1                 |
+| `"axisymmetric"`         | the edge-on strain    | $\sin^2\iota$         | 0                 |
+| `"rotating"`             | the face-on strain    | $(1 + \cos^2\iota)/2$ | $\cos\iota$       |
+
+`"axisymmetric"` is an $\ell = 2$, $m = 0$ quadrupole, which is linearly
+polarized; `"rotating"` is an $\ell = 2$, $m = \pm 2$ pair, circular face-on and
+linear edge-on. A waveform with several modes, or one given for a single
+direction, is used as `"none"`; a set covering several directions is several
 files.
 
 **No numerical waveforms are distributed with this package.** The loader is the
@@ -176,6 +195,9 @@ interface; the waveform files themselves come from their authors.
 - **Polarization ellipse.** The ratio $h_\times/h_+$ is checked against
   $2\cos\iota / (1 + \cos^2\iota)$ across inclinations, and the handedness flips
   for $\iota > \pi/2$.
+- **File inclination factors.** The `"axisymmetric"` and `"rotating"` factors
+  are checked against the $\ell = 2$ spin-weighted spherical harmonics computed
+  by LAL, across inclinations from face-on to face-off.
 - **White-noise band.** O3 quotes the band by its lower edge and width;
   LALSimulation takes its centre, so the band is centred on $f_\text{low} +
   \Delta f / 2$. LALSimulation shapes the band and the time envelope smoothly,
@@ -184,16 +206,45 @@ interface; the waveform files themselves come from their authors.
   exactly O3's $\tau_\text{WNB}$ and $\Delta f$ has not been checked against an
   independent reference.
 
+## Relation to MDC-1
+
+The specification follows the first Einstein Telescope mock data challenge
+(MDC-1; T. Regimbau and J. Suresh, "A mock data challenge for next-generation
+detectors", arXiv:2506.12237) wherever MDC-1 made a choice. **The MDC-1 data
+release contains no burst injections**: its injection lists are compact-binary
+lists only. What MDC-1 does carry is its frame generator's burst reader, which
+fixes an event record and how numerical waveforms are placed. Those rows are
+followed; for every other row MDC-1 has no precedent, and the choice is kept
+from the LVK O3 all-sky search, or left open, for the reason given.
+
+| Row                                  | MDC-1                                                                                                                                                                                           | This specification                                                          | Reason                                                                                                                                                                                                                                                                          |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event record                         | peak time, distance, right ascension, declination, polarization angle, inclination, model                                                                                                       | the same fields, under this package's names; distance in Mpc                | follows MDC-1                                                                                                                                                                                                                                                                   |
+| Numerical waveform files             | columns $t$, $h_+$, $h_\times$, uniformly sampled, resampled to the data rate                                                                                                                   | the same                                                                    | follows MDC-1                                                                                                                                                                                                                                                                   |
+| Distance scaling                     | each model's strain scaled by its own reference distance over the event's                                                                                                                       | `reference_distance / distance`, with the reference distance set per file   | follows MDC-1                                                                                                                                                                                                                                                                   |
+| Inclination, axisymmetric model      | $h_+ \times \sin^2\iota$, $h_\times$ not injected                                                                                                                                               | `"axisymmetric"`, the same factors                                          | follows MDC-1                                                                                                                                                                                                                                                                   |
+| Inclination, bar-mode model          | $h_+ \times (1 + \cos^2\iota)/2$, $h_\times \times \cos 2\iota$                                                                                                                                 | `"rotating"`: $h_+ \times (1 + \cos^2\iota)/2$, $h_\times \times \cos\iota$ | **Deviates.** $\cos\iota$ is the cross-polarization factor of a rotating ($m = \pm 2$) quadrupole, and is checked against the spin-weighted spherical harmonics. $\cos 2\iota$ is not: it would make an edge-on bar's $h_\times$ as large as its face-on one, where it vanishes |
+| Inclination, f-mode models           | none                                                                                                                                                                                            | `"none"`                                                                    | follows MDC-1                                                                                                                                                                                                                                                                   |
+| Numerical waveform set               | the generator names an axisymmetric core-collapse model, a bar-mode model and f-mode models, but neither the generator nor the release includes their waveform files, and no burst was injected | none bundled                                                                | **Open.** The set is MDC-1's kinds of model at most; the files are to be supplied by their owners, and are not substituted                                                                                                                                                      |
+| Ad hoc families and their parameters | none                                                                                                                                                                                            | sine-Gaussian, Gaussian and white-noise burst, [above](#waveform-families)  | MDC-1 has no ad hoc burst. The O3 all-sky set is a published, documented all-sky burst injection set, so its morphologies are kept rather than new ones invented; the sine-Gaussian $Q$ subset and $f_0$ draw are draft choices (open)                                          |
+| Ad hoc polarization                  | none                                                                                                                                                                                            | elliptical, uniform in $\cos\iota$, as O3                                   | MDC-1 has no precedent; kept from O3                                                                                                                                                                                                                                            |
+| Strength                             | none: numerical models are set by distance                                                                                                                                                      | `hrss` log-uniform, as O3; range **open**                                   | MDC-1 has no precedent for the distribution, kept from O3; it has no value for the range, which depends on the network's threshold                                                                                                                                              |
+| Rate                                 | none: no burst was injected. The generator reads at most one burst per 2048 s frame segment, a limit of its layout rather than a chosen rate                                                    | fixed `interval`, **open**                                                  | MDC-1 has no value, so none is set here                                                                                                                                                                                                                                         |
+| Sky and polarization angle           | none                                                                                                                                                                                            | isotropic, $\psi$ uniform, as O3                                            | MDC-1 has no precedent; kept from O3                                                                                                                                                                                                                                            |
+| Test-set label                       | none                                                                                                                                                                                            | `injection_set="test"`                                                      | the rate is a sensitivity choice, not an astrophysical one ([above](#test-set-not-population))                                                                                                                                                                                  |
+
 ## Open items
 
 These rows of the specification are draft and are fixed per data set:
 
-- the `hrss_range`, which depends on the network's detection threshold;
-- the injection `interval`;
+- the `hrss_range`, which depends on the network's detection threshold; MDC-1
+  has no value;
+- the injection `interval`; MDC-1 has no value;
 - the sine-Gaussian frequency range and whether O3's gridded $f_0$ values are
   wanted instead of a log-uniform draw;
 - whether circular sine-Gaussians are injected alongside elliptical ones;
-- which numerical waveforms, at what distances.
+- which numerical waveforms, at what distances and with which inclination
+  dependence. MDC-1 names its kinds of model but provides no files.
 
 ## See also
 
