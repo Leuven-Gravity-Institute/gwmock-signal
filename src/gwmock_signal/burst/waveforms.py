@@ -188,7 +188,7 @@ def read_waveform_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.nda
     """Read a numerical burst waveform: three whitespace-separated columns ``t h_+ h_x``.
 
     ``t`` is in seconds relative to the waveform's reference instant (placed at ``peak_time``), and
-    must be uniformly sampled; the strains are at the simulator's ``reference_distance``.
+    must be uniformly sampled; the strains are at the file's ``reference_distance``.
 
     Args:
         path: Text file to read.

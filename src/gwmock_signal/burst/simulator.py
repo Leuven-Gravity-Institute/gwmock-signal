@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from gwpy.timeseries import TimeSeries
@@ -31,6 +32,52 @@ from gwmock_signal.simulator import TransientSimulator
 _REQUIRED: frozenset[str] = frozenset(
     {"burst_model", "peak_time", "right_ascension", "declination", "polarization_angle"}
 )
+
+InclinationDependence = Literal["none", "axisymmetric", "rotating"]
+
+
+@dataclass(frozen=True)
+class WaveformFile:
+    """A numerical burst waveform on disk and how to place it.
+
+    Attributes:
+        path: Text file of ``t h_+ h_x`` columns (see
+            :func:`~gwmock_signal.burst.waveforms.read_waveform_file`).
+        reference_distance: Distance, in Mpc, at which the file's strains are given.
+        inclination_dependence: How the strain varies with the event's ``inclination``:
+
+            * ``"none"`` -- used as written, whatever the inclination;
+            * ``"axisymmetric"`` -- an axisymmetric (``m = 0``) quadrupole, given edge-on:
+              ``h_+`` is scaled by ``sin^2(iota)`` and ``h_x`` is zero;
+            * ``"rotating"`` -- a rotating (``m = +-2``) quadrupole, given face-on: ``h_+`` is
+              scaled by ``(1 + cos^2 iota) / 2`` and ``h_x`` by ``cos(iota)``.
+
+    Raises:
+        ValueError: If ``reference_distance`` is not finite and positive, or
+            ``inclination_dependence`` is not one of the three above.
+    """
+
+    path: str | Path
+    reference_distance: float
+    inclination_dependence: InclinationDependence = "none"
+
+    def __post_init__(self) -> None:
+        """Refuse a distance or an inclination dependence the simulator could not apply."""
+        if not (math.isfinite(self.reference_distance) and self.reference_distance > 0):
+            raise ValueError(f"reference_distance must be finite and positive (Mpc), got {self.reference_distance!r}.")
+        if self.inclination_dependence not in _INCLINATION_FACTORS:
+            raise ValueError(
+                f"inclination_dependence must be one of {sorted(_INCLINATION_FACTORS)}, "
+                f"got {self.inclination_dependence!r}."
+            )
+
+
+#: ``(h_+ factor, h_x factor)`` as functions of the inclination, for each inclination dependence.
+_INCLINATION_FACTORS = {
+    "none": lambda iota: (1.0, 1.0),
+    "axisymmetric": lambda iota: (math.sin(iota) ** 2, 0.0),
+    "rotating": lambda iota: ((1.0 + math.cos(iota) ** 2) / 2.0, math.cos(iota)),
+}
 
 
 class BurstSimulator(TransientSimulator):
@@ -50,43 +97,35 @@ class BurstSimulator(TransientSimulator):
     ``polarization_angle``    rad
     ``hrss``                  ad hoc families: ``sqrt(int (h_+^2 + h_x^2) dt)`` at the Earth
     ``distance``              file waveforms: source distance, Mpc
+    ``inclination``           rad; ad hoc families that take it, and file waveforms whose
+                              ``inclination_dependence`` is not ``"none"``
     ========================  ====================================================================
 
     plus the family's own shape parameters, listed on each function in
     :mod:`gwmock_signal.burst.waveforms`. Keys a model does not use are ignored, so an event may
     carry labels such as which injection set it belongs to.
 
-    A file waveform is scaled by ``reference_distance / distance`` and otherwise used as written:
-    the file holds ``h_+`` and ``h_x`` for one viewing direction, and this class does not apply an
-    inclination to it.
+    A file waveform is scaled by its ``reference_distance / distance`` and by the inclination
+    factors of its :class:`WaveformFile`.
 
     Args:
-        waveform_files: Model name -> text file of ``t h_+ h_x`` columns (see
-            :func:`~gwmock_signal.burst.waveforms.read_waveform_file`). Each file is read once, on
-            first use.
-        reference_distance: Distance, in Mpc, at which the files' strains are given. Required
-            when ``waveform_files`` is not empty, and shared by all of them.
+        waveform_files: Model name -> :class:`WaveformFile`. Each file is read once, on first use.
 
     Raises:
-        ValueError: If a file model reuses an ad hoc family's name, or ``reference_distance`` is
-            missing or not finite and positive while files are given.
+        ValueError: If a file model reuses an ad hoc family's name, or a value is not a
+            :class:`WaveformFile`.
     """
 
-    def __init__(
-        self,
-        *,
-        waveform_files: Mapping[str, str | Path] | None = None,
-        reference_distance: float | None = None,
-    ) -> None:
+    def __init__(self, *, waveform_files: Mapping[str, WaveformFile] | None = None) -> None:
         """Initialise with the optional numerical waveform files."""
-        files = {str(name): Path(path) for name, path in (waveform_files or {}).items()}
+        files = dict(waveform_files or {})
         shadowed = sorted(set(files) & set(PARAMETRIC_MODELS))
         if shadowed:
             raise ValueError(f"waveform_files may not reuse the ad hoc model names {shadowed}.")
-        if files and (reference_distance is None or not math.isfinite(reference_distance) or reference_distance <= 0):
-            raise ValueError("reference_distance must be finite and positive (Mpc) when waveform_files are given.")
-        self._waveform_files = files
-        self.reference_distance = reference_distance
+        wrong = sorted(name for name, entry in files.items() if not isinstance(entry, WaveformFile))
+        if wrong:
+            raise ValueError(f"waveform_files values must be WaveformFile instances; {wrong} are not.")
+        self._waveform_files: dict[str, WaveformFile] = files
         self._file_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
     @property
@@ -130,20 +169,28 @@ class BurstSimulator(TransientSimulator):
         self, model: str, params: Mapping[str, Any], sampling_frequency: float
     ) -> tuple[TimeSeries, TimeSeries]:
         """Return a file waveform placed at ``peak_time``, scaled to ``distance``, at the target rate."""
-        if "distance" not in params:
-            raise ValueError(f"burst_model {model!r} needs parameters ['distance'].")
+        entry = self._waveform_files[model]
+        needed = ["distance"] + ([] if entry.inclination_dependence == "none" else ["inclination"])
+        missing = [key for key in needed if key not in params]
+        if missing:
+            raise ValueError(f"burst_model {model!r} needs parameters {missing}.")
         distance = float(params["distance"])
         if not (math.isfinite(distance) and distance > 0):
             raise ValueError(f"distance must be finite and positive, got {params['distance']!r}.")
+        inclination = float(params.get("inclination", 0.0))
+        if not math.isfinite(inclination):
+            raise ValueError(f"inclination must be finite, got {params['inclination']!r}.")
         if model not in self._file_cache:
-            self._file_cache[model] = read_waveform_file(self._waveform_files[model])
+            self._file_cache[model] = read_waveform_file(entry.path)
         times, plus, cross = self._file_cache[model]
 
-        scale = self.reference_distance / distance
+        scale = entry.reference_distance / distance
+        plus_factor, cross_factor = _INCLINATION_FACTORS[entry.inclination_dependence](inclination)
         t0 = float(params["peak_time"]) + times[0]
         dt = times[1] - times[0]
         series = [
-            TimeSeries(scale * strain, t0=t0, dt=dt, name=name) for strain, name in ((plus, "plus"), (cross, "cross"))
+            TimeSeries(scale * factor * strain, t0=t0, dt=dt, name=name)
+            for strain, factor, name in ((plus, plus_factor, "plus"), (cross, cross_factor, "cross"))
         ]
         if not math.isclose(1.0 / dt, sampling_frequency, rel_tol=1e-9):
             series = [s.resample(sampling_frequency) for s in series]

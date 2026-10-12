@@ -29,7 +29,7 @@ tree (`src/gwmock_signal/`).
 | **[Pipeline](pipeline/)**           | `inject_cbc_signal` (CBC orchestration)                                                                |
 | **[Stochastic](stochastic/)**       | `StochasticBackgroundSimulator`, power-law SGWB spectra, ORF helpers                                   |
 | **[Continuous waves](continuous/)** | `ContinuousWaveSimulator`                                                                              |
-| **[Burst](burst/)**                 | `BurstSimulator`, ad hoc burst waveforms, `draw_burst_injection_set`                                   |
+| **[Burst](burst/)**                 | `BurstSimulator`, `WaveformFile`, ad hoc burst waveforms, `draw_burst_injection_set`                   |
 | **[Multichannel](multichannel/)**   | `DetectorStrainStack`                                                                                  |
 | **[Network](network/)**             | `Network` (presets, `from_file`, detector lists)                                                       |
 | **[Simulator](simulator/)**         | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 
+import lal
 import numpy as np
 import pytest
 
 import gwmock_signal
-from gwmock_signal.burst import DRAFT_BURST_FAMILIES, BurstSimulator, draw_burst_injection_set
+from gwmock_signal.burst import DRAFT_BURST_FAMILIES, BurstSimulator, WaveformFile, draw_burst_injection_set
 from gwmock_signal.burst.waveforms import gaussian, read_waveform_file, sine_gaussian, white_noise_burst
 
 FS = 8192.0
@@ -149,7 +150,7 @@ def test_file_waveform_is_scaled_placed_and_resampled(tmp_path):
     """A file waveform is scaled by distance, placed at peak_time and resampled to the target rate."""
     path = tmp_path / "model.txt"
     times, plus, _ = _write_waveform(path)
-    simulator = BurstSimulator(waveform_files={"ccsn": path}, reference_distance=0.01)
+    simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=0.01)})
 
     hp, hc = simulator.generate_polarizations(
         {"burst_model": "ccsn", "peak_time": PEAK, "distance": 0.04, **SKY}, FS, 10.0
@@ -166,7 +167,7 @@ def test_file_waveform_at_the_target_rate_is_used_unchanged(tmp_path):
     """A file already at the target rate is only scaled."""
     path = tmp_path / "model.txt"
     _, plus, _ = _write_waveform(path, rate=FS)
-    simulator = BurstSimulator(waveform_files={"ccsn": path}, reference_distance=1.0)
+    simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=1.0)})
     hp, _ = simulator.generate_polarizations({"burst_model": "ccsn", "peak_time": PEAK, "distance": 2.0}, FS, 10.0)
     np.testing.assert_allclose(hp.value, 0.5 * plus, rtol=1e-12, atol=0.0)
 
@@ -187,23 +188,86 @@ def test_waveform_file_must_have_three_columns(tmp_path):
         read_waveform_file(path)
 
 
-def test_file_models_need_a_reference_distance(tmp_path):
-    """Files cannot be scaled without the distance their strains are given at."""
+@pytest.mark.parametrize("distance", [0.0, -1.0, math.inf, math.nan])
+def test_waveform_file_needs_a_positive_reference_distance(tmp_path, distance):
+    """Files cannot be scaled without a finite, positive distance their strains are given at."""
     with pytest.raises(ValueError, match="reference_distance"):
-        BurstSimulator(waveform_files={"ccsn": tmp_path / "x.txt"})
+        WaveformFile(tmp_path / "x.txt", reference_distance=distance)
+
+
+def test_waveform_file_refuses_an_unknown_inclination_dependence(tmp_path):
+    """Only the three documented inclination dependences are accepted."""
+    with pytest.raises(ValueError, match="inclination_dependence"):
+        WaveformFile(tmp_path / "x.txt", reference_distance=1.0, inclination_dependence="bar")
 
 
 def test_file_models_may_not_shadow_ad_hoc_names(tmp_path):
     """A file model cannot silently replace an ad hoc family."""
     with pytest.raises(ValueError, match="sine_gaussian"):
-        BurstSimulator(waveform_files={"sine_gaussian": tmp_path / "x.txt"}, reference_distance=1.0)
+        BurstSimulator(waveform_files={"sine_gaussian": WaveformFile(tmp_path / "x.txt", reference_distance=1.0)})
+
+
+def test_file_models_must_be_waveform_file_entries(tmp_path):
+    """A bare path, which carries no reference distance, is refused."""
+    with pytest.raises(ValueError, match="WaveformFile"):
+        BurstSimulator(waveform_files={"ccsn": tmp_path / "x.txt"})
+
+
+def _swsh(iota, m):
+    """Spin-weight -2, l = 2 spherical harmonic from LAL, an independent reference for the factors."""
+    return lal.SpinWeightedSphericalHarmonic(iota, 0.0, -2, 2, m)
+
+
+def _m2_polarization(iota, sign):
+    """``h_+`` (sign +1) or ``h_x`` (sign -1) angular dependence of an m = +-2 pair."""
+    return (_swsh(iota, 2) + sign * _swsh(iota, -2)).real
+
+
+@pytest.mark.parametrize("inclination", [0.0, 0.4, 1.0, math.pi / 2, 2.2, math.pi])
+@pytest.mark.parametrize("dependence", ["none", "axisymmetric", "rotating"])
+def test_file_waveform_inclination_factors_follow_the_quadrupole_pattern(tmp_path, dependence, inclination):
+    """Inclination factors match the l = 2 spin-weighted harmonics, relative to the file's viewing angle.
+
+    An m = 0 mode is real, so h_x vanishes and h_+ follows -2Y20, given edge-on. An m = +-2 pair
+    with h_{2,-2} = conj(h_{2,2}) gives h_+ ~ Y22 + Y2-2 and h_x ~ Y22 - Y2-2, given face-on.
+    """
+    path = tmp_path / "model.txt"
+    _, plus, cross = _write_waveform(path, rate=FS)
+    simulator = BurstSimulator(
+        waveform_files={"m": WaveformFile(path, reference_distance=1.0, inclination_dependence=dependence)}
+    )
+    hp, hc = simulator.generate_polarizations(
+        {"burst_model": "m", "peak_time": PEAK, "distance": 1.0, "inclination": inclination}, FS, 10.0
+    )
+    if dependence == "none":
+        expected = (1.0, 1.0)
+    elif dependence == "axisymmetric":
+        expected = ((_swsh(inclination, 0) / _swsh(math.pi / 2, 0)).real, 0.0)
+    else:
+        expected = (
+            _m2_polarization(inclination, 1) / _m2_polarization(0.0, 1),
+            _m2_polarization(inclination, -1) / _m2_polarization(0.0, -1),
+        )
+    np.testing.assert_allclose(hp.value, expected[0] * plus, rtol=1e-12, atol=1e-12 * np.max(np.abs(plus)))
+    np.testing.assert_allclose(hc.value, expected[1] * cross, rtol=1e-12, atol=1e-12 * np.max(np.abs(cross)))
+
+
+def test_inclined_file_model_needs_an_inclination(tmp_path):
+    """A file whose strain depends on inclination refuses an event without one."""
+    path = tmp_path / "model.txt"
+    _write_waveform(path)
+    simulator = BurstSimulator(
+        waveform_files={"m": WaveformFile(path, reference_distance=1.0, inclination_dependence="rotating")}
+    )
+    with pytest.raises(ValueError, match="inclination"):
+        simulator.generate_polarizations({"burst_model": "m", "peak_time": PEAK, "distance": 1.0}, FS, 10.0)
 
 
 def test_file_model_needs_a_distance(tmp_path):
     """A file event without a distance is refused."""
     path = tmp_path / "model.txt"
     _write_waveform(path)
-    simulator = BurstSimulator(waveform_files={"ccsn": path}, reference_distance=0.01)
+    simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=0.01)})
     with pytest.raises(ValueError, match="distance"):
         simulator.generate_polarizations({"burst_model": "ccsn", "peak_time": PEAK}, FS, 10.0)
 
