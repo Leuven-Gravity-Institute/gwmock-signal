@@ -901,7 +901,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.0" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
     { name = "gwpy", specifier = ">=4.0.0" },
     { name = "lalsuite", specifier = ">=7.24" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.6.0" },
