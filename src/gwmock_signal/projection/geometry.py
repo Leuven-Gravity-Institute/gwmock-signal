@@ -14,7 +14,9 @@
 """Detector geometry: the single source of truth for response tensors and locations.
 
 These helpers reconstruct each detector's response tensor and Earth-fixed location
-from LAL's cached detector registry. They are deliberately kept in one place (rather
+from its defining fields: for LAL's built-in codes, from the table shipped with the package
+(:mod:`gwmock_signal._detector_table`); for a detector registered with LAL at run time, from
+LAL's registry. They are deliberately kept in one place (rather
 than inlined in the projection code) so every consumer — the NumPy projection path
 today, and a planned on-device JAX path — derives detector geometry from the same
 constants instead of re-deriving them (a single source of truth).
@@ -31,7 +33,7 @@ from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
 
 from gwmock_signal import _lalsuite
-from gwmock_signal._detector_table import builtin_detectors
+from gwmock_signal._detector_table import builtin_detectors, unknown_code_message
 from gwmock_signal.detector import CustomDetector
 
 if TYPE_CHECKING:
@@ -68,8 +70,8 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
 
     Raises:
         TypeError: If an entry is neither a string nor a ``CustomDetector``.
-        ValueError: If a string is not a detector LAL knows about, or if two entries resolve to
-            the same LAL detector.
+        ValueError: If a string is not a known detector code (see :func:`detector_fields`), or if
+            two entries resolve to the same detector.
     """
     resolved: list[tuple[str, str]] = []
     for raw in detector_specs:
@@ -122,18 +124,15 @@ def detector_fields(code: str) -> tuple[float, ...]:
 
     Raises:
         ValueError: If the code is neither built in nor registered with LAL, including when
-            ``lalsuite`` is not installed to hold a run-time registration.
+            ``lalsuite`` cannot be imported to hold a run-time registration.
     """
     fields = builtin_detectors().get(code)
     if fields is not None:
         return fields
-    if _lalsuite.find("lal") is None:
-        raise ValueError(
-            f"Unknown or unsupported detector {code!r}. Use a built-in interferometer code "
-            f"({', '.join(sorted(builtin_detectors()))}); codes registered with LAL at run time "
-            "also need lalsuite, which is not installed."
-        )
-    return _defining_fields(get_lal_detector(code).frDetector)
+    lal = _lalsuite.find("lal")
+    if lal is None or code not in lal.cached_detector_by_prefix:
+        raise ValueError(unknown_code_message(code, lal_available=lal is not None))
+    return _defining_fields(lal.cached_detector_by_prefix[code].frDetector)
 
 
 def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:

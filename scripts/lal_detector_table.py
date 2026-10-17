@@ -59,12 +59,20 @@ def registry_table(registry) -> dict[str, dict[str, object]]:
     return table
 
 
+def render(registry) -> str:
+    """Return the table file's exact text for ``registry``.
+
+    Four-space indent, as the repository's prettier configuration formats JSON. The file is excluded
+    from prettier, which would also respell ``1e-05`` as ``1e-5``, so it stays byte-for-byte this.
+    """
+    return json.dumps(registry_table(registry), indent=4) + "\n"
+
+
 def main() -> int:
     """Regenerate the table from the installed ``lalsuite``."""
     import lal  # noqa: PLC0415 -- the only reason to run this script
 
-    # Four-space indent, as the repository's prettier configuration formats JSON.
-    TABLE.write_text(json.dumps(registry_table(lal.cached_detector_by_prefix), indent=4) + "\n")
+    TABLE.write_text(render(lal.cached_detector_by_prefix))
     print(f"wrote {TABLE.relative_to(Path.cwd()) if TABLE.is_relative_to(Path.cwd()) else TABLE}")
     return 0
 

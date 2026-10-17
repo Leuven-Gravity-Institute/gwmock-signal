@@ -13,9 +13,9 @@
 #
 """Access to ``lalsuite`` at the point of use, with an actionable error when it is missing.
 
-``lalsuite`` provides LAL and LALSimulation: the detector registry behind
-:class:`~gwmock_signal.detector.CustomDetector`, :mod:`gwmock_signal.network` and the projection
-geometry, and the LAL-backed waveform generators. It is a C extension whose wheels follow new
+``lalsuite`` provides LAL and LALSimulation: the detector registry that
+:class:`~gwmock_signal.detector.CustomDetector` registers with (LAL's built-in detectors are also
+shipped with the package, so they resolve without it), and the LAL-backed waveform generators. It is a C extension whose wheels follow new
 CPython releases with a delay, so ``gwmock-signal`` installs it only on the Python versions it
 publishes wheels for.
 
@@ -31,9 +31,6 @@ import importlib
 import sys
 from types import ModuleType
 
-#: The top-level modules lalsuite provides. Only their absence is "lalsuite is not installed".
-_LALSUITE_MODULES = frozenset({"lal", "lalsimulation", "lalpulsar", "lalframe", "lalinspiral", "lalburst"})
-
 
 def missing_lalsuite_message(feature: str) -> str:
     """Return the message for using ``feature`` without ``lalsuite`` installed."""
@@ -47,21 +44,27 @@ def missing_lalsuite_message(feature: str) -> str:
 
 
 def _is_missing_lalsuite(exc: ModuleNotFoundError, module: str) -> bool:
-    """Whether ``exc`` means a lalsuite module is absent, as opposed to something it needs."""
-    return exc.name in _LALSUITE_MODULES | {module.partition(".")[0]}
+    """Whether ``exc`` means the requested module is absent, as opposed to something it needs.
+
+    Only the requested module's own absence counts. ``import lal`` failing because a module *it*
+    imports is missing -- another lalsuite module included -- is a broken installation, not a missing
+    one, and keeps its own error.
+    """
+    return exc.name == module.partition(".")[0]
 
 
 def find(module: str) -> ModuleType | None:
-    """Import and return ``module``, or ``None`` if ``lalsuite`` is not installed.
+    """Import and return ``module``, or ``None`` if it cannot be imported in this process.
 
-    For callers with a fallback that does not need LAL. A broken installation, or a missing
-    dependency of ``lalsuite``, still raises, for the reason given in :func:`require`.
+    For callers that only *add* to a result they can produce without LAL -- the detector codes LAL
+    registered at run time, on top of the built-in table. Any import failure, a broken installation
+    included, means ``None`` there: a ``lal`` this process cannot import cannot hold a run-time
+    registration either. Callers that *need* LAL use :func:`require`, which reports a broken
+    installation as such.
     """
     try:
         return importlib.import_module(module)
-    except ModuleNotFoundError as exc:
-        if not _is_missing_lalsuite(exc, module):
-            raise
+    except ImportError:
         return None
 
 

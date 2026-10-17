@@ -27,8 +27,10 @@ A code that is not in the table -- a detector registered with LAL at run time, i
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from functools import cache
 from importlib.resources import files
+from types import MappingProxyType
 
 #: The table's fields, in the order :func:`gwmock_signal.projection.geometry.reconstructed_geometry`
 #: consumes them.
@@ -44,7 +46,21 @@ FIELDS = (
 
 
 @cache
-def builtin_detectors() -> dict[str, tuple[float, ...]]:
-    """Return the defining fields of every built-in detector, keyed by its LAL code."""
+def builtin_detectors() -> Mapping[str, tuple[float, ...]]:
+    """Return the defining fields of every built-in detector, keyed by its LAL code.
+
+    Read-only: the result is cached and shared by every caller, so it must not be mutable.
+    """
     table = json.loads(files("gwmock_signal.data").joinpath("lal_detectors.json").read_text())
-    return {code: tuple(float(entry[field]) for field in FIELDS) for code, entry in table.items()}
+    return MappingProxyType({code: tuple(float(entry[field]) for field in FIELDS) for code, entry in table.items()})
+
+
+def unknown_code_message(code: str, *, lal_available: bool) -> str:
+    """Return the error for a detector code that is neither built in nor registered with LAL."""
+    message = (
+        f"Unknown or unsupported detector {code!r}. Use a built-in interferometer code "
+        f"({', '.join(sorted(builtin_detectors()))}), or a CustomDetector for other geometries."
+    )
+    if not lal_available:
+        message += " Codes registered with LAL at run time also need lalsuite, which could not be imported."
+    return message

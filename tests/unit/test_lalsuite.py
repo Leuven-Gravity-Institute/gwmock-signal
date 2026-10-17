@@ -62,16 +62,27 @@ def test_a_missing_dependency_of_lalsuite_keeps_its_own_error(monkeypatch):
         _lalsuite.require("lalsimulation", "The LAL waveform backend")
 
 
-def test_lalsimulation_without_lal_is_reported_as_missing_lalsuite(monkeypatch):
-    """Either half of lalsuite missing is the same diagnosis."""
+def test_lalsimulation_failing_on_a_missing_lal_keeps_its_own_error(monkeypatch):
+    """Lalsimulation present but its own import of lal failing is a broken install, not a missing one."""
 
     def lal_missing(name):
         raise ModuleNotFoundError("No module named 'lal'", name="lal")
 
     monkeypatch.setattr(_lalsuite.importlib, "import_module", lal_missing)
 
-    with pytest.raises(ImportError, match=r"^The LAL waveform backend requires lalsuite"):
+    with pytest.raises(ModuleNotFoundError, match="No module named 'lal'"):
         _lalsuite.require("lalsimulation", "The LAL waveform backend")
+
+
+def test_find_returns_none_for_any_import_failure(monkeypatch):
+    """``find`` serves callers with a LAL-free fallback: a broken install also means no LAL here."""
+    for failure in (ModuleNotFoundError("No module named 'lal'", name="lal"), ImportError("liblal.so.20")):
+
+        def fail(name, failure=failure):
+            raise failure
+
+        monkeypatch.setattr(_lalsuite.importlib, "import_module", fail)
+        assert _lalsuite.find("lal") is None
 
 
 def test_an_invalid_backend_argument_is_reported_before_a_missing_lalsuite(monkeypatch):
