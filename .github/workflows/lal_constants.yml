@@ -1,0 +1,150 @@
+name: LAL constants
+
+# The built-in unit-conversion constants must equal LAL's bit-for-bit. The test
+# suite checks them against whichever lalsuite the CI environment resolves --
+# the floor in the lowest-direct job and the newest release elsewhere -- on
+# every pull request, including the automated support-floor updates. What it
+# cannot see is a new lalsuite release that changes a constant, since nothing
+# in this repository changes when one is published. This workflow checks the
+# floor and the newest release on a schedule, and when the floor disagrees it
+# reports the floor to move to. It never edits code: a maintainer applies the
+# values and the floor in a reviewed pull request.
+#
+# A failed scheduled or manual run must not depend on someone reading the
+# Actions tab, so the `track` job opens a tracking issue for it (or comments on
+# the one already open) and closes it when a later run passes. It runs as its
+# own job so the check, which also runs on pull requests, never holds a token
+# that can write issues, and so a failure to update the issue cannot change the
+# check's result.
+
+on:
+    schedule:
+        - cron: '23 5 * * 1' # weekly, Monday 05:23 UTC
+    workflow_dispatch:
+    pull_request:
+        branches: [main]
+        paths:
+            - 'pyproject.toml'
+            - 'src/gwmock_signal/constants/**'
+            - 'scripts/lal_constants_consistency.py'
+            - '.github/workflows/lal_constants.yml'
+
+concurrency:
+    group: lal-constants-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        outputs:
+            # The comparison's own outcome, separate from the job result: a
+            # failure in a later step (publishing the report) says nothing
+            # about the constants.
+            compared: ${{ steps.compare.outcome }}
+            report: ${{ steps.publish.outputs.report }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+              with:
+                  persist-credentials: false
+
+            # The oldest supported Python: the floor release is the one most
+            # likely to lack wheels for newer interpreters.
+            - name: Install uv
+              uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+              with:
+                  python-version: '3.12'
+
+            - name: Compare the built-in constants with lalsuite
+              id: compare
+              run: >-
+                  uv run --no-project --with packaging python
+                  scripts/lal_constants_consistency.py --report lal-constants.md
+
+            - name: Publish the report
+              id: publish
+              if: ${{ !cancelled() }}
+              run: |
+                  if [ ! -f lal-constants.md ]; then
+                      echo 'The check wrote no report; see the run log.' > lal-constants.md
+                  fi
+                  cat lal-constants.md >> "$GITHUB_STEP_SUMMARY"
+                  delimiter="report-$(openssl rand -hex 16)"
+                  {
+                      echo "report<<$delimiter"
+                      cat lal-constants.md
+                      echo "$delimiter"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Upload the report
+              if: ${{ !cancelled() }}
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: lal-constants-report
+                  path: lal-constants.md
+
+    track:
+        needs: check
+        # Only a finished scheduled or manual run: never a pull request, and
+        # never a cancelled or skipped check.
+        if: >-
+            ${{ !cancelled() && github.event_name != 'pull_request' &&
+            (needs.check.result == 'failure' || needs.check.result == 'success')
+            }}
+        runs-on: ubuntu-latest
+        permissions:
+            issues: write
+        env:
+            GH_TOKEN: ${{ github.token }}
+            COMPARED: ${{ needs.check.outputs.compared }}
+            REPORT: ${{ needs.check.outputs.report }}
+            ISSUE_TITLE: LAL constants check failed
+        steps:
+            # The tracking issue is the open issue this workflow opened under
+            # this exact title. Matching on the bot author keeps a human's
+            # issue of the same name untouched, and searching titles on the
+            # server keeps the lookup independent of how many issues are open.
+            # A retitled issue is treated as taken over by a human: the next
+            # failure opens a new one. `--author app/github-actions` matches
+            # only together with `--search`; on its own it needs the
+            # `github-actions[bot]` login instead.
+            #
+            # The issue follows the comparison step, not the job: a passing
+            # comparison closes it even if a later step failed, and one that
+            # failed or never ran opens it.
+            - name: Open, update, or close the tracking issue
+              run: |
+                  run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                      --author app/github-actions --search "in:title \"$ISSUE_TITLE\"" --limit 100 \
+                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
+
+                  if [ "$COMPARED" = success ]; then
+                      if [ -n "$number" ]; then
+                          gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                              --comment "The check passes again: $run_url"
+                      fi
+                      exit 0
+                  fi
+
+                  if [ "$COMPARED" = failure ]; then
+                      summary="The check of the built-in constants against lalsuite failed: $run_url"
+                  else
+                      summary="The check of the built-in constants against lalsuite did not run; the job stopped at an earlier step: $run_url"
+                  fi
+                  {
+                      echo "$summary"
+                      echo
+                      printf '%s\n' "$REPORT"
+                      echo
+                      echo '_This issue is managed by the `LAL constants` workflow. It is closed'
+                      echo 'automatically when a later run passes, including after a manual reopen._'
+                  } > issue-body.md
+                  if [ -n "$number" ]; then
+                      gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+                  else
+                      gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" \
+                          --label dependencies --body-file issue-body.md
+                  fi
