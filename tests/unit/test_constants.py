@@ -1,4 +1,4 @@
-"""The built-in constants must equal LAL's bit-for-bit, and must not need LAL to import.
+"""The built-in constants must match LAL's bit-for-bit, and must not need LAL to import.
 
 LALSimulation converts with its own constants internally, so a built-in value that differed in the
 last bit would put a one-ulp error into every waveform generated through it. Equality is therefore
@@ -20,7 +20,7 @@ from gwmock_signal.constants import _builtin
 
 
 def _lal_reference(lal) -> dict[str, float]:
-    """Each constant as read from ``lal`` itself, independently of ``constants._lal``.
+    """Each constant's reference value from ``lal`` itself, independently of ``constants._lal``.
 
     LAL defines no megaparsec; ``PC_SI * 1e6`` is the expression LAL-based codes use for it.
     """
@@ -34,7 +34,10 @@ def _lal_reference(lal) -> dict[str, float]:
 
 @pytest.mark.parametrize("name", constants.CONSTANT_NAMES)
 def test_builtin_constant_equals_lal(name):
-    """Each built-in value is the double LAL defines, to the last bit."""
+    """Each built-in value equals its LAL reference to the last bit.
+
+    LAL defines ``MSUN_SI``, ``MTSUN_SI`` and ``PC_SI``; ``MPC_SI`` is compared with ``lal.PC_SI * 1e6``.
+    """
     lal = pytest.importorskip("lal")
 
     assert getattr(_builtin, name) == _lal_reference(lal)[name]
@@ -62,10 +65,10 @@ def test_every_provider_defines_exactly_the_listed_names():
 @pytest.mark.parametrize(
     ("ours", "ripple_value"),
     [
-        ("MSUN_SI", lambda c: c.MSUN),
-        ("MTSUN_SI", lambda c: c.MTSUN),
-        ("PC_SI", lambda c: c.MPC / 1e6),
-        ("MPC_SI", lambda c: c.MPC),
+        pytest.param("MSUN_SI", lambda c: c.MSUN, id="MSUN_SI-MSUN"),
+        pytest.param("MTSUN_SI", lambda c: c.MTSUN, id="MTSUN_SI-MTSUN"),
+        pytest.param("PC_SI", lambda c: c.MPC / 1e6, id="PC_SI-MPC/1e6"),
+        pytest.param("MPC_SI", lambda c: c.MPC, id="MPC_SI-MPC"),
     ],
 )
 def test_builtin_constant_equals_ripple(ours, ripple_value):
@@ -102,6 +105,6 @@ def test_importing_the_constants_does_not_import_lal():
     code = "import sys, gwmock_signal.constants as c; print(c.__file__); print('lal' in sys.modules)"
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env)  # noqa: S603
 
-    imported_from, lal_imported = result.stdout.split()
+    imported_from, lal_imported = result.stdout.splitlines()
     assert Path(imported_from).resolve().is_relative_to(source_root)
     assert lal_imported == "False"

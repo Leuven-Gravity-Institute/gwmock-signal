@@ -1,6 +1,6 @@
 ---
 title: Constants
-description: Unit-conversion constants, equal to LAL's bit-for-bit.
+description: Unit-conversion constants, checked bit-for-bit against LAL.
 icon: material/scale-balance
 ---
 

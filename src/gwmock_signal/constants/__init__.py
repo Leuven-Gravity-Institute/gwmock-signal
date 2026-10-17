@@ -15,11 +15,12 @@
 
 The values come from :mod:`gwmock_signal.constants._builtin`, written out in this
 package, so converting masses and distances does not require ``lalsuite`` to be
-installed. They equal LAL's (``lal.MSUN_SI``, ``lal.PC_SI``, ``lal.MTSUN_SI``)
-bit-for-bit, and they must stay that way: LALSimulation converts with its own
-constants internally, so a value that differed in the last bit would carry a one-ulp
-error into every waveform generated through it. The test suite compares the two
-providers whenever ``lalsuite`` is installed.
+installed. ``MSUN_SI``, ``MTSUN_SI`` and ``PC_SI`` equal LAL's constants of the
+same names bit-for-bit, and ``MPC_SI`` is ``PC_SI * 1e6``. They must stay that way:
+LALSimulation converts with its own constants internally, so a value that differed in
+the last bit would carry a one-ulp error into every waveform generated through it. The
+test suite checks them against ``lal`` whenever ``lalsuite`` is installed, and against
+``ripplegw`` whenever it is.
 
 :mod:`gwmock_signal.constants._lal` reads the same names from LAL. It exists for that
 comparison; the package itself never converts with it.
