@@ -24,8 +24,8 @@ pages for more details:
 
 ## Requirements
 
-- **Python:** 3.12 or 3.13 (`requires-python` in `pyproject.toml` is
-  `>=3.12,<3.14`).
+- **Python:** 3.12, 3.13 or 3.14 (`requires-python` in `pyproject.toml` is
+  `>=3.12`).
 - **Operating system:** Linux or macOS (same range as the published wheels and
   CI).
 
@@ -135,7 +135,9 @@ Declared in `pyproject.toml` for the library:
 - **typer** — CLI (`gwmock-signal` entry point)
 - **gwpy** — `TimeSeries` / GW I/O conventions
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
-  LAL types
+  LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
+  publishes no wheel yet; there, the LAL-based waveform backends and detector
+  geometry are unavailable.
 - **pyyaml** — configuration parsing where used
 
 **Optional** (`pip install 'gwmock-signal[pycbc]'`):
