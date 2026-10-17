@@ -167,12 +167,14 @@ class TestTheProposedFloor:
 
     def test_an_unreadable_release_is_passed_over_and_reported(self):
         """A release that cannot be installed neither stops the walk nor goes unmentioned."""
-        read = _reader({"1": OFF, "2": None, "3": GOOD})
+        read = _reader({"1": OFF, "2": GOOD, "3": None, "4": GOOD})
 
-        lowest, unreadable = lowest_consistent(Version("4"), _versions("1", "2", "3"), GOOD, read)
+        lowest, unreadable = lowest_consistent(Version("5"), _versions("1", "2", "3", "4"), GOOD, read)
 
-        assert lowest == Version("3")
-        assert unreadable == [Version("2")]
+        # The walk continues past 3 to the agreeing 2 and stops only at the disagreeing 1.
+        assert lowest == Version("2")
+        assert unreadable == [Version("3")]
+        assert read.asked == ["4", "3", "2", "1"]
 
 
 class TestThePolicy:
