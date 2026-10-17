@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import numpy as np
 
-#: Solar mass in seconds (``G M_sun / c^3``). Matches ``lal.MTSUN_SI`` and
-#: ``ripplegw.constants.MTSUN`` bit-for-bit, so the two backends auto-size to the
-#: same segment length for a given source.
-MTSUN_SI = 4.925490947641267e-06
+# ``MTSUN_SI`` is re-exported here, where the sizing functions take it as a default. It
+# matches ``lal.MTSUN_SI`` and ``ripplegw.constants.MTSUN`` bit-for-bit, so the two
+# backends auto-size to the same segment length for a given source.
+from gwmock_signal.constants import MTSUN_SI
 
 #: Fraction of the analysis segment reserved *after* coalescence (ringdown + pad).
 DEFAULT_RINGDOWN_FRACTION = 0.1

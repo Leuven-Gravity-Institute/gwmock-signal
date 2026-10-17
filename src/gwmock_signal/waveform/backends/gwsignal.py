@@ -43,10 +43,10 @@ Two deliberate scope limits:
   The parent path applies the options type-correctly and is bit-identical
   for the approximants this backend serves.
 
-Masses and distances are converted with LAL's SI constants (``lal.MSUN_SI``,
-``lal.PC_SI``) rather than astropy's, which keeps the output bit-identical
-to the direct LALSimulation calls (astropy's solar mass differs at the
-1e-7 level).
+Masses and distances are converted with :mod:`gwmock_signal.constants`, whose
+values equal LAL's SI constants (``lal.MSUN_SI``, ``lal.PC_SI``) bit-for-bit,
+rather than with astropy's, which keeps the output bit-identical to the direct
+LALSimulation calls (astropy's solar mass is not bit-identical to LAL's).
 """
 
 from __future__ import annotations

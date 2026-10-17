@@ -37,11 +37,12 @@ import lalsimulation
 import numpy as np
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.constants import MPC_SI, MSUN_SI
 from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
-MSUN = lal.MSUN_SI
-MPC = lal.PC_SI * 1e6
+MSUN = MSUN_SI
+MPC = MPC_SI
 
 
 @dataclass(frozen=True)
