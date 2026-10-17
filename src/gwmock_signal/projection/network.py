@@ -21,10 +21,10 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 import numpy as np
-from astropy import constants
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
 from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
@@ -105,19 +105,7 @@ def _time_delay_from_earth_center_lal(
 ) -> float:
     """Return the geocenter time delay for one reconstructed detector geometry."""
     _, location = reconstructed_geometry(prefix)
-    gha = _gmst_accurate(t_gps) - right_ascension
-    cosdec = np.cos(declination)
-    propagation_direction = np.array(
-        [
-            cosdec * np.cos(gha),
-            -cosdec * np.sin(gha),
-            np.sin(declination),
-        ],
-        dtype=float,
-    )
-    earth_center = np.array([0, 0, 0])
-    baseline = earth_center - location
-    return float(np.dot(baseline, propagation_direction) / constants.c.value)
+    return float(time_delay_from_geocenter(location, _gmst_accurate(t_gps), right_ascension, declination, xp=np))
 
 
 def _antenna_pattern_lal(
@@ -130,35 +118,10 @@ def _antenna_pattern_lal(
 ) -> tuple[float, float]:
     """Return tensor antenna-pattern factors for one reconstructed detector geometry."""
     response, _ = reconstructed_geometry(prefix)
-    gha = _gmst_accurate(t_gps) - right_ascension
-    cosgha = np.cos(gha)
-    singha = np.sin(gha)
-    cosdec = np.cos(declination)
-    sindec = np.sin(declination)
-    cospsi = np.cos(polarization_angle)
-    sinpsi = np.sin(polarization_angle)
-
-    x = np.array(
-        [
-            -cospsi * singha - sinpsi * cosgha * sindec,
-            -cospsi * cosgha + sinpsi * singha * sindec,
-            sinpsi * cosdec,
-        ],
-        dtype=float,
+    f_plus, f_cross = antenna_pattern(
+        response, _gmst_accurate(t_gps), right_ascension, declination, polarization_angle, xp=np
     )
-    dx = response.dot(x)
-
-    y = np.array(
-        [
-            sinpsi * singha - cospsi * cosgha * sindec,
-            sinpsi * cosgha + cospsi * singha * sindec,
-            cospsi * cosdec,
-        ],
-        dtype=float,
-    )
-    dy = response.dot(y)
-
-    return float(np.sum(x * dx - y * dy)), float(np.sum(x * dy + y * dx))
+    return float(f_plus), float(f_cross)
 
 
 def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
@@ -426,7 +389,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
 # `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
 # the two projection branches that the compact-binary path depends on, which is not worth
 # the risk for a diagnostic; the warning body itself already lives in its own function.
-def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
+def project_polarizations_to_network(  # noqa: PLR0913
     polarizations: Mapping[str, GWpyTimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
@@ -592,51 +555,22 @@ def project_polarizations_to_network(  # noqa: PLR0913, PLR0915
     precession_offsets = time_array - time_array[0]
     right_ascension_array = right_ascension + d_right_ascension * precession_offsets
     declination_array = declination + d_declination * precession_offsets
-    cosdec = np.cos(declination_array)
-    sindec = np.sin(declination_array)
-    cospsi = np.cos(polarization_angle)
-    sinpsi = np.sin(polarization_angle)
     gmst_array = _gmst_accurate_array(time_array)
-    gha_array = gmst_array - right_ascension_array
-    cosgha = np.cos(gha_array)
-    singha = np.sin(gha_array)
 
     for name, prefix in detectors:
         if earth_rotation:
             response, location = reconstructed_geometry(prefix)
 
-            # Vectorized time delay: time_delay = -location · prop_dir / c
-            prop_dir = np.stack([cosdec * cosgha, -cosdec * singha, sindec], axis=-1)
-            time_delays = -np.dot(prop_dir, location) / constants.c.value
-
+            time_delays = time_delay_from_geocenter(
+                location, gmst_array, right_ascension_array, declination_array, xp=np
+            )
             # Antenna pattern at the detector-time sample, i.e. the same time coordinate
             # the output series is labelled with. Evaluating it at t + tau would mix the
             # detector and geocenter time coordinates; LALSuite and the bilby-x-g
             # frequency-domain implementation both use a single consistent coordinate.
-
-            # Shape (N, 3) — polarization basis vectors
-            x_vec = np.stack(
-                [
-                    -cospsi * singha - sinpsi * cosgha * sindec,
-                    -cospsi * cosgha + sinpsi * singha * sindec,
-                    sinpsi * cosdec,
-                ],
-                axis=-1,
+            fp_vals, fc_vals = antenna_pattern(
+                response, gmst_array, right_ascension_array, declination_array, polarization_angle, xp=np
             )
-            y_vec = np.stack(
-                [
-                    sinpsi * singha - cospsi * cosgha * sindec,
-                    sinpsi * cosgha + cospsi * singha * sindec,
-                    cospsi * cosdec,
-                ],
-                axis=-1,
-            )
-
-            # dx[n] = response @ x_vec[n], using row-vector form: x_vec @ response.T
-            dx = x_vec @ response.T
-            dy = y_vec @ response.T
-            fp_vals = np.sum(x_vec * dx - y_vec * dy, axis=-1)
-            fc_vals = np.sum(x_vec * dy + y_vec * dx, axis=-1)
 
             # Resample at t - tau(t) with the shared band-limited kernel. Expressed as a
             # fractional sample index because the input grid is uniform. Gathered from a
