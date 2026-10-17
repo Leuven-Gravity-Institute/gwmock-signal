@@ -11,8 +11,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""The constants read from the installed ``lalsuite``.
+"""The constants as the installed ``lalsuite`` gives them.
 
+``MSUN_SI``, ``MTSUN_SI`` and ``PC_SI`` are read from ``lal``; ``MPC_SI`` is derived from
+``PC_SI`` exactly as the built-in provider derives it, since LAL defines no megaparsec.
 Defines the same names as :mod:`gwmock_signal.constants._builtin` so the two can be
 compared name by name. Importing it requires ``lalsuite``.
 """

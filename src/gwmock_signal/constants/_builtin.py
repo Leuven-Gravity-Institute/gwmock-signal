@@ -11,9 +11,10 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""Built-in constants: LAL's values, written out so they need no ``lalsuite``.
+"""Built-in constants, written out so they need no ``lalsuite``.
 
-Each literal is the shortest decimal that round-trips to LAL's double. Change one
+``MSUN_SI``, ``MTSUN_SI`` and ``PC_SI`` are LAL's values: each literal is the shortest
+decimal that round-trips to LAL's double. ``MPC_SI`` is derived from ``PC_SI``. Change one
 only together with the ``lalsuite`` floor, after the comparison against LAL shows
 a release has changed it.
 """
