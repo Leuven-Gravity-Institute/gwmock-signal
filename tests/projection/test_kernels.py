@@ -58,7 +58,7 @@ def test_the_response_is_astropy_rotation_matrices_exactly(code):
 
 @pytest.mark.parametrize("code", CODES)
 def test_the_location_agrees_with_astropy_to_rounding(code):
-    """The position agrees with astropy's ``EarthLocation`` to a few parts in 1e16.
+    """The position agrees with astropy's ``EarthLocation`` to 1e-15 relative (measured: up to 4.2e-16).
 
     astropy converts the radians through degrees and wraps negative longitudes, which moves some
     inputs by one ulp before ERFA sees them.
@@ -93,7 +93,8 @@ def test_the_antenna_pattern_agrees_with_lal(code):
         expected = lal.ComputeDetAMResponse(response.astype(np.float32), ra, dec, psi, gmst)
         f_plus, f_cross = kernels.antenna_pattern(response, gmst, ra, dec, psi, xp=np)
 
-        np.testing.assert_allclose((f_plus, f_cross), expected, rtol=0, atol=1e-6)
+        # Measured differences stay below 2e-8 (the single-precision tensor); 1e-7 bounds them.
+        np.testing.assert_allclose((f_plus, f_cross), expected, rtol=0, atol=1e-7)
 
 
 def test_broadcast_forms_equal_a_scalar_loop():
@@ -201,16 +202,28 @@ class TestUnderJax:
         np.testing.assert_allclose(np.asarray(jdelay), np_delay, rtol=0, atol=4 * np.spacing(0.025))
 
     def test_the_geometry_is_differentiable(self):
-        """d(F+)/d(latitude) through the geometry agrees with a central finite difference."""
-        fields = np.asarray(builtin_detectors()["H1"])
+        """The JAX gradient of F+ in latitude matches a finite difference of an independent reference.
 
-        def f_plus(latitude):
+        The reference builds the tensor with astropy's rotation matrices and evaluates it under NumPy,
+        so it shares no geometry code with the differentiated JAX path.
+        """
+        fields = np.asarray(builtin_detectors()["H1"])
+        angles = (1.3, 0.7, 0.2, 0.5)  # gmst, right ascension, declination, polarization
+
+        def f_plus_jax(latitude):
             values = self.jnp.asarray(fields).at[1].set(latitude)
             response, _ = kernels.detector_geometry(tuple(values), xp=self.jnp)
-            return kernels.antenna_pattern(response, 1.3, 0.7, 0.2, 0.5, xp=self.jnp)[0]
+            return kernels.antenna_pattern(response, *angles, xp=self.jnp)[0]
+
+        def f_plus_reference(latitude):
+            values = fields.copy()
+            values[1] = latitude
+            return kernels.antenna_pattern(_astropy_response(tuple(values)), *angles, xp=np)[0]
 
         latitude = float(fields[1])
         step = 1e-6
-        finite = (f_plus(latitude + step) - f_plus(latitude - step)) / (2 * step)
+        finite = (f_plus_reference(latitude + step) - f_plus_reference(latitude - step)) / (2 * step)
+        gradient = float(self.jax.grad(f_plus_jax)(latitude))
 
-        assert abs(float(self.jax.grad(f_plus)(latitude)) - float(finite)) < 1e-8
+        assert abs(finite) > 1e-3  # the derivative is not trivially zero at this point
+        assert abs(gradient - finite) < 1e-8

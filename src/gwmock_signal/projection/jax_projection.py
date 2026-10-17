@@ -123,9 +123,9 @@ def antenna_pattern(
     response: ArrayLike,
     gmst: ArrayLike,
     *,
-    right_ascension: float,
-    declination: float,
-    polarization_angle: float,
+    right_ascension: ArrayLike,
+    declination: ArrayLike,
+    polarization_angle: ArrayLike,
 ) -> tuple[Array, Array]:
     """Tensor antenna-pattern factors (F+, Fx) for one detector, as JAX arrays.
 
@@ -148,7 +148,8 @@ def antenna_pattern(
         polarization_angle: Polarization angle psi in radians.
 
     Returns:
-        ``(f_plus, f_cross)``, each the shape of ``gmst``.
+        ``(f_plus, f_cross)``, each of the broadcast shape of ``gmst`` and the angles (per-sample
+        right ascension and declination give per-sample factors).
     """
     import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
@@ -166,8 +167,8 @@ def time_delay_from_geocenter(
     location: ArrayLike,
     gmst: ArrayLike,
     *,
-    right_ascension: float,
-    declination: float,
+    right_ascension: ArrayLike,
+    declination: ArrayLike,
 ) -> Array:
     """Geocenter-to-detector time delay (seconds) for one detector, as a JAX array.
 
@@ -185,7 +186,7 @@ def time_delay_from_geocenter(
         declination: Source declination in radians.
 
     Returns:
-        Time delay in seconds, the shape of ``gmst``.
+        Time delay in seconds, of the broadcast shape of ``gmst`` and the angles.
     """
     import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 

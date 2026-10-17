@@ -151,7 +151,11 @@ def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
 
     Returns:
         A ``(response, location)`` tuple where ``response`` is the 3x3 detector
-        response tensor and ``location`` is the Earth-fixed position (metres).
+        response tensor and ``location`` is the Earth-fixed position (metres): the
+        WGS-84 conversion of the stored radians, computed as ERFA's ``eraGd2gce``
+        does (see :func:`gwmock_signal.projection.kernels.detector_geometry`). It can
+        differ from astropy's ``EarthLocation`` of the same fields by about one ulp,
+        because astropy converts the angles through degrees and wraps the longitude.
 
     Raises:
         ValueError: If the code is not a known detector; see :func:`detector_fields`.
