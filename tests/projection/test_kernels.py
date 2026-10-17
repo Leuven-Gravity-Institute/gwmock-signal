@@ -74,7 +74,11 @@ def test_the_location_agrees_with_astropy_to_rounding(code):
 
 
 def test_broadcast_forms_equal_a_scalar_loop():
-    """Arrays of sidereal times, right ascensions and declinations give the per-element scalar values."""
+    """Arrays of sidereal times, right ascensions and declinations give the per-element scalar values.
+
+    To the last place, not bit for bit: NumPy evaluates ``sin`` and ``cos`` of an array with SIMD
+    routines that can differ from the scalar ones by one ulp.
+    """
     response, location = kernels.detector_geometry(builtin_detectors()["H1"], xp=np)
     rng = np.random.default_rng(7)
     gmst = rng.uniform(0.0, 2.0 * math.pi, 64)
@@ -86,14 +90,19 @@ def test_broadcast_forms_equal_a_scalar_loop():
     delay = kernels.time_delay_from_geocenter(location, gmst, right_ascension, declination, xp=np)
 
     assert f_plus.shape == f_cross.shape == delay.shape == (64,)
-    for i in range(64):
-        scalar_fp, scalar_fc = kernels.antenna_pattern(
-            response, gmst[i], right_ascension[i], declination[i], psi, xp=np
-        )
-        assert (f_plus[i], f_cross[i]) == (scalar_fp, scalar_fc)
-        assert delay[i] == kernels.time_delay_from_geocenter(
-            location, gmst[i], right_ascension[i], declination[i], xp=np
-        )
+    scalar = np.array(
+        [
+            [
+                *kernels.antenna_pattern(response, gmst[i], right_ascension[i], declination[i], psi, xp=np),
+                kernels.time_delay_from_geocenter(location, gmst[i], right_ascension[i], declination[i], xp=np),
+            ]
+            for i in range(64)
+        ]
+    )
+    # A few ulps of an O(1) antenna factor, and of a delay of at most ~21 ms.
+    np.testing.assert_allclose(f_plus, scalar[:, 0], rtol=0, atol=4e-16)
+    np.testing.assert_allclose(f_cross, scalar[:, 1], rtol=0, atol=4e-16)
+    np.testing.assert_allclose(delay, scalar[:, 2], rtol=0, atol=4 * np.spacing(0.025))
 
 
 def test_scalar_inputs_give_scalar_results():
@@ -146,7 +155,11 @@ class TestUnderJax:
         np.testing.assert_array_equal(np.asarray(location), np_location)
 
     def test_projection_factors_match_numpy(self):
-        """Antenna pattern and delay agree with NumPy to the last place or two."""
+        """Antenna pattern and delay agree with NumPy to the last place or two.
+
+        Not bit for bit: XLA and NumPy may evaluate the trigonometric functions and the reductions
+        differently.
+        """
         response, location = kernels.detector_geometry(builtin_detectors()["L1"], xp=np)
         rng = np.random.default_rng(11)
         gmst, ra, dec = rng.uniform(0, 7, 256), 1.1, -0.4
@@ -162,7 +175,7 @@ class TestUnderJax:
 
         np.testing.assert_allclose(np.asarray(jfp), np_fp, rtol=0, atol=4e-16)
         np.testing.assert_allclose(np.asarray(jfc), np_fc, rtol=0, atol=4e-16)
-        np.testing.assert_allclose(np.asarray(jdelay), np_delay, rtol=0, atol=1e-22)
+        np.testing.assert_allclose(np.asarray(jdelay), np_delay, rtol=0, atol=4 * np.spacing(0.025))
 
     def test_the_geometry_is_differentiable(self):
         """d(F+)/d(latitude) through the geometry agrees with a central finite difference."""
