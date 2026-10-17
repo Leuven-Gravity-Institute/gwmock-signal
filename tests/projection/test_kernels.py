@@ -77,7 +77,7 @@ def test_the_location_agrees_with_astropy_to_rounding(code):
 def test_the_antenna_pattern_agrees_with_lal(code):
     """An independent reference: LAL's ``ComputeDetAMResponse`` on the same tensor and angles.
 
-    LAL takes the tensor in single precision, so agreement is to ~1e-8 rather than bit for bit -- close
+    LAL takes the tensor in single precision, so agreement is to a few times 1e-8 rather than bit for bit -- close
     enough to catch a wrong sign, a swapped basis vector, or a cross term that cancels to zero.
     """
     lal = pytest.importorskip("lal")
@@ -93,7 +93,8 @@ def test_the_antenna_pattern_agrees_with_lal(code):
         expected = lal.ComputeDetAMResponse(response.astype(np.float32), ra, dec, psi, gmst)
         f_plus, f_cross = kernels.antenna_pattern(response, gmst, ra, dec, psi, xp=np)
 
-        # Measured differences stay below 2e-8 (the single-precision tensor); 1e-7 bounds them.
+        # Over this sweep the largest measured difference is 2.9e-8 (the single-precision tensor);
+        # 1e-7 bounds it with margin.
         np.testing.assert_allclose((f_plus, f_cross), expected, rtol=0, atol=1e-7)
 
 
