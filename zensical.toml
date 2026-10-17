@@ -84,6 +84,7 @@ nav = [
     { "Network" = "api/network/index.md" },
     { "Simulator" = "api/simulator/index.md" },
     { "Registry" = "api/registry/index.md" },
+    { "Constants" = "api/constants/index.md" },
     { "Utility" = [
       { "Overview" = "api/utils/index.md" },
       { "Logging" = "api/utils/log.md" },

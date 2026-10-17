@@ -33,6 +33,7 @@ tree (`src/gwmock_signal/`).
 | **[Network](network/)**             | `Network` (presets, `from_file`, detector lists)                                                       |
 | **[Simulator](simulator/)**         | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
 | **[Registry](registry/)**           | `resolve_simulator_backend`, `register_simulator_backend`, `list_registered_source_types`              |
+| **[Constants](constants/)**         | `MSUN_SI`, `MTSUN_SI`, `PC_SI`, `MPC_SI` (equal to LAL's)                                              |
 | **[Utility](utils/)**               | Logging and other helpers                                                                              |
 
 ## Main entry points (quick links)
