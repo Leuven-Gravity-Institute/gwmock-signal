@@ -19,22 +19,31 @@ suite checks this against whichever ``lalsuite`` the environment resolves. It ca
 ``lalsuite`` release that changes a constant, because nothing in this repository changes when one is
 published. This script checks that case, on a schedule.
 
-It reads the ``lalsuite`` floor from ``pyproject.toml`` and the newest release from PyPI. It then
-installs each into a throwaway environment and reads the constants through
+It reads the ``lalsuite`` floor from ``pyproject.toml`` and the newest final release from PyPI. It
+installs each into a throwaway environment, using a supported Python (from the trove classifiers) for
+which the release ships a wheel on this platform. It then reads the constants through
 ``gwmock_signal/constants/_lal.py``, so the two providers are compared name by name. The policy it
 enforces:
 
 - the built-in values must equal those of the newest release;
-- the floor must give the same values as the newest release. If it does not, the releases between
-  them are read from the newest downwards, and the walk stops at the first one that disagrees. The
-  lowest release above that point is the floor to move to, because every release it admits agrees with
-  the newest. Bisection would not do: a constant could change and then change back, and a floor below
-  the change-back would still admit the releases in between.
+- the lowest release the floor admits must give the same values as the newest release.
+
+Only those two ends are compared when they agree; the releases between them are not read. When the
+lowest admitted release disagrees, a new floor is proposed. The releases between the floor and the newest are read from
+the newest downwards, and the walk stops at the first one that disagrees. The lowest release above that
+point is proposed, so every release the proposed floor admits has been read and agrees with the newest.
+Bisection would not do: a constant could change and then change back, and a floor below the change-back
+would admit the releases in between.
 
 It proposes; it does not edit. Changing a constant changes every waveform, so a maintainer applies the
 values and the floor in a reviewed pull request. The report is markdown, written to ``--report`` and to
-stdout. The exit status is 0 when everything agrees, 1 on any mismatch, and 2 when the check could not
-be made.
+stdout. The exit status is:
+
+- 0 when everything agrees;
+- 1 on a mismatch;
+- 2 when the check could not be made. That includes a release in the range a proposed floor would admit
+  that could not be read: a floor cannot be vouched for when one of the releases it admits was never
+  checked.
 
 Run it with ``packaging`` supplied on the fly, so it need not become a dependency::
 
@@ -49,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import runpy
 import subprocess
 import sys
@@ -59,16 +69,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.requirements import Requirement
-from packaging.tags import Tag, sys_tags
+from packaging.tags import Tag, cpython_tags, platform_tags
 from packaging.utils import parse_wheel_filename
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONSTANTS_DIR = REPO_ROOT / "src" / "gwmock_signal" / "constants"
 PYPI_URL = "https://pypi.org/pypi/lalsuite/json"
-#: The throwaway environments use the interpreter version running this script, so the wheels counted
-#: as installable (from :func:`packaging.tags.sys_tags`) are the ones those environments install.
-PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 #: Prints the LAL provider's constants as JSON hex strings; run inside an environment with ``lalsuite``.
 _READ_LAL_PROVIDER = (
@@ -114,26 +121,55 @@ def lalsuite_floor(pyproject: str) -> Version:
     raise ValueError("lalsuite is not a core dependency in pyproject.toml")
 
 
-def installable_versions(release_files: Mapping[str, list[dict]], tags: Iterable[Tag]) -> list[Version]:
-    """Return the final, unyanked releases that ship a wheel this interpreter can install, ascending.
+def supported_pythons(pyproject: str) -> list[str]:
+    """Return the ``3.N`` versions the trove classifiers declare, ascending.
+
+    Raises:
+        ValueError: If no ``Programming Language :: Python :: 3.N`` classifier is present.
+    """
+    classifiers = tomllib.loads(pyproject)["project"].get("classifiers", [])
+    minors = sorted(
+        int(match.group(1))
+        for classifier in classifiers
+        if (match := re.fullmatch(r"Programming Language :: Python :: 3\.(\d+)", classifier))
+    )
+    if not minors:
+        raise ValueError("no 'Programming Language :: Python :: 3.N' classifier in pyproject.toml")
+    return [f"3.{minor}" for minor in minors]
+
+
+def wheel_tags(pythons: Iterable[str], platforms: Iterable[str]) -> dict[str, set[Tag]]:
+    """Return, for each ``3.N``, the CPython wheel tags it can install on the given platforms."""
+    platforms = list(platforms)
+    return {
+        python: set(cpython_tags(python_version=tuple(int(part) for part in python.split(".")), platforms=platforms))
+        for python in pythons
+    }
+
+
+def release_pythons(release_files: Mapping[str, list[dict]], tags: Mapping[str, set[Tag]]) -> dict[Version, list[str]]:
+    """Return each final release with an unyanked file, and the Pythons that can install one of its wheels.
+
+    A release is kept even when no listed Python has a wheel for it -- its list is then empty -- so the
+    caller can tell an uncheckable release from one that does not exist.
 
     Args:
         release_files: PyPI's ``releases`` mapping, version string to the list of its files.
-        tags: The wheel tags the target interpreter supports, as :func:`packaging.tags.sys_tags` gives them.
+        tags: For each ``3.N`` to consider, in order of preference, the wheel tags it supports.
     """
-    supported = set(tags)
-    versions = []
-    for raw, files in release_files.items():
+    releases = {}
+    for raw, all_files in release_files.items():
         version = Version(raw)
         if version.is_prerelease or version.is_devrelease:
             continue
-        for file in files:
-            if file.get("yanked") or not file["filename"].endswith(".whl"):
-                continue
-            if supported & set(parse_wheel_filename(file["filename"])[3]):
-                versions.append(version)
-                break
-    return sorted(versions)
+        files = [file for file in all_files if not file.get("yanked")]
+        if not files:
+            continue
+        wheel_tag_sets = [
+            set(parse_wheel_filename(file["filename"])[3]) for file in files if file["filename"].endswith(".whl")
+        ]
+        releases[version] = [python for python, supported in tags.items() if any(supported & w for w in wheel_tag_sets)]
+    return dict(sorted(releases.items()))
 
 
 def compare(expected: Constants, actual: Constants) -> list[Mismatch]:
@@ -151,12 +187,12 @@ def lowest_consistent(
     reference: Constants,
     read: Callable[[Version], Constants | None],
 ) -> tuple[Version, list[Version]]:
-    """Return the lowest version from which every release up to ``newest`` gives ``reference``.
+    """Return the lowest version from which every readable release up to ``newest`` gives ``reference``.
 
     The candidates (releases below ``newest``) are read from the highest down, stopping at the first that
-    disagrees, so every release at or above the answer agrees. ``read`` returns ``None`` for a version it
-    could not install; such a version is passed over and returned in the second element, so the caller
-    can say which releases the answer could not account for.
+    disagrees. ``read`` returns ``None`` for a version it could not install; such a version is passed over
+    and returned in the second element, so the caller can tell whether the answer admits a release that
+    was never read.
     """
     lowest = newest
     unreadable = []
@@ -177,16 +213,16 @@ def builtin_constants() -> dict[str, float]:
     return {name: value for name, value in namespace.items() if name.isupper()}
 
 
-def lal_constants(version: Version) -> dict[str, float] | None:
-    """Return the LAL provider's constants with ``lalsuite==version`` installed, or ``None`` if it fails."""
+def lal_constants(version: Version, python: str) -> dict[str, float] | None:
+    """Return the LAL provider's constants with ``lalsuite==version`` on ``python``, or ``None`` if it fails."""
     command = [
-        "uv", "run", "--no-project", "--isolated", "--quiet", "--python", PYTHON,
+        "uv", "run", "--no-project", "--isolated", "--quiet", "--python", python,
         "--with", f"lalsuite=={version}",
         "python", "-c", _READ_LAL_PROVIDER, str(CONSTANTS_DIR / "_lal.py"),
     ]  # fmt: skip
     result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
     if result.returncode != 0:
-        print(f"lalsuite {version}: could not read constants\n{result.stderr}", file=sys.stderr)
+        print(f"lalsuite {version} on Python {python}: could not read constants\n{result.stderr}", file=sys.stderr)
         return None
     return {name: float.fromhex(value) for name, value in json.loads(result.stdout).items()}
 
@@ -202,6 +238,10 @@ def _table(mismatches: list[Mismatch], expected_label: str, actual_label: str) -
     return rows
 
 
+def _listed(versions: Iterable[Version]) -> str:
+    return ", ".join(str(version) for version in sorted(versions))
+
+
 def check(
     *,
     floor: Version,
@@ -209,21 +249,27 @@ def check(
     builtin: Constants,
     read: Callable[[Version], Constants | None],
 ) -> tuple[int, str]:
-    """Run the policy and return ``(exit status, markdown report)``."""
+    """Run the policy over ``versions`` (every final release at or above ``floor``) and report.
+
+    Returns:
+        ``(exit status, markdown report)``.
+    """
     lines = ["# Built-in constants against lalsuite", ""]
     newest = versions[-1] if versions else None
     if newest is None or newest < floor:
-        lines.append(f"No installable lalsuite release at or above the floor {floor}.")
+        lines.append(f"No lalsuite release at or above the floor {floor}.")
         return 2, "\n".join(lines)
 
+    # The floor need not be a published release; what it admits starts at the lowest one at or above it.
+    lowest = versions[0]
     newest_values = read(newest)
-    floor_values = newest_values if floor == newest else read(floor)
+    floor_values = newest_values if lowest == newest else read(lowest)
     if newest_values is None or floor_values is None:
-        unreadable = newest if newest_values is None else floor
+        unreadable = newest if newest_values is None else lowest
         lines.append(f"Could not read the constants of lalsuite {unreadable}; see the log.")
         return 2, "\n".join(lines)
 
-    lines.append(f"Floor: lalsuite {floor}. Newest installable on Python {PYTHON}: lalsuite {newest}.")
+    lines.append(f"Floor: `lalsuite>={floor}`, lowest release admitted {lowest}. Newest: lalsuite {newest}.")
     status = 0
 
     builtin_vs_newest = compare(newest_values, builtin)
@@ -242,26 +288,35 @@ def check(
 
     floor_vs_newest = compare(newest_values, floor_values)
     lines.append("")
-    if floor_vs_newest:
-        status = 1
-        candidates = [version for version in versions if floor < version < newest]
-        proposed, unreadable = lowest_consistent(newest, candidates, newest_values, read)
-        lines += [
-            f"## The floor lalsuite {floor} differs from lalsuite {newest}",
-            "",
-            *_table(floor_vs_newest, f"lalsuite {newest}", f"lalsuite {floor}"),
-            "",
-            (
-                f"Every release from **{proposed}** to {newest} gives lalsuite {newest}'s values. Raise the "
-                f"floor to `lalsuite>={proposed}`, in the same pull request as any change to the built-in values."
-            ),
-        ]
-        if unreadable:
-            skipped = ", ".join(str(version) for version in sorted(unreadable))
-            lines += ["", f"Could not read, so not accounted for: {skipped}."]
-    else:
-        lines.append(f"The floor lalsuite {floor} gives the same values as lalsuite {newest}.")
+    if not floor_vs_newest:
+        lines.append(
+            f"The floor's lowest release, lalsuite {lowest}, gives the same values as lalsuite {newest}. "
+            "The releases between them were not read."
+        )
+        return status, "\n".join(lines)
 
+    status = max(status, 1)
+    candidates = [version for version in versions if lowest < version < newest]
+    proposed, unreadable = lowest_consistent(newest, candidates, newest_values, read)
+    admitted_unread = [version for version in unreadable if version >= proposed]
+    lines += [
+        f"## The floor's lowest release, lalsuite {lowest}, differs from lalsuite {newest}",
+        "",
+        *_table(floor_vs_newest, f"lalsuite {newest}", f"lalsuite {lowest}"),
+        "",
+    ]
+    if admitted_unread:
+        status = 2
+        lines.append(
+            f"No floor can be proposed: lalsuite {_listed(admitted_unread)} could not be read, and the lowest "
+            f"floor the readable releases support, {proposed}, would admit it. See the log."
+        )
+    else:
+        lines.append(
+            f"Every release from **{proposed}** to {newest} was read and gives lalsuite {newest}'s values. "
+            f"Raise the floor to `lalsuite>={proposed}`, in the same pull request as any change to the "
+            "built-in values."
+        )
     return status, "\n".join(lines)
 
 
@@ -271,17 +326,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path, help="Also write the markdown report to this file.")
     args = parser.parse_args(argv)
 
-    floor = lalsuite_floor((REPO_ROOT / "pyproject.toml").read_text())
-    with urllib.request.urlopen(PYPI_URL, timeout=60) as response:
-        releases = json.load(response)["releases"]
-    versions = [version for version in installable_versions(releases, sys_tags()) if version >= floor]
+    try:
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+        floor = lalsuite_floor(pyproject)
+        pythons = supported_pythons(pyproject)
+        with urllib.request.urlopen(PYPI_URL, timeout=60) as response:
+            release_files = json.load(response)["releases"]
+        releases = release_pythons(release_files, wheel_tags(pythons, platform_tags()))
+    except (OSError, ValueError, KeyError) as exc:
+        status, report = 2, f"# Built-in constants against lalsuite\n\nThe check could not start: {exc!r}"
+    else:
 
-    status, report = check(
-        floor=floor,
-        versions=versions,
-        builtin=builtin_constants(),
-        read=lal_constants,
-    )
+        def read(version: Version) -> Constants | None:
+            if not releases[version]:
+                print(f"lalsuite {version}: no wheel for Python {', '.join(pythons)} here", file=sys.stderr)
+                return None
+            return lal_constants(version, releases[version][0])
+
+        status, report = check(
+            floor=floor,
+            versions=[version for version in releases if version >= floor],
+            builtin=builtin_constants(),
+            read=read,
+        )
     print(report)
     if args.report:
         args.report.write_text(report + "\n")
