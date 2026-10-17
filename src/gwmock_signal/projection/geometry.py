@@ -29,12 +29,11 @@ from functools import cache
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from astropy import coordinates, units
-from astropy.coordinates.matrix_utilities import rotation_matrix
 
 from gwmock_signal import _lalsuite
 from gwmock_signal._detector_table import builtin_detectors, unknown_code_help
 from gwmock_signal.detector import CustomDetector
+from gwmock_signal.projection.kernels import detector_geometry
 
 if TYPE_CHECKING:
     import lal
@@ -190,22 +189,4 @@ def _geometry_from_fields(fields: tuple[float, ...]) -> tuple[np.ndarray, np.nda
         A ``(response, location)`` tuple where ``response`` is the 3x3 detector response
         tensor and ``location`` is the Earth-fixed position in metres.
     """
-    longitude, latitude, elevation, x_azimuth, y_azimuth, x_altitude, y_altitude = fields
-
-    arm_response = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
-    rotation_longitude = rotation_matrix(-longitude * units.rad, "z")
-    rotation_latitude = rotation_matrix(-(np.pi / 2.0 - latitude) * units.rad, "y")
-
-    responses: list[np.ndarray] = []
-    for azimuth, altitude in ((y_azimuth, y_altitude), (x_azimuth, x_altitude)):
-        rotation_azimuth = rotation_matrix(azimuth * units.rad, "z")
-        rotation_altitude = rotation_matrix(-altitude * units.rad, "y")
-        rotation = rotation_longitude @ rotation_latitude @ rotation_azimuth @ rotation_altitude
-        responses.append(np.asarray(rotation @ arm_response @ rotation.T / 2.0, dtype=float))
-
-    location = coordinates.EarthLocation.from_geodetic(
-        longitude * units.rad,
-        latitude * units.rad,
-        height=elevation * units.meter,
-    )
-    return responses[0] - responses[1], np.array([location.x.value, location.y.value, location.z.value], dtype=float)
+    return detector_geometry(fields, xp=np)

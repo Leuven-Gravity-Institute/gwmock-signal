@@ -13,10 +13,11 @@
 #
 """JAX building blocks for on-device detector projection.
 
-These are the traceable counterparts of the NumPy/Astropy helpers in
-:mod:`gwmock_signal.projection.network`, used by the planned on-device (GPU)
-simulation path. This module imports JAX at import time, so it must only be
-imported by the device path or its tests, never by always-loaded modules
+Used by the on-device (GPU) simulation path. The antenna pattern and time delay are
+:mod:`gwmock_signal.projection.kernels` under :mod:`jax.numpy`, the same code the NumPy
+path in :mod:`gwmock_signal.projection.network` runs; the sidereal time and the
+frequency-domain projection are JAX-specific. This module imports JAX at import time, so
+it must only be imported by the device path or its tests, never by always-loaded modules
 (the package must still import without the optional ``[jax]`` extra).
 
 !!! important "Double precision required"
@@ -39,10 +40,10 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from gwmock_signal.projection import kernels
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
-    SPEED_OF_LIGHT_M_S,
     edge_padding,
     kaiser_window_chebyshev,
     validate_kernel,
@@ -128,10 +129,9 @@ def antenna_pattern(
 ) -> tuple[Array, Array]:
     """Tensor antenna-pattern factors (F+, Fx) for one detector, as JAX arrays.
 
-    Traceable counterpart of ``_antenna_pattern_lal`` in
-    :mod:`gwmock_signal.projection.network`, using the same formula but taking the
-    detector response tensor and sidereal time as inputs (single source of truth:
-    ``response`` from :func:`gwmock_signal.projection.geometry.reconstructed_geometry`,
+    :func:`gwmock_signal.projection.kernels.antenna_pattern` under :mod:`jax.numpy`, the same
+    code the NumPy path runs, taking the detector response tensor and sidereal time as inputs
+    (``response`` from :func:`gwmock_signal.projection.geometry.reconstructed_geometry`,
     ``gmst`` from :func:`gmst_rad`).
 
     For ``earth_rotation=False`` callers pass a scalar ``gmst`` (evaluated once at
@@ -152,32 +152,14 @@ def antenna_pattern(
     """
     import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
-    response = jnp.asarray(response, dtype=jnp.float64)
-    gha = jnp.asarray(gmst, dtype=jnp.float64) - right_ascension
-    ones = jnp.ones_like(gha)  # broadcast the gha-independent z-component to gmst's shape
-    cosgha, singha = jnp.cos(gha), jnp.sin(gha)
-    cosdec, sindec = jnp.cos(declination), jnp.sin(declination)
-    cospsi, sinpsi = jnp.cos(polarization_angle), jnp.sin(polarization_angle)
-
-    x = jnp.stack(
-        [
-            -cospsi * singha - sinpsi * cosgha * sindec,
-            -cospsi * cosgha + sinpsi * singha * sindec,
-            sinpsi * cosdec * ones,
-        ]
+    return kernels.antenna_pattern(
+        jnp.asarray(response, dtype=jnp.float64),
+        jnp.asarray(gmst, dtype=jnp.float64),
+        right_ascension,
+        declination,
+        polarization_angle,
+        xp=jnp,
     )
-    y = jnp.stack(
-        [
-            sinpsi * singha - cospsi * cosgha * sindec,
-            sinpsi * cosgha + cospsi * singha * sindec,
-            cospsi * cosdec * ones,
-        ]
-    )
-    dx = response @ x
-    dy = response @ y
-    f_plus = jnp.sum(x * dx - y * dy, axis=0)
-    f_cross = jnp.sum(x * dy + y * dx, axis=0)
-    return f_plus, f_cross
 
 
 def time_delay_from_geocenter(
@@ -189,9 +171,8 @@ def time_delay_from_geocenter(
 ) -> Array:
     """Geocenter-to-detector time delay (seconds) for one detector, as a JAX array.
 
-    Traceable counterpart of ``_time_delay_from_earth_center_lal`` in
-    :mod:`gwmock_signal.projection.network`, using the same formula but taking the
-    detector location and sidereal time as inputs. As with :func:`antenna_pattern`,
+    :func:`gwmock_signal.projection.kernels.time_delay_from_geocenter` under :mod:`jax.numpy`,
+    the same code the NumPy path runs, taking the detector location and sidereal time as inputs. As with :func:`antenna_pattern`,
     pass a scalar ``gmst`` for ``earth_rotation=False``.
 
     Args:
@@ -208,17 +189,13 @@ def time_delay_from_geocenter(
     """
     import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
-    location = jnp.asarray(location, dtype=jnp.float64)
-    gha = jnp.asarray(gmst, dtype=jnp.float64) - right_ascension
-    cosdec, sindec = jnp.cos(declination), jnp.sin(declination)
-    propagation_direction = jnp.stack(
-        [
-            cosdec * jnp.cos(gha),
-            -cosdec * jnp.sin(gha),
-            sindec * jnp.ones_like(gha),
-        ]
+    return kernels.time_delay_from_geocenter(
+        jnp.asarray(location, dtype=jnp.float64),
+        jnp.asarray(gmst, dtype=jnp.float64),
+        right_ascension,
+        declination,
+        xp=jnp,
     )
-    return -jnp.tensordot(location, propagation_direction, axes=1) / SPEED_OF_LIGHT_M_S
 
 
 def project_polarizations_fd(  # noqa: PLR0913
