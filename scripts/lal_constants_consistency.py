@@ -69,7 +69,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.requirements import Requirement
-from packaging.tags import Tag, cpython_tags, platform_tags
+from packaging.tags import Tag, compatible_tags, cpython_tags, platform_tags
 from packaging.utils import parse_wheel_filename
 from packaging.version import Version
 
@@ -139,12 +139,19 @@ def supported_pythons(pyproject: str) -> list[str]:
 
 
 def wheel_tags(pythons: Iterable[str], platforms: Iterable[str]) -> dict[str, set[Tag]]:
-    """Return, for each ``3.N``, the CPython wheel tags it can install on the given platforms."""
+    """Return, for each ``3.N``, the wheel tags CPython ``3.N`` can install on the given platforms.
+
+    That is the CPython-specific tags (including ``abi3``) and the generic ones (``py3-none-any`` and the
+    like), as an installer would accept them.
+    """
     platforms = list(platforms)
-    return {
-        python: set(cpython_tags(python_version=tuple(int(part) for part in python.split(".")), platforms=platforms))
-        for python in pythons
-    }
+    tags = {}
+    for python in pythons:
+        version = tuple(int(part) for part in python.split("."))
+        tags[python] = set(cpython_tags(python_version=version, platforms=platforms)) | set(
+            compatible_tags(python_version=version, interpreter=f"cp{version[0]}{version[1]}", platforms=platforms)
+        )
+    return tags
 
 
 def release_pythons(release_files: Mapping[str, list[dict]], tags: Mapping[str, set[Tag]]) -> dict[Version, list[str]]:
@@ -220,11 +227,27 @@ def lal_constants(version: Version, python: str) -> dict[str, float] | None:
         "--with", f"lalsuite=={version}",
         "python", "-c", _READ_LAL_PROVIDER, str(CONSTANTS_DIR / "_lal.py"),
     ]  # fmt: skip
-    result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
-    if result.returncode != 0:
-        print(f"lalsuite {version} on Python {python}: could not read constants\n{result.stderr}", file=sys.stderr)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr)
+        return {name: float.fromhex(value) for name, value in json.loads(result.stdout).items()}
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+        # Any failure to install or to read is reported as unreadable, which the policy fails closed on.
+        print(f"lalsuite {version} on Python {python}: could not read constants: {exc}", file=sys.stderr)
         return None
-    return {name: float.fromhex(value) for name, value in json.loads(result.stdout).items()}
+
+
+def read_release(
+    version: Version, pythons: list[str], reader: Callable[[Version, str], Constants | None] = lal_constants
+) -> Constants | None:
+    """Read ``version`` on each of ``pythons`` in turn, returning the first success, or ``None``."""
+    for python in pythons:
+        values = reader(version, python)
+        if values is not None:
+            return values
+    print(f"lalsuite {version}: not readable on any supported Python with a wheel for it", file=sys.stderr)
+    return None
 
 
 def _table(mismatches: list[Mismatch], expected_label: str, actual_label: str) -> list[str]:
@@ -333,21 +356,15 @@ def main(argv: list[str] | None = None) -> int:
         with urllib.request.urlopen(PYPI_URL, timeout=60) as response:
             release_files = json.load(response)["releases"]
         releases = release_pythons(release_files, wheel_tags(pythons, platform_tags()))
-    except (OSError, ValueError, KeyError) as exc:
+        builtin = builtin_constants()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         status, report = 2, f"# Built-in constants against lalsuite\n\nThe check could not start: {exc!r}"
     else:
-
-        def read(version: Version) -> Constants | None:
-            if not releases[version]:
-                print(f"lalsuite {version}: no wheel for Python {', '.join(pythons)} here", file=sys.stderr)
-                return None
-            return lal_constants(version, releases[version][0])
-
         status, report = check(
             floor=floor,
             versions=[version for version in releases if version >= floor],
-            builtin=builtin_constants(),
-            read=read,
+            builtin=builtin,
+            read=lambda version: read_release(version, releases[version]),
         )
     print(report)
     if args.report:

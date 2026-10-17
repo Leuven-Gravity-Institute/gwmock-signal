@@ -27,7 +27,9 @@ wrong proposed floor admits a release that disagrees.
 
 from __future__ import annotations
 
+import io
 import math
+import subprocess
 import urllib.request
 
 import lal_constants_consistency
@@ -37,9 +39,11 @@ from lal_constants_consistency import (
     builtin_constants,
     check,
     compare,
+    lal_constants,
     lalsuite_floor,
     lowest_consistent,
     main,
+    read_release,
     release_pythons,
     supported_pythons,
     wheel_tags,
@@ -151,6 +155,12 @@ class TestWhichPythonReadsEachRelease:
         }
 
         assert release_pythons(releases, self.TAGS) == {Version("7.28"): [], Version("7.29"): []}
+
+    def test_a_universal_wheel_is_installable_on_every_supported_python(self):
+        """A ``py3-none-any`` wheel is installable anywhere, so it must not make a release unreadable."""
+        releases = {"7.30": [{"filename": "lalsuite-7.30-py3-none-any.whl", "yanked": False}]}
+
+        assert release_pythons(releases, self.TAGS) == {Version("7.30"): ["3.12", "3.13", "3.14"]}
 
     def test_yanked_files_and_pre_releases_are_dropped(self):
         """A release whose only file is yanked does not exist for installers; pre-releases are not releases."""
@@ -320,6 +330,57 @@ class TestThePolicy:
 
         assert status == 2
         assert "Could not read the constants of lalsuite 2" in report
+
+
+class TestReadingARelease:
+    """Any failure to install or read a release makes it unreadable; it never escapes as an exception."""
+
+    def test_the_next_python_is_tried_when_the_first_fails(self):
+        """A failed install on the preferred Python falls back to the next one with a wheel."""
+        tried = []
+
+        def reader(version, python):
+            tried.append(python)
+            return None if python == "3.12" else GOOD
+
+        assert read_release(Version("7.27"), ["3.12", "3.13", "3.14"], reader) == GOOD
+        assert tried == ["3.12", "3.13"]
+
+    @pytest.mark.parametrize("pythons", [[], ["3.12", "3.13"]])
+    def test_no_python_that_works_is_unreadable(self, pythons):
+        """No candidate Python, or none that succeeds, gives ``None``."""
+        assert read_release(Version("7.27"), pythons, lambda version, python: None) is None
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            OSError("uv: command not found"),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="no matching distribution"),
+            subprocess.CompletedProcess([], 0, stdout="not json", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout='{"MSUN_SI": "not hex"}', stderr=""),
+        ],
+        ids=["uv-missing", "install-fails", "output-not-json", "value-not-hex"],
+    )
+    def test_a_failed_read_is_none(self, monkeypatch, outcome):
+        """A launch failure, a failed install or malformed output is unreadable, not a traceback."""
+
+        def run(*args, **kwargs):
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(subprocess, "run", run)
+
+        assert lal_constants(Version("7.24"), "3.12") is None
+
+
+def test_a_malformed_release_listing_is_reported_as_uncheckable(monkeypatch, tmp_path):
+    """PyPI answering with something other than a release mapping gives exit status 2 and a report."""
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(b'{"releases": null}'))
+    report = tmp_path / "report.md"
+
+    assert main(["--report", str(report)]) == 2
+    assert "could not start" in report.read_text()
 
 
 def test_a_failed_release_listing_is_reported_as_uncheckable(monkeypatch, tmp_path, capsys):
