@@ -21,13 +21,11 @@ on:
     schedule:
         - cron: '23 5 * * 1' # weekly, Monday 05:23 UTC
     workflow_dispatch:
+    # Every pull request, so the `check` status is always reported and can be a
+    # required check; the `scope` step decides whether the comparison itself
+    # runs, from the paths it matches.
     pull_request:
         branches: [main]
-        paths:
-            - 'pyproject.toml'
-            - 'src/gwmock_signal/constants/**'
-            - 'scripts/lal_constants_consistency.py'
-            - '.github/workflows/lal_constants.yml'
 
 concurrency:
     group: lal-constants-${{ github.ref }}
@@ -49,23 +47,58 @@ jobs:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
               with:
                   persist-credentials: false
+                  # Full history (0) only for a pull request, whose base the scope step
+                  # diffs against. 0 is falsy in an expression, so it must come last.
+                  fetch-depth:
+                      ${{ github.event_name != 'pull_request' && 1 || 0 }}
+
+            # A pull request that touches none of these files cannot change the
+            # outcome, so it skips the comparison and the job passes at once.
+            # Scheduled and manual runs always compare.
+            - name: Decide whether the comparison is needed
+              id: scope
+              env:
+                  EVENT: ${{ github.event_name }}
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+              run: |
+                  if [ "$EVENT" != pull_request ]; then
+                      echo "run=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  if ! changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
+                      # Not knowing what changed is no reason to skip: compare, and say why.
+                      echo "run=true" >> "$GITHUB_OUTPUT"
+                      echo "Could not list the changed files; running the comparison." >> "$GITHUB_STEP_SUMMARY"
+                      exit 0
+                  fi
+                  # A here-string, not a pipe: grep -q stops reading at the first match, and under
+                  # pipefail the writer's SIGPIPE would turn that match into a skip.
+                  if grep -qE '^(pyproject\.toml|scripts/lal_constants_consistency\.py|\.github/workflows/lal_constants\.yml)$|^src/gwmock_signal/constants/' <<< "$changed"; then
+                      echo "run=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "run=false" >> "$GITHUB_OUTPUT"
+                      echo "No file that affects the LAL constants changed; comparison skipped." >> "$GITHUB_STEP_SUMMARY"
+                  fi
 
             # The oldest supported Python: the floor release is the one most
             # likely to lack wheels for newer interpreters.
             - name: Install uv
+              if: ${{ steps.scope.outputs.run == 'true' }}
               uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
               with:
                   python-version: '3.12'
 
             - name: Compare the built-in constants with lalsuite
               id: compare
+              if: ${{ steps.scope.outputs.run == 'true' }}
               run: >-
                   uv run --no-project --with packaging python
                   scripts/lal_constants_consistency.py --report lal-constants.md
 
             - name: Publish the report
               id: publish
-              if: ${{ !cancelled() }}
+              if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
               run: |
                   if [ ! -f lal-constants.md ]; then
                       echo 'The check wrote no report; see the run log.' > lal-constants.md
@@ -79,7 +112,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Upload the report
-              if: ${{ !cancelled() }}
+              if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
               uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
               with:
                   name: lal-constants-report
