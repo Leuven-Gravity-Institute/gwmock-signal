@@ -40,12 +40,19 @@ def _astropy_response(fields: tuple[float, ...]) -> np.ndarray:
 
 
 @pytest.mark.parametrize("code", CODES)
-def test_the_location_is_erfa_gd2gc_exactly(code):
-    """The vertex position is ERFA's WGS-84 conversion of the stored fields, to the last bit."""
+def test_the_location_is_erfa_gd2gc(code):
+    """The vertex position is ERFA's WGS-84 conversion of the stored fields, to the last place.
+
+    The kernel performs ERFA's ``eraGd2gce`` operations in the same order, so the two agree exactly
+    where NumPy and ERFA's compiled C use the same ``sin`` and ``cos`` (glibc). Elsewhere -- NumPy's
+    own routines on macOS, for one -- the trigonometric values can differ by one ulp, so the
+    comparison allows a few ulps of the coordinate.
+    """
     longitude, latitude, elevation = builtin_detectors()[code][:3]
     _, location = kernels.detector_geometry(builtin_detectors()[code], xp=np)
+    expected = erfa.gd2gc(1, longitude, latitude, elevation)
 
-    np.testing.assert_array_equal(location, erfa.gd2gc(1, longitude, latitude, elevation))
+    np.testing.assert_allclose(location, expected, rtol=0, atol=4 * np.spacing(np.max(np.abs(expected))))
 
 
 @pytest.mark.parametrize("code", CODES)
