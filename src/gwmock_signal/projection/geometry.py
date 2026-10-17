@@ -14,7 +14,9 @@
 """Detector geometry: the single source of truth for response tensors and locations.
 
 These helpers reconstruct each detector's response tensor and Earth-fixed location
-from LAL's cached detector registry. They are deliberately kept in one place (rather
+from its defining fields: for LAL's built-in codes, from the table shipped with the package
+(:mod:`gwmock_signal._detector_table`); for a detector registered with LAL at run time, from
+LAL's registry. They are deliberately kept in one place (rather
 than inlined in the projection code) so every consumer — the NumPy projection path
 today, and a planned on-device JAX path — derives detector geometry from the same
 constants instead of re-deriving them (a single source of truth).
@@ -31,6 +33,7 @@ from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
 
 from gwmock_signal import _lalsuite
+from gwmock_signal._detector_table import builtin_detectors, unknown_code_help
 from gwmock_signal.detector import CustomDetector
 
 if TYPE_CHECKING:
@@ -55,8 +58,8 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
     to built-in interferometer codes, which is why ET presets could not reach it at all.
 
     Lives here rather than in either projection module so both derive the mapping from one
-    implementation, consistent with this module being the single point of contact with LAL's
-    registry.
+    implementation, consistent with this module being the single point that turns a detector code
+    into geometry (:func:`detector_fields`).
 
     Args:
         detector_specs: Built-in LAL interferometer codes and/or ``CustomDetector`` instances.
@@ -67,8 +70,8 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
 
     Raises:
         TypeError: If an entry is neither a string nor a ``CustomDetector``.
-        ValueError: If a string is not a detector LAL knows about, or if two entries resolve to
-            the same LAL detector.
+        ValueError: If a string is not a known detector code (see :func:`detector_fields`), or if
+            two entries resolve to the same detector.
     """
     resolved: list[tuple[str, str]] = []
     for raw in detector_specs:
@@ -76,7 +79,7 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
             name = str(raw)
             # Resolved eagerly so an unknown code fails here, with the other detectors' names
             # still available for the message, rather than deep inside a jitted kernel.
-            get_lal_detector(name)
+            detector_fields(name)
             resolved.append((name, name))
         elif isinstance(raw, CustomDetector):
             resolved.append((raw.name, raw.to_lal().frDetector.prefix))
@@ -110,8 +113,38 @@ def get_lal_detector(prefix: str) -> lal.Detector:
         ) from exc
 
 
+def detector_fields(code: str) -> tuple[float, ...]:
+    """Return the fields that define the detector named by ``code`` (see :func:`_defining_fields`).
+
+    LAL's built-in codes come from the table shipped with the package, so they need no ``lalsuite``
+    and cannot be shadowed by a later change to LAL's mutable registry; the table equals LAL's
+    registry exactly whenever ``lalsuite`` is installed. Any other code -- a detector registered
+    with LAL at run time, such as a :class:`~gwmock_signal.detector.CustomDetector` -- is read from
+    LAL's registry.
+
+    Raises:
+        ValueError: If the code is neither built in nor registered with LAL, including when
+            ``lalsuite`` cannot be imported to hold a run-time registration.
+    """
+    fields = builtin_detectors().get(code)
+    if fields is not None:
+        return fields
+    lal = _lalsuite.find("lal")
+    try:
+        # One lookup: the registry is process-global and mutable, so a membership test followed by
+        # a separate read could see the entry removed in between.
+        registered = lal.cached_detector_by_prefix[code] if lal is not None else None
+    except KeyError:
+        registered = None
+    if registered is None:
+        raise ValueError(
+            f"Unknown or unsupported detector {code!r}. {unknown_code_help(lal_available=lal is not None)}"
+        )
+    return _defining_fields(registered.frDetector)
+
+
 def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return detector response and location reconstructed from one LAL detector.
+    """Return the response tensor and location of the detector named by ``prefix``.
 
     Args:
         prefix: LAL registry key -- a built-in interferometer code, or the prefix a
@@ -122,7 +155,7 @@ def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
         response tensor and ``location`` is the Earth-fixed position (metres).
 
     Raises:
-        ValueError: If LAL does not know the prefix.
+        ValueError: If the code is not a known detector; see :func:`detector_fields`.
     """
     # Cached on the geometry itself rather than on the prefix. LAL's registry is process-global
     # and mutable, so a prefix is not a stable identity: freeing one and re-registering it for a
@@ -130,7 +163,7 @@ def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
     # second, silently and in a way that still looks like a plausible network. The test harness
     # used to clear this cache after any test that registered a detector, which is how the hazard
     # is known to be real; that hook is gone because keying on the geometry removes the need.
-    return _geometry_from_fields(_defining_fields(get_lal_detector(prefix).frDetector))
+    return _geometry_from_fields(detector_fields(prefix))
 
 
 def _defining_fields(fr_detector: object) -> tuple[float, ...]:
