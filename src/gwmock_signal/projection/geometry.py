@@ -114,7 +114,7 @@ def get_lal_detector(prefix: str) -> lal.Detector:
 
 
 def detector_fields(code: str) -> tuple[float, ...]:
-    """Return the fields that define the detector ``code`` names (see :func:`_defining_fields`).
+    """Return the fields that define the detector named by ``code`` (see :func:`_defining_fields`).
 
     LAL's built-in codes come from the table shipped with the package, so they need no ``lalsuite``
     and cannot be shadowed by a later change to LAL's mutable registry; the table equals LAL's
@@ -130,15 +130,21 @@ def detector_fields(code: str) -> tuple[float, ...]:
     if fields is not None:
         return fields
     lal = _lalsuite.find("lal")
-    if lal is None or code not in lal.cached_detector_by_prefix:
+    try:
+        # One lookup: the registry is process-global and mutable, so a membership test followed by
+        # a separate read could see the entry removed in between.
+        registered = lal.cached_detector_by_prefix[code] if lal is not None else None
+    except KeyError:
+        registered = None
+    if registered is None:
         raise ValueError(
             f"Unknown or unsupported detector {code!r}. {unknown_code_help(lal_available=lal is not None)}"
         )
-    return _defining_fields(lal.cached_detector_by_prefix[code].frDetector)
+    return _defining_fields(registered.frDetector)
 
 
 def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return detector response and location reconstructed from one LAL detector.
+    """Return the response tensor and location of the detector named by ``prefix``.
 
     Args:
         prefix: LAL registry key -- a built-in interferometer code, or the prefix a

@@ -93,6 +93,23 @@ def test_an_unknown_code_is_a_value_error():
         assert "Use a built-in interferometer code (A1, " in str(excinfo.value)
         if _lalsuite.find("lal") is not None:
             assert "could not be imported" not in str(excinfo.value)
+            assert "or a CustomDetector for other geometries" in str(excinfo.value)
+
+
+def test_a_registration_removed_mid_lookup_is_an_unknown_code(monkeypatch):
+    """The run-time registry is read once, so a concurrent removal is a ValueError, not a KeyError."""
+    pytest.importorskip("lal")
+
+    class Vanishing(dict):
+        """Claims to hold every code, but has none -- the state a racing removal leaves behind."""
+
+        def __contains__(self, key):
+            return True
+
+    monkeypatch.setattr("lal.cached_detector_by_prefix", Vanishing())
+
+    with pytest.raises(ValueError, match="Unknown or unsupported detector 'Q8'"):
+        detector_fields("Q8")
 
 
 def test_the_cached_table_cannot_be_modified():
@@ -163,3 +180,4 @@ def test_without_lalsuite_built_in_detectors_resolve_to_the_same_geometry():
     assert "Unknown LAL detector code 'ZZ9'" in lines["network_unknown"]
     for key in ("unknown", "network_unknown"):
         assert "need lalsuite, which could not be imported" in lines[key]
+        assert "or a CustomDetector" not in lines[key]  # it also needs lalsuite

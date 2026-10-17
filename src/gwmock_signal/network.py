@@ -135,8 +135,8 @@ def _preset_resource(alias: str):
 def list_lal_detectors() -> list[str]:
     """Return every detector code that projection can resolve.
 
-    That is LAL's built-in codes, from the table shipped with the package, plus -- when ``lalsuite``
-    is installed -- any detector registered with LAL at run time.
+    That is LAL's built-in codes, from the table shipped with the package, plus -- when ``lal`` can be
+    imported in this process -- any detector registered with LAL at run time.
     """
     codes = set(builtin_detectors())
     lal = _lalsuite.find("lal")

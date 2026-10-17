@@ -61,10 +61,10 @@ def unknown_code_help(*, lal_available: bool) -> str:
     Projection and :class:`~gwmock_signal.network.Network` keep their established first sentences,
     which callers may match on, and share this explanation.
     """
-    message = (
-        f"Use a built-in interferometer code ({', '.join(sorted(builtin_detectors()))}), "
-        "or a CustomDetector for other geometries."
+    codes = ", ".join(sorted(builtin_detectors()))
+    if lal_available:
+        return f"Use a built-in interferometer code ({codes}), or a CustomDetector for other geometries."
+    return (
+        f"Use a built-in interferometer code ({codes}). Codes registered with LAL at run time, and "
+        "CustomDetector geometries, also need lalsuite, which could not be imported."
     )
-    if not lal_available:
-        message += " Codes registered with LAL at run time also need lalsuite, which could not be imported."
-    return message
