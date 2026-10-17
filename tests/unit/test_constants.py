@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-import gwmock_signal
 from gwmock_signal import constants
 from gwmock_signal.constants import _builtin
 
@@ -98,7 +97,8 @@ def test_importing_the_constants_does_not_import_lal():
     The subprocess is pointed at the same source tree this test imported, so it cannot pick up a
     different installed copy of the package.
     """
-    source_root = Path(gwmock_signal.__file__).resolve().parents[1]
+    # constants/__init__.py -> constants -> gwmock_signal -> the source root.
+    source_root = Path(constants.__file__).resolve().parents[2]
     # Drop an empty inherited PYTHONPATH: an empty entry would put the working directory on the path.
     search_path = [str(source_root), *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(search_path)}
