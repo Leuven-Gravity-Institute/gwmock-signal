@@ -7,8 +7,10 @@ name: LAL constants
 # cannot see is a new lalsuite release that changes a constant, since nothing
 # in this repository changes when one is published. This job checks the floor
 # and the newest release on a schedule, and when the floor disagrees it
-# reports the floor to move to. It never edits anything: a maintainer applies
-# the values and the floor in a reviewed pull request.
+# reports the floor to move to. It never edits code: a maintainer applies the
+# values and the floor in a reviewed pull request. A failed scheduled or manual
+# run opens a tracking issue (or comments on the open one), so a failure does
+# not depend on someone reading the Actions tab; the next passing run closes it.
 
 on:
     schedule:
@@ -32,6 +34,11 @@ permissions:
 jobs:
     check:
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            issues: write # the tracking issue; pull-request runs never touch it
+        env:
+            ISSUE_TITLE: LAL constants check failed
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
               with:
@@ -63,3 +70,41 @@ jobs:
                   name: lal-constants-report
                   path: lal-constants.md
                   if-no-files-found: ignore
+
+            # Pull-request runs report through their check status instead. One
+            # issue at a time: a failure while it is open adds a comment.
+            - name: Open or update the tracking issue
+              if: ${{ failure() && github.event_name != 'pull_request' }}
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                  {
+                      echo "The check of the built-in constants against lalsuite failed: $run_url"
+                      echo
+                      if [ -f lal-constants.md ]; then
+                          cat lal-constants.md
+                      else
+                          echo 'The check wrote no report; see the run log.'
+                      fi
+                  } > issue-body.md
+                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependencies \
+                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
+                  if [ -n "$number" ]; then
+                      gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+                  else
+                      gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" \
+                          --label dependencies --body-file issue-body.md
+                  fi
+
+            - name: Close the tracking issue
+              if: ${{ success() && github.event_name != 'pull_request' }}
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependencies \
+                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
+                  if [ -n "$number" ]; then
+                      gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "The check passes again: $run_url"
+                  fi
