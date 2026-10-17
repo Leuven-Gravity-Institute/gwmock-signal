@@ -20,3 +20,13 @@ icon: material/scale-balance
             - MPC_SI
 
 <!-- prettier-ignore-end -->
+
+| Name       | Meaning                                   | Unit | Reference                                    |
+| ---------- | ----------------------------------------- | ---- | -------------------------------------------- |
+| `MSUN_SI`  | Nominal solar mass                        | kg   | `lal.MSUN_SI`                                |
+| `MTSUN_SI` | Solar mass in time units, `G M_sun / c^3` | s    | `lal.MTSUN_SI`                               |
+| `PC_SI`    | Parsec                                    | m    | `lal.PC_SI`                                  |
+| `MPC_SI`   | Megaparsec, `PC_SI * 1e6`                 | m    | none in LAL; equals `ripplegw.constants.MPC` |
+
+Each value equals its reference bit-for-bit, and the test suite checks this
+whenever `lalsuite` or `ripplegw` is installed.

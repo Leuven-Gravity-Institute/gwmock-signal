@@ -26,5 +26,6 @@ MSUN_SI = 1.9884098706980507e30
 MTSUN_SI = 4.925490947641267e-06
 #: Parsec in metres (``lal.PC_SI``).
 PC_SI = 3.085677581491367e16
-#: Megaparsec in metres. Derived exactly as LAL-based codes derive it, ``PC_SI * 1e6``.
+#: Megaparsec in metres. LAL defines no megaparsec; this is ``PC_SI * 1e6``, the expression
+#: LAL-based codes use, and it equals ``ripplegw.constants.MPC``.
 MPC_SI = PC_SI * 1e6

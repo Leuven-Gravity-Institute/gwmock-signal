@@ -20,7 +20,9 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-H0_SI = 67.74 * 1000.0 / 3.0856775814913673e22
+from gwmock_signal.constants import MPC_SI
+
+H0_SI = 67.74 * 1000.0 / MPC_SI
 
 
 @dataclass(frozen=True, slots=True)
