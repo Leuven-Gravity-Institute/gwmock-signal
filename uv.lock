@@ -903,7 +903,7 @@ release = [
 requires-dist = [
     { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
     { name = "gwpy", specifier = ">=4.0.0" },
-    { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.24" },
+    { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.6.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.3.1" },
