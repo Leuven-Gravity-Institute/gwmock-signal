@@ -141,8 +141,10 @@ def test_without_lalsuite_modules_import_and_lal_features_explain_themselves():
 
     assert result.returncode == 0, result.stderr
     lines = dict(line.split(": ", 1) for line in result.stdout.splitlines())
-    assert lines.pop("imports") == "ok"
-    assert lines.pop("custom_only_network") == "NO ERROR"
+    imports = lines.pop("imports")
+    custom_only_network = lines.pop("custom_only_network")
+    assert imports == "ok"
+    assert custom_only_network == "NO ERROR"
     expected_feature = {
         "factory": "The LAL waveform backend",
         "lal_backend": "The LAL waveform backend",
