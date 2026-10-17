@@ -73,6 +73,29 @@ def test_the_location_agrees_with_astropy_to_rounding(code):
     assert np.max(np.abs(location - expected)) <= 1e-15 * np.linalg.norm(expected)
 
 
+@pytest.mark.parametrize("code", ["H1", "L1", "V1", "K1", "E1", "E2", "E3", "I1", "G1"])
+def test_the_antenna_pattern_agrees_with_lal(code):
+    """An independent reference: LAL's ``ComputeDetAMResponse`` on the same tensor and angles.
+
+    LAL takes the tensor in single precision, so agreement is to ~1e-8 rather than bit for bit -- close
+    enough to catch a wrong sign, a swapped basis vector, or a cross term that cancels to zero.
+    """
+    lal = pytest.importorskip("lal")
+    response, _ = kernels.detector_geometry(builtin_detectors()[code], xp=np)
+    rng = np.random.default_rng(5)
+    for _ in range(25):
+        gmst, ra, dec, psi = (
+            rng.uniform(0, 2 * math.pi),
+            rng.uniform(0, 2 * math.pi),
+            rng.uniform(-1.5, 1.5),
+            rng.uniform(0, math.pi),
+        )
+        expected = lal.ComputeDetAMResponse(response.astype(np.float32), ra, dec, psi, gmst)
+        f_plus, f_cross = kernels.antenna_pattern(response, gmst, ra, dec, psi, xp=np)
+
+        np.testing.assert_allclose((f_plus, f_cross), expected, rtol=0, atol=1e-6)
+
+
 def test_broadcast_forms_equal_a_scalar_loop():
     """Arrays of sidereal times, right ascensions and declinations give the per-element scalar values.
 
