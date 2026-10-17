@@ -143,13 +143,14 @@ def test_without_lalsuite_modules_import_and_lal_features_explain_themselves():
     lines = dict(line.split(": ", 1) for line in result.stdout.splitlines())
     imports = lines.pop("imports")
     custom_only_network = lines.pop("custom_only_network")
+    list_detectors = lines.pop("list_detectors")
     assert imports == "ok"
     assert custom_only_network == "NO ERROR"
+    assert list_detectors == "NO ERROR"  # the built-in codes ship with the package
     expected_feature = {
         "factory": "The LAL waveform backend",
         "lal_backend": "The LAL waveform backend",
         "gwsignal_backend": "The gwsignal waveform backend",
-        "list_detectors": "Listing LAL's built-in detectors",
         "registry_lookup": "Projecting onto a detector from LAL's registry",
         "custom_detector": "Registering a CustomDetector with LAL's detector registry",
     }

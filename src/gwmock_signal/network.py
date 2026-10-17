@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gwmock_signal import _lalsuite
+from gwmock_signal._detector_table import builtin_detectors
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -132,9 +133,16 @@ def _preset_resource(alias: str):
 
 
 def list_lal_detectors() -> list[str]:
-    """Return every detector code available in the installed LAL bindings."""
-    lal = _lalsuite.require("lal", "Listing LAL's built-in detectors")
-    return sorted(str(code) for code in lal.cached_detector_by_prefix)
+    """Return every detector code that projection can resolve.
+
+    That is LAL's built-in codes, from the table shipped with the package, plus -- when ``lalsuite``
+    is installed -- any detector registered with LAL at run time.
+    """
+    codes = set(builtin_detectors())
+    lal = _lalsuite.find("lal")
+    if lal is not None:
+        codes.update(str(code) for code in lal.cached_detector_by_prefix)
+    return sorted(codes)
 
 
 def _detector_from_entry(entry: dict) -> str | CustomDetector:
@@ -203,9 +211,9 @@ class Network:
     ) -> Network:
         """Construct a :class:`Network` from any sequence of detector specs.
 
-        String entries are validated against LAL's runtime detector list
-        (``lal.cached_detector_by_prefix``), so any detector code that the
-        installed LAL bindings know about works here without hard-coding.
+        String entries are validated against :func:`list_lal_detectors`: LAL's
+        built-in codes, which need no ``lalsuite``, plus any detector registered
+        with LAL at run time when ``lalsuite`` is installed.
         :class:`~gwmock_signal.detector.CustomDetector` instances are accepted
         as-is for non-standard geometries.
 
@@ -219,18 +227,15 @@ class Network:
             A :class:`Network` containing exactly the specified detectors.
 
         Raises:
-            ValueError: If any string entry is not in LAL's available
-                detector set, or if *detectors* is empty.
+            ValueError: If any string entry is not a known detector code, or if
+                *detectors* is empty.
         """
         from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
 
         if not detectors:
             raise ValueError("detectors must be a non-empty sequence.")
 
-        # Only string codes are checked against LAL's registry, so a network of CustomDetectors alone
-        # does not need it here.
-        needs_lal = any(not isinstance(det, CustomDetector) for det in detectors)
-        lal_codes: set[str] = set(list_lal_detectors()) if needs_lal else set()
+        lal_codes: set[str] = set(list_lal_detectors())
         validated: list[str | CustomDetector] = []
         for det in detectors:
             if isinstance(det, CustomDetector):
@@ -381,7 +386,9 @@ class Network:
 
     @classmethod
     def list_lal_detectors(cls) -> list[str]:
-        """Return every detector code available in the installed LAL, sorted.
+        """Return every detector code that projection can resolve, sorted.
+
+        See :func:`list_lal_detectors`; the built-in codes need no ``lalsuite``.
 
         Returns:
             Sorted list of LAL detector prefix strings

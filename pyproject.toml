@@ -129,14 +129,15 @@ pytest_add_cli_args = [
   # for any function and reports the whole package as "no tests". Clearing the ini leaves
   # `mutants/src` as the only source on the path.
   "--override-ini=pythonpath=",
-  # `tests/test_release_version.py` and `tests/test_lal_constants_consistency.py` import their
-  # modules from `scripts/`, which mutmut does not copy into `mutants/` and which the cleared
-  # `pythonpath` above takes off the path. Without this the import fails, pytest interrupts
-  # collection, and every mutant is then judged against a suite that never ran. Skipped rather than
-  # made importable: the mutants come from `source_paths`, so a tooling test can only add runtime
-  # here, never a verdict. Plain `pytest` runs them.
+  # `tests/test_release_version.py`, `tests/test_lal_constants_consistency.py` and
+  # `tests/unit/test_detector_table.py` import modules from `scripts/`, which mutmut does not copy
+  # into `mutants/` and which the cleared `pythonpath` above takes off the path. Without this the
+  # import fails, pytest interrupts collection, and every mutant is then judged against a suite that
+  # never ran. Skipped rather than made importable: the mutants come from `source_paths`, so a
+  # tooling test can only add runtime here, never a verdict. Plain `pytest` runs them.
   "--ignore=tests/test_release_version.py",
   "--ignore=tests/test_lal_constants_consistency.py",
+  "--ignore=tests/unit/test_detector_table.py",
   "-m",
   "not integration and not slow and not gpu and not spark and not notebooks",
 ]

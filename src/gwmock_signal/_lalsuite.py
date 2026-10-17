@@ -46,6 +46,25 @@ def missing_lalsuite_message(feature: str) -> str:
     )
 
 
+def _is_missing_lalsuite(exc: ModuleNotFoundError, module: str) -> bool:
+    """Whether ``exc`` means a lalsuite module is absent, as opposed to something it needs."""
+    return exc.name in _LALSUITE_MODULES | {module.partition(".")[0]}
+
+
+def find(module: str) -> ModuleType | None:
+    """Import and return ``module``, or ``None`` if ``lalsuite`` is not installed.
+
+    For callers with a fallback that does not need LAL. A broken installation, or a missing
+    dependency of ``lalsuite``, still raises, for the reason given in :func:`require`.
+    """
+    try:
+        return importlib.import_module(module)
+    except ModuleNotFoundError as exc:
+        if not _is_missing_lalsuite(exc, module):
+            raise
+        return None
+
+
 def require(module: str, feature: str) -> ModuleType:
     """Import and return ``module`` (``"lal"``, ``"lalsimulation"``, ...) for ``feature``.
 
@@ -58,6 +77,6 @@ def require(module: str, feature: str) -> ModuleType:
     try:
         return importlib.import_module(module)
     except ModuleNotFoundError as exc:
-        if exc.name not in _LALSUITE_MODULES | {module.partition(".")[0]}:
+        if not _is_missing_lalsuite(exc, module):
             raise
         raise ImportError(missing_lalsuite_message(feature)) from exc
