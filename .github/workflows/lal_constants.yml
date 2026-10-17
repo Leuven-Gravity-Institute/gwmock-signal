@@ -1,0 +1,65 @@
+name: LAL constants
+
+# The built-in unit-conversion constants must equal LAL's bit-for-bit. The test
+# suite checks them against whichever lalsuite the CI environment resolves --
+# the floor in the lowest-direct job and the newest release elsewhere -- on
+# every pull request, including the automated support-floor updates. What it
+# cannot see is a new lalsuite release that changes a constant, since nothing
+# in this repository changes when one is published. This job checks the floor
+# and the newest release on a schedule, and when the floor disagrees it
+# reports the floor to move to. It never edits anything: a maintainer applies
+# the values and the floor in a reviewed pull request.
+
+on:
+    schedule:
+        - cron: '23 5 * * 1' # weekly, Monday 05:23 UTC
+    workflow_dispatch:
+    pull_request:
+        branches: [main]
+        paths:
+            - 'pyproject.toml'
+            - 'src/gwmock_signal/constants/**'
+            - 'scripts/lal_constants_consistency.py'
+            - '.github/workflows/lal_constants.yml'
+
+concurrency:
+    group: lal-constants-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+              with:
+                  persist-credentials: false
+
+            # The oldest supported Python: the floor release is the one most
+            # likely to lack wheels for newer interpreters.
+            - name: Install uv
+              uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+              with:
+                  python-version: '3.12'
+
+            - name: Compare the built-in constants with lalsuite
+              run: >-
+                  uv run --no-project --with packaging python
+                  scripts/lal_constants_consistency.py --report lal-constants.md
+
+            - name: Publish the report
+              if: ${{ !cancelled() }}
+              run: |
+                  if [ -f lal-constants.md ]; then
+                      cat lal-constants.md >> "$GITHUB_STEP_SUMMARY"
+                  fi
+
+            - name: Upload the report
+              if: ${{ !cancelled() }}
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: lal-constants-report
+                  path: lal-constants.md
+                  if-no-files-found: ignore
