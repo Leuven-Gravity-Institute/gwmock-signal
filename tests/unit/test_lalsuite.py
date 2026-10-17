@@ -118,7 +118,7 @@ print("imports: ok")
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network, list_lal_detectors
-from gwmock_signal.projection.geometry import get_lal_detector
+from gwmock_signal.projection.geometry import get_lal_detector, reconstructed_geometry, resolve_detectors
 from gwmock_signal.waveform.backends.gwsignal import GWSignalBackend
 from gwmock_signal.waveform.backends.lal import LALSimulationBackend
 from gwmock_signal.waveform.factory import WaveformFactory
@@ -129,7 +129,11 @@ probes = {
     "gwsignal_backend": GWSignalBackend,
     "list_detectors": list_lal_detectors,
     "registry_lookup": lambda: get_lal_detector("H1"),
-    "custom_detector": lambda: CustomDetector("X", 0.0, 0.0, 0.0, 0.0, 1.5),
+    "custom_detector": lambda: CustomDetector("X", 0.0, 0.0, 0.0, 0.0, 1.5).to_lal(),
+    # Constructing and projecting a CustomDetector need no LAL; only registering it does.
+    "custom_projection": lambda: reconstructed_geometry(
+        resolve_detectors([CustomDetector("Y", 0.0, 0.0, 0.0, 0.0, 1.5)])[0][1]
+    ),
     # Explicit prefixes need no registry lookup, and a network of CustomDetectors alone checks no codes.
     "custom_only_network": lambda: Network.from_detectors([CustomDetector("X", 0.0, 0.0, 0.0, 0.0, 1.5, prefix="Q1")]),
 }
@@ -154,9 +158,11 @@ def test_without_lalsuite_modules_import_and_lal_features_explain_themselves():
     lines = dict(line.split(": ", 1) for line in result.stdout.splitlines())
     imports = lines.pop("imports")
     custom_only_network = lines.pop("custom_only_network")
+    custom_projection = lines.pop("custom_projection")
     list_detectors = lines.pop("list_detectors")
     assert imports == "ok"
     assert custom_only_network == "NO ERROR"
+    assert custom_projection == "NO ERROR"
     assert list_detectors == "NO ERROR"  # the built-in codes ship with the package
     expected_feature = {
         "factory": "The LAL waveform backend",

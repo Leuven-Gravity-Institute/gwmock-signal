@@ -295,3 +295,36 @@ def test_out_of_range_latitude_raises_value_error(tmp_path: Path) -> None:
     p.write_text(yaml.dump(config))
     with pytest.raises(ValueError, match="latitude_rad"):
         Network.from_file(p)
+
+
+class TestPrecision:
+    """A custom detector's ``precision`` is read from the file, and refused where it means nothing."""
+
+    @staticmethod
+    def _load(tmp_path: Path, **extra: object) -> Network:
+        entry = {**_MIXED_CONFIG["detectors"][1], **extra}
+        p = tmp_path / "precision.yaml"
+        p.write_text(yaml.dump({"name": "precision-net", "detectors": [entry]}))
+        return Network.from_file(p)
+
+    def test_the_default_is_double(self, tmp_path: Path) -> None:
+        """Without the key, the detector uses the fields as given."""
+        (detector,) = self._load(tmp_path).detector_names
+        assert detector.precision == "double"
+
+    def test_single_is_passed_through(self, tmp_path: Path) -> None:
+        """``precision: single`` reaches the CustomDetector instead of being dropped."""
+        (detector,) = self._load(tmp_path, precision="single").detector_names
+        assert detector.precision == "single"
+
+    def test_an_unknown_precision_is_rejected(self, tmp_path: Path) -> None:
+        """A misspelt value fails with the detector named, not silently as double."""
+        with pytest.raises(ValueError, match=r"'MY-DET'.*precision must be 'double' or 'single'"):
+            self._load(tmp_path, precision="float32")
+
+    def test_precision_on_a_detector_code_is_rejected(self, tmp_path: Path) -> None:
+        """A detector code has no fields to round, so the key there is a mistake."""
+        p = tmp_path / "code.yaml"
+        p.write_text(yaml.dump({"name": "code-net", "detectors": [{"name": "H1", "precision": "single"}]}))
+        with pytest.raises(ValueError, match=r"'H1'.*applies only to a custom detector"):
+            Network.from_file(p)

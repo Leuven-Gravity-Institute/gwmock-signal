@@ -91,7 +91,7 @@ def test_duplicate_lookup_keys_are_rejected_by_the_resolver() -> None:
     """
     detector = _detector("Q4_NAMED", "Q4", longitude=0.1833)
     prefix = detector.to_lal().frDetector.prefix
-    with pytest.raises(ValueError, match="resolve to the same LAL detector"):
+    with pytest.raises(ValueError, match="resolve to the same detector"):
         resolve_detectors([detector, prefix])
 
 

@@ -180,4 +180,4 @@ def test_without_lalsuite_built_in_detectors_resolve_to_the_same_geometry():
     assert "Unknown LAL detector code 'ZZ9'" in lines["network_unknown"]
     for key in ("unknown", "network_unknown"):
         assert "need lalsuite, which could not be imported" in lines[key]
-        assert "or a CustomDetector" not in lines[key]  # it also needs lalsuite
+        assert "or a CustomDetector for other geometries" in lines[key]  # no lalsuite needed

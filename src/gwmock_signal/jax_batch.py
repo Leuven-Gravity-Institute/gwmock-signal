@@ -36,7 +36,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.injection import inject_strains_sequential
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.jax_projection import (
     antenna_pattern,
     project_polarizations_fd,
@@ -129,8 +129,8 @@ _KERNEL_CACHE_SIZE = 32
 
 def _resolve_detector_specs(
     detector_names: Sequence[DetectorSpec],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Split detector specifications into output channel names and LAL lookup keys.
+) -> tuple[tuple[str, ...], tuple[DetectorKey, ...]]:
+    """Split detector specifications into output channel names and lookup keys.
 
     Thin wrapper over :func:`~gwmock_signal.projection.geometry.resolve_detectors` that returns
     tuples, because the keys are used as ``lru_cache`` arguments for the compiled kernels and the
@@ -456,8 +456,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
         approximant: A supported ripple approximant name.
         detector_names: Built-in LAL interferometer codes (e.g. ``"H1"``, ``"L1"``) and/or
             :class:`~gwmock_signal.detector.CustomDetector` instances. A custom detector is
-            resolved through the prefix it registers with LAL, but its output channel is keyed
-            by its own ``name``.
+            resolved through its own geometry, and its output channel is keyed by its ``name``.
         sampling_frequency: Sample rate in Hz.
         minimum_frequency: Low-frequency cutoff in Hz.
         parameters: Mapping of **canonical** gwmock-pop parameter names (no aliases)
@@ -620,7 +619,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
 def _project_rotating(  # noqa: PLR0913
     fd: FrequencyDomainPolarizations,
-    lookup_keys: Sequence[str],
+    lookup_keys: Sequence[DetectorKey],
     *,
     n_samples: int,
     sampling_frequency: float,
@@ -642,9 +641,9 @@ def _project_rotating(  # noqa: PLR0913
 
     Args:
         fd: Frequency-domain polarizations from the ripple backend.
-        lookup_keys: LAL registry keys, one per detector -- a built-in interferometer code, or
-            the prefix a ``CustomDetector`` registered itself under. Not the output channel
-            names, which for a custom detector differ.
+        lookup_keys: Lookup keys from :func:`~gwmock_signal.projection.geometry.resolve_detectors`,
+            one per detector -- a detector code, or a ``CustomDetector``'s defining fields. Not the
+            output channel names, which for a custom detector differ.
         n_samples: Samples per event segment.
         sampling_frequency: Sample rate in Hz.
         merger_index: Sample index coalescence is rolled to.

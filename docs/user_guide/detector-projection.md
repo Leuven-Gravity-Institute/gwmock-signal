@@ -94,6 +94,12 @@ with [`Network.from_file`](../api/network/) or a bundled ET preset such as
 the **[Projection API](../api/projection/)** for the supported `detector_names`
 types.
 
+Custom detectors, the ET presets included, project in double precision by
+default. Earlier versions projected them through LAL in single precision, so
+their strain now differs at that rounding, about 1.5e-7 of peak; see
+[Custom detectors](custom-detectors.md) for the `precision` option that
+reproduces it.
+
 ## Parameter and units checklist
 
 | Quantity                                               | Unit       | Notes                                                   |
