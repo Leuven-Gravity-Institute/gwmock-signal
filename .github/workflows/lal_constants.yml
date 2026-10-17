@@ -5,12 +5,17 @@ name: LAL constants
 # the floor in the lowest-direct job and the newest release elsewhere -- on
 # every pull request, including the automated support-floor updates. What it
 # cannot see is a new lalsuite release that changes a constant, since nothing
-# in this repository changes when one is published. This job checks the floor
-# and the newest release on a schedule, and when the floor disagrees it
+# in this repository changes when one is published. This workflow checks the
+# floor and the newest release on a schedule, and when the floor disagrees it
 # reports the floor to move to. It never edits code: a maintainer applies the
-# values and the floor in a reviewed pull request. A failed scheduled or manual
-# run opens a tracking issue (or comments on the open one), so a failure does
-# not depend on someone reading the Actions tab; the next passing run closes it.
+# values and the floor in a reviewed pull request.
+#
+# A failed scheduled or manual run must not depend on someone reading the
+# Actions tab, so the `track` job opens a tracking issue for it (or comments on
+# the one already open) and closes it when a later run passes. It runs as its
+# own job so the check, which also runs on pull requests, never holds a token
+# that can write issues, and so a failure to update the issue cannot change the
+# check's result.
 
 on:
     schedule:
@@ -34,11 +39,8 @@ permissions:
 jobs:
     check:
         runs-on: ubuntu-latest
-        permissions:
-            contents: read
-            issues: write # the tracking issue; pull-request runs never touch it
-        env:
-            ISSUE_TITLE: LAL constants check failed
+        outputs:
+            report: ${{ steps.publish.outputs.report }}
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
               with:
@@ -57,11 +59,19 @@ jobs:
                   scripts/lal_constants_consistency.py --report lal-constants.md
 
             - name: Publish the report
+              id: publish
               if: ${{ !cancelled() }}
               run: |
-                  if [ -f lal-constants.md ]; then
-                      cat lal-constants.md >> "$GITHUB_STEP_SUMMARY"
+                  if [ ! -f lal-constants.md ]; then
+                      echo 'The check wrote no report; see the run log.' > lal-constants.md
                   fi
+                  cat lal-constants.md >> "$GITHUB_STEP_SUMMARY"
+                  delimiter="report-$(openssl rand -hex 16)"
+                  {
+                      echo "report<<$delimiter"
+                      cat lal-constants.md
+                      echo "$delimiter"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Upload the report
               if: ${{ !cancelled() }}
@@ -69,42 +79,56 @@ jobs:
               with:
                   name: lal-constants-report
                   path: lal-constants.md
-                  if-no-files-found: ignore
 
-            # Pull-request runs report through their check status instead. One
-            # issue at a time: a failure while it is open adds a comment.
-            - name: Open or update the tracking issue
-              if: ${{ failure() && github.event_name != 'pull_request' }}
-              env:
-                  GH_TOKEN: ${{ github.token }}
+    track:
+        needs: check
+        # Only a finished scheduled or manual run: never a pull request, and
+        # never a cancelled or skipped check.
+        if: >-
+            ${{ !cancelled() && github.event_name != 'pull_request' &&
+            (needs.check.result == 'failure' || needs.check.result == 'success')
+            }}
+        runs-on: ubuntu-latest
+        permissions:
+            issues: write
+        env:
+            GH_TOKEN: ${{ github.token }}
+            CHECK_RESULT: ${{ needs.check.result }}
+            REPORT: ${{ needs.check.outputs.report }}
+            ISSUE_TITLE: LAL constants check failed
+        steps:
+            # The tracking issue is the open issue this workflow opened under
+            # this exact title. Matching on the bot author keeps a human's
+            # issue of the same name untouched, and searching titles on the
+            # server keeps the lookup independent of how many issues are open.
+            # A retitled issue is treated as taken over by a human: the next
+            # failure opens a new one.
+            - name: Open, update, or close the tracking issue
               run: |
                   run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                      --author app/github-actions --search "in:title \"$ISSUE_TITLE\"" --limit 100 \
+                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
+
+                  if [ "$CHECK_RESULT" = success ]; then
+                      if [ -n "$number" ]; then
+                          gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                              --comment "The check passes again: $run_url"
+                      fi
+                      exit 0
+                  fi
+
                   {
                       echo "The check of the built-in constants against lalsuite failed: $run_url"
                       echo
-                      if [ -f lal-constants.md ]; then
-                          cat lal-constants.md
-                      else
-                          echo 'The check wrote no report; see the run log.'
-                      fi
+                      printf '%s\n' "$REPORT"
+                      echo
+                      echo '_This issue is managed by the `LAL constants` workflow. It is closed'
+                      echo 'automatically when a later run passes, including after a manual reopen._'
                   } > issue-body.md
-                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependencies \
-                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
                   if [ -n "$number" ]; then
                       gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
                   else
                       gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" \
                           --label dependencies --body-file issue-body.md
-                  fi
-
-            - name: Close the tracking issue
-              if: ${{ success() && github.event_name != 'pull_request' }}
-              env:
-                  GH_TOKEN: ${{ github.token }}
-              run: |
-                  run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-                  number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependencies \
-                      --json number,title --jq '[.[] | select(.title == $ENV.ISSUE_TITLE)][0].number // empty')
-                  if [ -n "$number" ]; then
-                      gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "The check passes again: $run_url"
                   fi
