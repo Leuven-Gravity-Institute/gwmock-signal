@@ -38,6 +38,54 @@ def test_a_missing_module_raises_the_actionable_error_with_the_cause_chained(mon
     assert isinstance(excinfo.value.__cause__, ImportError)
 
 
+def test_a_broken_installation_keeps_its_own_error(monkeypatch):
+    """An installed lalsuite that fails to load is not reported as missing."""
+
+    def broken(name):
+        raise ImportError("liblal.so.20: cannot open shared object file")
+
+    monkeypatch.setattr(_lalsuite.importlib, "import_module", broken)
+
+    with pytest.raises(ImportError, match=r"^liblal\.so\.20: cannot open shared object file$"):
+        _lalsuite.require("lal", "Listing detectors")
+
+
+def test_a_missing_dependency_of_lalsuite_keeps_its_own_error(monkeypatch):
+    """A module lalsuite needs, rather than lalsuite itself, being absent is not relabelled."""
+
+    def missing_dependency(name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    monkeypatch.setattr(_lalsuite.importlib, "import_module", missing_dependency)
+
+    with pytest.raises(ModuleNotFoundError, match="numpy"):
+        _lalsuite.require("lalsimulation", "The LAL waveform backend")
+
+
+def test_lalsimulation_without_lal_is_reported_as_missing_lalsuite(monkeypatch):
+    """Either half of lalsuite missing is the same diagnosis."""
+
+    def lal_missing(name):
+        raise ModuleNotFoundError("No module named 'lal'", name="lal")
+
+    monkeypatch.setattr(_lalsuite.importlib, "import_module", lal_missing)
+
+    with pytest.raises(ImportError, match=r"^The LAL waveform backend requires lalsuite"):
+        _lalsuite.require("lalsimulation", "The LAL waveform backend")
+
+
+def test_an_invalid_backend_argument_is_reported_before_a_missing_lalsuite(monkeypatch):
+    """A bad call site is diagnosed as one whether or not lalsuite is installed."""
+    from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+    monkeypatch.setitem(sys.modules, "lalsimulation", None)
+
+    with pytest.raises(ValueError, match="ringdown_fraction"):
+        LALSimulationBackend(ringdown_fraction=0.0)
+    with pytest.raises(ImportError, match=r"^The LAL waveform backend requires lalsuite"):
+        LALSimulationBackend()
+
+
 def test_an_installed_module_is_returned():
     """With lalsuite present, ``require`` is a plain import."""
     lal = pytest.importorskip("lal")
@@ -58,7 +106,7 @@ import gwmock_signal.waveform.factory
 print("imports: ok")
 
 from gwmock_signal.detector import CustomDetector
-from gwmock_signal.network import list_lal_detectors
+from gwmock_signal.network import Network, list_lal_detectors
 from gwmock_signal.projection.geometry import get_lal_detector
 from gwmock_signal.waveform.backends.gwsignal import GWSignalBackend
 from gwmock_signal.waveform.backends.lal import LALSimulationBackend
@@ -71,6 +119,8 @@ probes = {
     "list_detectors": list_lal_detectors,
     "registry_lookup": lambda: get_lal_detector("H1"),
     "custom_detector": lambda: CustomDetector("X", 0.0, 0.0, 0.0, 0.0, 1.5),
+    # Explicit prefixes need no registry lookup, and a network of CustomDetectors alone checks no codes.
+    "custom_only_network": lambda: Network.from_detectors([CustomDetector("X", 0.0, 0.0, 0.0, 0.0, 1.5, prefix="Q1")]),
 }
 for name, probe in probes.items():
     try:
@@ -92,6 +142,7 @@ def test_without_lalsuite_modules_import_and_lal_features_explain_themselves():
     assert result.returncode == 0, result.stderr
     lines = dict(line.split(": ", 1) for line in result.stdout.splitlines())
     assert lines.pop("imports") == "ok"
+    assert lines.pop("custom_only_network") == "NO ERROR"
     expected_feature = {
         "factory": "The LAL waveform backend",
         "lal_backend": "The LAL waveform backend",

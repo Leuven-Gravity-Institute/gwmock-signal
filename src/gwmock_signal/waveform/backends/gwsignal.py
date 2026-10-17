@@ -14,7 +14,8 @@
 """Waveform backend built on the LVK ``gwsignal`` interface.
 
 ``lalsimulation.gwsignal`` is the collaboration's forward-looking waveform
-API, shipped inside the ``lalsuite`` wheel this package already depends on.
+API, shipped inside the ``lalsuite`` wheel this package depends on (on the Python versions
+lalsuite publishes wheels for).
 This backend evaluates frequency-domain-native approximants through
 ``GenerateFDWaveform`` and shares all segment sizing, phase-reference
 handling, and frequency-to-time conditioning with

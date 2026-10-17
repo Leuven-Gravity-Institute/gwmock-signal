@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 #: Defined here rather than in either projection module, so both paths mean the same thing by it.
 #: ``CustomDetector`` is imported at runtime, not under ``TYPE_CHECKING``: a PEP 695 alias is
 #: lazily evaluated, so a type-only import leaves ``DetectorSpec.__value__`` raising NameError for
-#: anything that introspects it. ``gwmock_signal.detector`` imports only stdlib and lal, and the
+#: anything that introspects it. ``gwmock_signal.detector`` imports only stdlib and ``gwmock_signal._lalsuite``, and the
 #: package ``__init__`` resolves submodules lazily, so there is no cycle in either direction.
 type DetectorSpec = str | CustomDetector
 

@@ -51,11 +51,12 @@ uv pip install gwmock-signal
 ```
 
 The wheel includes **runtime dependencies** declared in `pyproject.toml`:
-**`typer`**, **`gwpy`**, **`lalsuite`**, **`pyyaml`**, and their transitive
-installs. **PyCBC** and **ripple** are **not** core dependencies; install them
-with the optional extras **`gwmock-signal[pycbc]`** (PyCBC waveform backend or
-the `pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the
-JAX/ripple waveform backend, which pulls in `rippleGW` and JAX).
+**`typer`**, **`gwpy`**, **`lalsuite`** (on Python 3.14 and earlier),
+**`pyyaml`**, and their transitive installs. **PyCBC** and **ripple** are
+**not** core dependencies; install them with the optional extras
+**`gwmock-signal[pycbc]`** (PyCBC waveform backend or the
+`pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the JAX/ripple
+waveform backend, which pulls in `rippleGW` and JAX).
 
 There is **no** `gwmock-signal[dev]` extra on PyPI; contributor tooling lives in
 **uv dependency groups** in the repository (see **Install from source**).

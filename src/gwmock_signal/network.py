@@ -227,7 +227,10 @@ class Network:
         if not detectors:
             raise ValueError("detectors must be a non-empty sequence.")
 
-        lal_codes: set[str] = set(list_lal_detectors())
+        # Only string codes are checked against LAL's registry, so a network of CustomDetectors alone
+        # does not need it here.
+        needs_lal = any(not isinstance(det, CustomDetector) for det in detectors)
+        lal_codes: set[str] = set(list_lal_detectors()) if needs_lal else set()
         validated: list[str | CustomDetector] = []
         for det in detectors:
             if isinstance(det, CustomDetector):

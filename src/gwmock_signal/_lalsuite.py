@@ -31,6 +31,9 @@ import importlib
 import sys
 from types import ModuleType
 
+#: The top-level modules lalsuite provides. Only their absence is "lalsuite is not installed".
+_LALSUITE_MODULES = frozenset({"lal", "lalsimulation", "lalpulsar", "lalframe", "lalinspiral", "lalburst"})
+
 
 def missing_lalsuite_message(feature: str) -> str:
     """Return the message for using ``feature`` without ``lalsuite`` installed."""
@@ -48,9 +51,13 @@ def require(module: str, feature: str) -> ModuleType:
 
     Raises:
         ImportError: If ``lalsuite`` is not installed, with a message naming ``feature``, the running
-            Python and the remedy. The original error is chained.
+            Python and the remedy; the original error is chained. Any other import failure -- an
+            installed lalsuite whose shared libraries fail to load, or a dependency it cannot find --
+            propagates unchanged, since "not installed" would be the wrong diagnosis.
     """
     try:
         return importlib.import_module(module)
-    except ImportError as exc:
+    except ModuleNotFoundError as exc:
+        if exc.name not in _LALSUITE_MODULES | {module.partition(".")[0]}:
+            raise
         raise ImportError(missing_lalsuite_message(feature)) from exc

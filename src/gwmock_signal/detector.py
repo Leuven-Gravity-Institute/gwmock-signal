@@ -25,6 +25,7 @@ import string
 import threading
 import uuid
 from dataclasses import dataclass, field
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 from gwmock_signal import _lalsuite
@@ -50,13 +51,13 @@ _LAL_PREFIX_LENGTH = 2
 _REGISTRY_LOCK = threading.Lock()
 
 
-def _generate_detector_prefix() -> str:
+def _generate_detector_prefix(lal: ModuleType) -> str:
     """Generate one unused two-character detector prefix for LAL registration.
 
     Callers must hold :data:`_REGISTRY_LOCK`, since the search reads the registry that another
-    thread may be writing to.
+    thread may be writing to. They pass ``lal`` in, resolved before taking the lock, so the lock is
+    never held across the first import of the extension.
     """
-    lal = _lalsuite.require("lal", _LAL_FEATURE)
     max_prefixes = len(_PREFIX_ALPHABET) ** 2
     seed = uuid.uuid4().int % max_prefixes
 
@@ -143,8 +144,9 @@ class CustomDetector:
         if self.prefix:
             object.__setattr__(self, "_lal_prefix", self.prefix)
         else:
+            lal = _lalsuite.require("lal", _LAL_FEATURE)
             with _REGISTRY_LOCK:
-                object.__setattr__(self, "_lal_prefix", _generate_detector_prefix())
+                object.__setattr__(self, "_lal_prefix", _generate_detector_prefix(lal))
 
     def to_lal(self) -> lal.Detector:
         """Return a cached :class:`lal.Detector` for this geometry.
@@ -184,7 +186,7 @@ class CustomDetector:
                 # registry as it was then, but another detector (e.g. a sibling in the
                 # same network) has since registered the same prefix. Allocate a fresh
                 # one now, atomically with registration below, to close that window.
-                detector_prefix = _generate_detector_prefix()
+                detector_prefix = _generate_detector_prefix(lal)
                 object.__setattr__(self, "_lal_prefix", detector_prefix)
             fr_detector = lal.FrDetector()
             fr_detector.name = self.name

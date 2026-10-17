@@ -143,13 +143,14 @@ class LALSimulationBackend(WaveformBackend):
         segment_duration: float | None = None,
     ) -> None:
         """Validate the placement configuration shared with the ripple backend."""
-        # Checked here, so a missing lalsuite stops construction with an actionable message
-        # rather than the first waveform request.
-        _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         if not 0.0 < ringdown_fraction < 1.0:
             raise ValueError("ringdown_fraction must be in (0, 1)")
         if segment_duration is not None and segment_duration <= 0:
             raise ValueError("segment_duration must be > 0")
+        # After the argument checks, so an invalid argument is reported as such whether or not
+        # lalsuite is installed; before the first waveform request, so a missing lalsuite stops
+        # construction with an actionable message.
+        _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         self._f_ref = f_ref
         self._ringdown_fraction = ringdown_fraction
         self._segment_duration = segment_duration
