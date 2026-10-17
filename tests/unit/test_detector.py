@@ -274,7 +274,7 @@ def test_to_lal_reallocates_auto_generated_prefix_on_collision() -> None:
     for stale in ("ZZ", "ZY"):
         lal.cached_detector_by_prefix.pop(stale, None)
     try:
-        with patch("gwmock_signal.detector._generate_detector_prefix", lambda: next(prefixes)):
+        with patch("gwmock_signal.detector._generate_detector_prefix", lambda lal: next(prefixes)):
             first = _make_h1_custom(name="auto_first")  # prefix="" -> 'ZZ'
             second = _make_h1_custom(name="auto_second")  # -> 'ZZ'
             first_lal = first.to_lal()  # registers 'ZZ'
