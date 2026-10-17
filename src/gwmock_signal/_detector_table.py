@@ -55,11 +55,15 @@ def builtin_detectors() -> Mapping[str, tuple[float, ...]]:
     return MappingProxyType({code: tuple(float(entry[field]) for field in FIELDS) for code, entry in table.items()})
 
 
-def unknown_code_message(code: str, *, lal_available: bool) -> str:
-    """Return the error for a detector code that is neither built in nor registered with LAL."""
+def unknown_code_help(*, lal_available: bool) -> str:
+    """Return what to use instead of an unknown detector code, after each caller's own first sentence.
+
+    Projection and :class:`~gwmock_signal.network.Network` keep their established first sentences,
+    which callers may match on, and share this explanation.
+    """
     message = (
-        f"Unknown or unsupported detector {code!r}. Use a built-in interferometer code "
-        f"({', '.join(sorted(builtin_detectors()))}), or a CustomDetector for other geometries."
+        f"Use a built-in interferometer code ({', '.join(sorted(builtin_detectors()))}), "
+        "or a CustomDetector for other geometries."
     )
     if not lal_available:
         message += " Codes registered with LAL at run time also need lalsuite, which could not be imported."

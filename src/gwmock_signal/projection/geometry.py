@@ -33,7 +33,7 @@ from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
 
 from gwmock_signal import _lalsuite
-from gwmock_signal._detector_table import builtin_detectors, unknown_code_message
+from gwmock_signal._detector_table import builtin_detectors, unknown_code_help
 from gwmock_signal.detector import CustomDetector
 
 if TYPE_CHECKING:
@@ -131,7 +131,9 @@ def detector_fields(code: str) -> tuple[float, ...]:
         return fields
     lal = _lalsuite.find("lal")
     if lal is None or code not in lal.cached_detector_by_prefix:
-        raise ValueError(unknown_code_message(code, lal_available=lal is not None))
+        raise ValueError(
+            f"Unknown or unsupported detector {code!r}. {unknown_code_help(lal_available=lal is not None)}"
+        )
     return _defining_fields(lal.cached_detector_by_prefix[code].frDetector)
 
 

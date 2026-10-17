@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gwmock_signal import _lalsuite
-from gwmock_signal._detector_table import builtin_detectors, unknown_code_message
+from gwmock_signal._detector_table import builtin_detectors, unknown_code_help
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -244,7 +244,9 @@ class Network:
                 code = str(det)
                 if code not in lal_codes:
                     lal_available = _lalsuite.find("lal") is not None
-                    raise ValueError(unknown_code_message(code, lal_available=lal_available))
+                    raise ValueError(
+                        f"Unknown LAL detector code {code!r}. {unknown_code_help(lal_available=lal_available)}"
+                    )
                 validated.append(code)
 
         auto_name = name or ",".join(d if isinstance(d, str) else d.name for d in validated)

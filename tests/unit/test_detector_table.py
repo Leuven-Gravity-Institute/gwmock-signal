@@ -83,9 +83,14 @@ def test_an_unknown_code_is_a_value_error():
     """Neither built in nor registered: rejected as unknown, by projection and by Network alike."""
     from gwmock_signal.network import Network
 
-    for reject in (lambda: detector_fields("ZZ9"), lambda: Network.from_detectors(["ZZ9"])):
-        with pytest.raises(ValueError, match="Unknown or unsupported detector 'ZZ9'") as excinfo:
+    rejections = {
+        "Unknown or unsupported detector 'ZZ9'": lambda: detector_fields("ZZ9"),
+        "Unknown LAL detector code 'ZZ9'": lambda: Network.from_detectors(["ZZ9"]),
+    }
+    for first_sentence, reject in rejections.items():
+        with pytest.raises(ValueError, match=first_sentence) as excinfo:
             reject()
+        assert "Use a built-in interferometer code (A1, " in str(excinfo.value)
         if _lalsuite.find("lal") is not None:
             assert "could not be imported" not in str(excinfo.value)
 
@@ -154,6 +159,7 @@ def test_without_lalsuite_built_in_detectors_resolve_to_the_same_geometry():
     assert lines["H1"] == with_lal
     assert lines["codes"].split(",") == sorted(_detector_table.builtin_detectors())
     assert lines["network"] == "H1,V1"
+    assert "Unknown or unsupported detector 'ZZ9'" in lines["unknown"]
+    assert "Unknown LAL detector code 'ZZ9'" in lines["network_unknown"]
     for key in ("unknown", "network_unknown"):
-        assert "Unknown or unsupported detector 'ZZ9'" in lines[key]
         assert "need lalsuite, which could not be imported" in lines[key]
