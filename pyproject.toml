@@ -20,9 +20,12 @@ classifiers = [
 requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [
-  "typer>=0.16.0",  # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
+  "typer>=0.16.0", # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
   "gwpy>=4.0.0",
-  "lalsuite>=7.24",
+  # lalsuite ships no wheel and no source distribution for Python 3.15 yet, so requiring it there
+  # would make the package uninstallable. On 3.15 the LAL-based features are unavailable until a
+  # cp315 wheel is published; drop the marker then.
+  "lalsuite>=7.24; python_version < '3.15'",
   "pyyaml>=6.0",
 ]
 

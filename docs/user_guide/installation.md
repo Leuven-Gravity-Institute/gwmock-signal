@@ -24,8 +24,8 @@ pages for more details:
 
 ## Requirements
 
-- **Python:** 3.12 or 3.13 (`requires-python` in `pyproject.toml` is
-  `>=3.12,<3.14`).
+- **Python:** 3.12, 3.13 or 3.14 (`requires-python` in `pyproject.toml` is
+  `>=3.12`).
 - **Operating system:** Linux or macOS (same range as the published wheels and
   CI).
 
@@ -51,11 +51,12 @@ uv pip install gwmock-signal
 ```
 
 The wheel includes **runtime dependencies** declared in `pyproject.toml`:
-**`typer`**, **`gwpy`**, **`lalsuite`**, **`pyyaml`**, and their transitive
-installs. **PyCBC** and **ripple** are **not** core dependencies; install them
-with the optional extras **`gwmock-signal[pycbc]`** (PyCBC waveform backend or
-the `pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the
-JAX/ripple waveform backend, which pulls in `rippleGW` and JAX).
+**`typer`**, **`gwpy`**, **`lalsuite`** (on Python 3.14 and earlier),
+**`pyyaml`**, and their transitive installs. **PyCBC** and **ripple** are
+**not** core dependencies; install them with the optional extras
+**`gwmock-signal[pycbc]`** (PyCBC waveform backend or the
+`pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the JAX/ripple
+waveform backend, which pulls in `rippleGW` and JAX).
 
 There is **no** `gwmock-signal[dev]` extra on PyPI; contributor tooling lives in
 **uv dependency groups** in the repository (see **Install from source**).
@@ -135,7 +136,9 @@ Declared in `pyproject.toml` for the library:
 - **typer** — CLI (`gwmock-signal` entry point)
 - **gwpy** — `TimeSeries` / GW I/O conventions
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
-  LAL types
+  LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
+  publishes no wheel yet; there, the LAL-based waveform backends and detector
+  geometry are unavailable.
 - **pyyaml** — configuration parsing where used
 
 **Optional** (`pip install 'gwmock-signal[pycbc]'`):

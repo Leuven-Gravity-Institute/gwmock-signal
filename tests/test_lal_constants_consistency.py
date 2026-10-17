@@ -85,6 +85,7 @@ class TestThePyprojectInputs:
             ("lalsuite>=7.24,<8", "7.24"),
             ("lalsuite >= 7.26.1", "7.26.1"),
             ("lalsuite>=7.24,>=7.26", "7.26"),
+            ("lalsuite>=7.24; python_version < '3.15'", "7.24"),
         ],
     )
     def test_the_floor_is_the_tightest_lower_bound(self, dependency, floor):

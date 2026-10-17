@@ -23,7 +23,7 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import lal
+from gwmock_signal import _lalsuite
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -133,6 +133,7 @@ def _preset_resource(alias: str):
 
 def list_lal_detectors() -> list[str]:
     """Return every detector code available in the installed LAL bindings."""
+    lal = _lalsuite.require("lal", "Listing LAL's built-in detectors")
     return sorted(str(code) for code in lal.cached_detector_by_prefix)
 
 
@@ -226,7 +227,10 @@ class Network:
         if not detectors:
             raise ValueError("detectors must be a non-empty sequence.")
 
-        lal_codes: set[str] = set(list_lal_detectors())
+        # Only string codes are checked against LAL's registry, so a network of CustomDetectors alone
+        # does not need it here.
+        needs_lal = any(not isinstance(det, CustomDetector) for det in detectors)
+        lal_codes: set[str] = set(list_lal_detectors()) if needs_lal else set()
         validated: list[str | CustomDetector] = []
         for det in detectors:
             if isinstance(det, CustomDetector):
