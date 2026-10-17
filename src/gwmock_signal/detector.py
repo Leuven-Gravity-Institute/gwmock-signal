@@ -25,8 +25,15 @@ import string
 import threading
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-import lal
+from gwmock_signal import _lalsuite
+
+if TYPE_CHECKING:
+    import lal
+
+#: What a missing ``lalsuite`` stops, as named in the error.
+_LAL_FEATURE = "Registering a CustomDetector with LAL's detector registry"
 
 _PREFIX_ALPHABET = string.ascii_uppercase + string.digits
 _LAL_PREFIX_LENGTH = 2
@@ -49,6 +56,7 @@ def _generate_detector_prefix() -> str:
     Callers must hold :data:`_REGISTRY_LOCK`, since the search reads the registry that another
     thread may be writing to.
     """
+    lal = _lalsuite.require("lal", _LAL_FEATURE)
     max_prefixes = len(_PREFIX_ALPHABET) ** 2
     seed = uuid.uuid4().int % max_prefixes
 
@@ -159,6 +167,7 @@ class CustomDetector:
         if self._lal_detector is not None:
             return self._lal_detector
 
+        lal = _lalsuite.require("lal", _LAL_FEATURE)
         with _REGISTRY_LOCK:
             # Re-checked: another thread may have finished registering while this one waited.
             if self._lal_detector is not None:

@@ -213,7 +213,7 @@ class TestCustomDetectorValidation:
             prefix="Z9",
         )
         with (
-            patch("gwmock_signal.detector.lal.CreateDetector", return_value=None),
+            patch("lal.CreateDetector", return_value=None),
             pytest.raises(RuntimeError, match="Failed to register"),
         ):
             det.to_lal()

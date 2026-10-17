@@ -32,11 +32,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import lal
-import lalsimulation
 import numpy as np
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal import _lalsuite
 from gwmock_signal.constants import MPC_SI, MSUN_SI
 from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
@@ -97,6 +96,7 @@ def _apply_waveform_arguments(lal_params: object, waveform_arguments: dict[str, 
     special-cased and takes an iterable of ``(l, m)`` pairs. Value types must
     match the LAL setter (int, float, or str); mismatches raise from SWIG.
     """
+    lalsimulation = _lalsuite.require("lalsimulation", LALSimulationBackend.LAL_FEATURE)
     for key, value in waveform_arguments.items():
         if key == "ModeArray":
             mode_array = lalsimulation.SimInspiralCreateModeArray()
@@ -127,7 +127,13 @@ class LALSimulationBackend(WaveformBackend):
         segment_duration: Optional fixed analysis-segment length in seconds. When
             ``None`` (default) the length is estimated from the post-Newtonian chirp
             time so the full inspiral fits without wraparound.
+
+    Raises:
+        ImportError: On construction, if ``lalsuite`` is not installed.
     """
+
+    #: What a missing ``lalsuite`` stops, as named in the error.
+    LAL_FEATURE = "The LAL waveform backend"
 
     def __init__(
         self,
@@ -137,6 +143,9 @@ class LALSimulationBackend(WaveformBackend):
         segment_duration: float | None = None,
     ) -> None:
         """Validate the placement configuration shared with the ripple backend."""
+        # Checked here, so a missing lalsuite stops construction with an actionable message
+        # rather than the first waveform request.
+        _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         if not 0.0 < ringdown_fraction < 1.0:
             raise ValueError("ringdown_fraction must be in (0, 1)")
         if segment_duration is not None and segment_duration <= 0:
@@ -153,6 +162,7 @@ class LALSimulationBackend(WaveformBackend):
         ``SimInspiralFD``, so the advertised set is the union of both. Iterating
         over approximant indices yields each name once, in a stable order.
         """
+        lalsimulation = _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         return [
             lalsimulation.GetStringFromApproximant(i)
             for i in range(lalsimulation.NumApproximants)
@@ -221,6 +231,8 @@ class LALSimulationBackend(WaveformBackend):
         from a different generator while sharing the segment sizing and
         conditioning performed by :meth:`generate_td_waveform`.
         """
+        lal = _lalsuite.require("lal", self.LAL_FEATURE)
+        lalsimulation = _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         approx_enum = lalsimulation.GetApproximantFromString(approximant)
         lal_params = lal.CreateDict()
         lalsimulation.SimInspiralWaveformParamsInsertTidalLambda1(lal_params, p.lambda_1)

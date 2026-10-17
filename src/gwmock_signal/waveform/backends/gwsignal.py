@@ -53,9 +53,9 @@ from __future__ import annotations
 
 import importlib
 
-import lalsimulation
 import numpy as np
 
+from gwmock_signal import _lalsuite
 from gwmock_signal.waveform.backends.lal import (
     MPC,
     MSUN,
@@ -74,10 +74,13 @@ class GWSignalBackend(LALSimulationBackend):
     approximants through the gwsignal interface.
     """
 
+    LAL_FEATURE = "The gwsignal waveform backend"
+
     def _evaluate_fd(
         self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Evaluate FD-native approximants via gwsignal; defer the rest to LAL."""
+        lalsimulation = _lalsuite.require("lalsimulation", self.LAL_FEATURE)
         approx_enum = lalsimulation.GetApproximantFromString(approximant)
         if not lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
             # gwsignal's FD path discards the conditioning epoch needed to

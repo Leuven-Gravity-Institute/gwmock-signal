@@ -23,7 +23,7 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import lal
+from gwmock_signal import _lalsuite
 
 if TYPE_CHECKING:
     from gwmock_signal.detector import CustomDetector
@@ -133,6 +133,7 @@ def _preset_resource(alias: str):
 
 def list_lal_detectors() -> list[str]:
     """Return every detector code available in the installed LAL bindings."""
+    lal = _lalsuite.require("lal", "Listing LAL's built-in detectors")
     return sorted(str(code) for code in lal.cached_detector_by_prefix)
 
 

@@ -24,14 +24,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cache
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-import lal
 import numpy as np
 from astropy import coordinates, units
 from astropy.coordinates.matrix_utilities import rotation_matrix
 
+from gwmock_signal import _lalsuite
 from gwmock_signal.detector import CustomDetector
+
+if TYPE_CHECKING:
+    import lal
 
 #: How a caller names a detector: a built-in LAL interferometer code, or an explicit geometry.
 #: Defined here rather than in either projection module, so both paths mean the same thing by it.
@@ -98,8 +101,9 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
 
 def get_lal_detector(prefix: str) -> lal.Detector:
     """Return one detector from LAL's cached prefix registry."""
+    lal = _lalsuite.require("lal", "Projecting onto a detector from LAL's registry")
     try:
-        return cast(lal.Detector, lal.cached_detector_by_prefix[prefix])
+        return cast("lal.Detector", lal.cached_detector_by_prefix[prefix])
     except KeyError as exc:
         raise ValueError(
             f"Unknown or unsupported detector {prefix!r}. Use a valid LAL interferometer code (e.g. 'H1', 'L1', 'V1')."
