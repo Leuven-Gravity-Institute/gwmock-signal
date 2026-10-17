@@ -10,7 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-"""The scheduled check of the built-in constants against the oldest and newest ``lalsuite``.
+"""The scheduled check of the built-in constants and detector table against the oldest and newest ``lalsuite``.
 
 The policy these tests pin, with every ``lalsuite`` replaced by a table of values so nothing is
 installed or fetched:
@@ -21,25 +21,32 @@ installed or fetched:
     would admit could not be read.
 
 The script proposes and never edits, so the only outputs are the exit status and the report. A wrong
-answer is silent in both directions: a missed mismatch leaves a one-ulp error in every waveform, and a
-wrong proposed floor admits a release that disagrees.
+answer is silent in both directions: a missed mismatch leaves a one-ulp error in every waveform, or
+moves a detector in every projection onto it, and a wrong proposed floor admits a release that
+disagrees.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import math
 import subprocess
+import sys
 import urllib.request
 
 import lal_constants_consistency
 import pytest
 from lal_constants_consistency import (
+    _READ_LAL,
     Mismatch,
+    _fixes,
     builtin_constants,
+    builtin_values,
     check,
     compare,
-    lal_constants,
+    detector_values,
+    lal_values,
     lalsuite_floor,
     lowest_consistent,
     main,
@@ -52,6 +59,7 @@ from packaging.tags import Tag
 from packaging.version import Version
 
 from gwmock_signal import constants
+from gwmock_signal._detector_table import FIELDS, builtin_detectors
 
 GOOD = {"MSUN_SI": 1.9884098706980507e30, "PC_SI": 3.085677581491367e16}
 #: ``GOOD`` with the solar mass one ulp higher.
@@ -199,6 +207,12 @@ class TestComparison:
         assert mismatch.name == "MSUN_SI"
         assert mismatch.ulps == 1
 
+    def test_a_difference_from_zero_has_no_ulp_figure(self):
+        """Zero's last place is the smallest subnormal, so an ulp count would be meaningless."""
+        (mismatch,) = compare({"H1.xarm_altitude_rad": 0.0}, {"H1.xarm_altitude_rad": 1e-9})
+
+        assert mismatch.ulps is None
+
     def test_a_name_on_one_side_only_is_a_mismatch(self):
         """A constant one provider lacks is a mismatch, with no ulp figure."""
         (mismatch,) = compare(GOOD, {"MSUN_SI": GOOD["MSUN_SI"]})
@@ -330,7 +344,7 @@ class TestThePolicy:
         )
 
         assert status == 2
-        assert "Could not read the constants of lalsuite 2" in report
+        assert "Could not read the values of lalsuite 2" in report
 
 
 class TestReadingARelease:
@@ -372,7 +386,7 @@ class TestReadingARelease:
 
         monkeypatch.setattr(subprocess, "run", run)
 
-        assert lal_constants(Version("7.24"), "3.12") is None
+        assert lal_values(Version("7.24"), "3.12") is None
 
 
 def test_a_malformed_release_listing_is_reported_as_uncheckable(monkeypatch, tmp_path):
@@ -401,3 +415,99 @@ def test_a_failed_release_listing_is_reported_as_uncheckable(monkeypatch, tmp_pa
 def test_the_built_in_provider_is_read_without_importing_the_package():
     """The script reads ``_builtin.py`` directly; it must see exactly the package's constants."""
     assert builtin_constants() == {name: getattr(constants, name) for name in constants.CONSTANT_NAMES}
+
+
+class TestTheDetectorTable:
+    """Each built-in detector's fields are compared alongside the constants, as ``<code>.<field>``."""
+
+    def test_the_fields_are_named_by_code_and_the_name_is_left_out(self):
+        """Every numeric field is kept; the descriptive name, which projection does not use, is not."""
+        table = {"H1": {"name": "LHO_4k", "vertex_elevation_m": 142.554, "xarm_altitude_rad": 0.0}}
+
+        assert detector_values(table) == {"H1.vertex_elevation_m": 142.554, "H1.xarm_altitude_rad": 0.0}
+
+    def test_the_built_in_values_are_the_constants_and_the_shipped_table(self):
+        """The script must see exactly the package's constants and detector table."""
+        expected = {name: getattr(constants, name) for name in constants.CONSTANT_NAMES}
+        for code, fields in builtin_detectors().items():
+            expected |= {f"{code}.{field}": value for field, value in zip(FIELDS, fields, strict=True)}
+
+        assert builtin_values() == expected
+
+    def test_the_reader_gives_the_installed_lalsuite_the_built_in_names_and_values(self):
+        """The snippet run in each throwaway environment, run here against the installed ``lalsuite``.
+
+        The test suite already requires the built-in values to equal this ``lalsuite``'s, so equality
+        shows the snippet reads every constant and every detector field under the names compared.
+        """
+        pytest.importorskip("lal")
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                _READ_LAL,
+                str(lal_constants_consistency.CONSTANTS_DIR / "_lal.py"),
+                str(lal_constants_consistency.DETECTOR_TABLE_SCRIPT),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        read = {name: float.fromhex(value) for name, value in json.loads(result.stdout).items()}
+
+        assert read == builtin_values()
+
+    def test_a_detector_that_differs_fails_and_says_to_regenerate_the_table(self):
+        """A one-ulp change to a detector field is a mismatch, with the command that fixes it."""
+        good = {**GOOD, "H1.xarm_azimuth_rad": 5.654877185821533}
+        off = {**good, "H1.xarm_azimuth_rad": math.nextafter(good["H1.xarm_azimuth_rad"], 0.0)}
+
+        status, report = check(
+            floor=Version("1"), versions=_versions("1", "2"), builtin=good, read=_reader({"1": good, "2": off})
+        )
+
+        assert status == 1
+        assert "| `H1.xarm_azimuth_rad` |" in report
+        assert "--with lalsuite==2 python scripts/lal_detector_table.py" in report
+        assert "_builtin.py" not in report
+
+    def test_a_new_detector_in_the_newest_release_is_a_mismatch(self):
+        """A code the table lacks is reported missing, so the table is regenerated to include it."""
+        newest = {**GOOD, "X9.vertex_elevation_m": 10.0}
+
+        status, report = check(floor=Version("1"), versions=_versions("1"), builtin=GOOD, read=_reader({"1": newest}))
+
+        assert status == 1
+        assert "| `X9.vertex_elevation_m` | `10.0` (`0x1.4000000000000p+3`) | missing | n/a |" in report
+
+    def test_a_detector_the_floor_release_lacks_raises_the_floor(self):
+        """A code added after the floor makes the floor disagree, so the floor moves to the first release with it.
+
+        The table must hold every code the installed lalsuite has, in the lowest-direct job as well, so a
+        floor below the release that added a code cannot be kept.
+        """
+        added = {**GOOD, "X9.vertex_elevation_m": 10.0}
+        read = _reader({"1": GOOD, "2": GOOD, "3": added, "4": added})
+
+        status, report = check(floor=Version("1"), versions=_versions("1", "2", "3", "4"), builtin=added, read=read)
+
+        assert status == 1
+        assert "The built-in values equal lalsuite 4's." in report
+        assert "| `X9.vertex_elevation_m` | `10.0` (`0x1.4000000000000p+3`) | missing | n/a |" in report
+        assert "Raise the floor to `lalsuite>=3`" in report
+        assert "constants or detector table need to match lalsuite 4" in report
+
+    @pytest.mark.parametrize(
+        ("names", "constants_fix", "detectors_fix"),
+        [
+            (["MSUN_SI"], True, False),
+            (["H1.vertex_elevation_m"], False, True),
+            (["MSUN_SI", "V1.xarm_azimuth_rad"], True, True),
+        ],
+    )
+    def test_each_kind_of_mismatch_names_its_own_fix(self, names, constants_fix, detectors_fix):
+        """Constants are edited by hand; the table is regenerated. Only the fixes needed are listed."""
+        fixes = "\n".join(_fixes([Mismatch(name, 1.0, 2.0) for name in names], Version("7.27")))
+
+        assert ("_builtin.py" in fixes) is constants_fix
+        assert ("lal_detector_table.py" in fixes) is detectors_fix

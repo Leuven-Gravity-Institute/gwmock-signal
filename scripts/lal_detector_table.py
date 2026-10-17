@@ -18,7 +18,9 @@ location: the vertex longitude, latitude and elevation, and each arm's azimuth a
 LAL's built-in interferometer codes (``H1``, ``V1``, ...) these come from ``lalsuite``. The package
 ships them in ``src/gwmock_signal/data/lal_detectors.json`` so that projecting onto a built-in
 detector does not need ``lalsuite`` installed; ``tests/unit/test_detector_table.py`` requires the
-table to equal LAL's registry exactly whenever ``lalsuite`` is installed.
+table to equal LAL's registry exactly whenever ``lalsuite`` is installed, and
+``scripts/lal_constants_consistency.py`` checks it on a schedule against the oldest and newest
+``lalsuite`` releases, reading each registry through :func:`registry_table`.
 
 Run it to regenerate the table after a ``lalsuite`` release changes a built-in detector::
 
