@@ -1,10 +1,9 @@
 """The device path must accept a CustomDetector, not only built-in LAL codes.
 
-`jax_batch` used one string as both the LAL registry key and the output channel name. That
-silently restricts it to built-in interferometer codes: a
-:class:`~gwmock_signal.detector.CustomDetector` registers itself under a generated
-two-character prefix, so looking it up by its ``name`` fails. gwmock's ET presets are custom
-detectors, so before this the device path could not simulate the configuration it exists for.
+A :class:`~gwmock_signal.detector.CustomDetector` is looked up by its geometry but its output
+channel is keyed by its ``name``, so the device path cannot use one string for both, as it once
+did, which restricted it to built-in interferometer codes. gwmock's ET presets are custom
+detectors, so that restriction would keep the device path from the configuration it exists for.
 
 These tests check the device path resolves the *right geometry*, not merely that it runs. The
 load-bearing anchor is LAL's own response tensor, computed in C from the same ``FrDetector``:
@@ -12,6 +11,8 @@ agreement with our other code path would only show the two agree, which bounds n
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 import numpy as np
 import pytest
@@ -77,19 +78,37 @@ def test_custom_detector_is_accepted_by_both_branches(earth_rotation: bool) -> N
 
 
 @pytest.mark.parametrize("earth_rotation", [True, False])
-def test_custom_detector_matches_the_same_geometry_given_as_a_prefix(earth_rotation: bool) -> None:
-    """The strain must be identical whether the detector is named or given by its LAL prefix.
+def test_single_precision_reproduces_the_detector_registered_with_lal(earth_rotation: bool) -> None:
+    """``precision="single"`` gives exactly the strain of the same detector registered with LAL.
 
-    This is what pins that the *geometry* is resolved correctly rather than merely that some
-    detector was found: passing the registered prefix goes through the built-in code path, so
-    agreement means both routes reached the same response tensor and location.
+    Passing the registered prefix goes through LAL's registry, which stores the elevation and arm
+    angles in single precision, so agreement to the last bit means the CustomDetector reached the
+    same response tensor and location by its own route.
     """
     detector = _et_like()
     prefix = detector.to_lal().frDetector.prefix
 
-    by_object = np.asarray(_batch([detector], earth_rotation=earth_rotation).strain)
     by_prefix = np.asarray(_batch([prefix], earth_rotation=earth_rotation).strain)
-    assert np.array_equal(by_object, by_prefix)
+    by_single = np.asarray(
+        _batch([dataclasses.replace(detector, precision="single")], earth_rotation=earth_rotation).strain
+    )
+    assert np.array_equal(by_single, by_prefix)
+
+
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_double_precision_differs_from_lal_only_by_its_rounding(earth_rotation: bool) -> None:
+    """The default double precision differs from LAL's single-precision copy, but only at that rounding.
+
+    Measured 1.5e-7 of peak for this detector; bounded at 1e-6. Non-zero, because the arm angles
+    here are not exact in single precision, so the default really does use the fields as given.
+    """
+    detector = _et_like()
+    prefix = detector.to_lal().frDetector.prefix
+
+    by_prefix = np.asarray(_batch([prefix], earth_rotation=earth_rotation).strain)
+    by_double = np.asarray(_batch([detector], earth_rotation=earth_rotation).strain)
+    difference = float(np.max(np.abs(by_double - by_prefix)) / np.max(np.abs(by_prefix)))
+    assert 0.0 < difference < 1e-6
 
 
 def test_custom_and_builtin_detectors_can_be_mixed() -> None:
@@ -208,16 +227,15 @@ def test_et_preset_geometry_matches_lal_and_the_published_design() -> None:
     """
     import itertools
 
-    import lal
-
     from gwmock_signal.network import Network
 
-    keys = [key for _, key in resolve_detectors(list(Network.from_preset("ET-Sardinia").detector_names))]
+    detectors = list(Network.from_preset("ET-Sardinia").detector_names)
+    keys = [key for _, key in resolve_detectors(detectors)]
     responses = [reconstructed_geometry(key)[0] for key in keys]
     locations = [reconstructed_geometry(key)[1] for key in keys]
 
-    for key, response, location in zip(keys, responses, locations, strict=True):
-        detector = lal.cached_detector_by_prefix[key]
+    for custom, response, location in zip(detectors, responses, locations, strict=True):
+        detector = custom.to_lal()
         # LAL stores the response as REAL4, so ~1e-7 of the tensor scale is its own precision
         # and not slack chosen to make this pass.
         assert np.max(np.abs(np.array(detector.response) - response)) < 1e-6

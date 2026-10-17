@@ -47,32 +47,37 @@ if TYPE_CHECKING:
 type DetectorSpec = str | CustomDetector
 
 
-def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
-    """Resolve detector specifications to ``(output_name, lal_lookup_key)`` pairs.
+#: How projection looks a detector up: a detector code (built in, or registered with LAL at run time),
+#: or -- for a :class:`~gwmock_signal.detector.CustomDetector` -- its defining fields. Hashable either
+#: way, because the device path caches compiled kernels by it.
+type DetectorKey = str | tuple[float, ...]
+
+
+def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, DetectorKey]]:
+    """Resolve detector specifications to ``(output_name, lookup_key)`` pairs.
 
     Both the NumPy and the device projection paths need the same split, because the two are not
-    interchangeable: a :class:`~gwmock_signal.detector.CustomDetector` is *looked up* by the
-    two-character prefix it registers with LAL, but its output channel must be keyed by its own
-    ``name``. Using one string for both -- as the device path did -- silently restricts that path
-    to built-in interferometer codes, which is why ET presets could not reach it at all.
+    interchangeable: a :class:`~gwmock_signal.detector.CustomDetector` is *looked up* by its
+    geometry, but its output channel must be keyed by its own ``name``.
 
     Lives here rather than in either projection module so both derive the mapping from one
-    implementation, consistent with this module being the single point that turns a detector code
-    into geometry (:func:`detector_fields`).
+    implementation, consistent with this module being the single point that turns a detector
+    specification into geometry.
 
     Args:
-        detector_specs: Built-in LAL interferometer codes and/or ``CustomDetector`` instances.
+        detector_specs: Detector codes and/or ``CustomDetector`` instances.
 
     Returns:
-        One ``(output_name, lal_lookup_key)`` pair per entry, in the order given. For a built-in
-        code the two are the same string.
+        One ``(output_name, lookup_key)`` pair per entry, in the order given: the code itself for a
+        string, and :meth:`~gwmock_signal.detector.CustomDetector.geometry_fields` for a
+        ``CustomDetector``, which is never registered with LAL to be projected.
 
     Raises:
         TypeError: If an entry is neither a string nor a ``CustomDetector``.
         ValueError: If a string is not a known detector code (see :func:`detector_fields`), or if
-            two entries resolve to the same detector.
+            two entries are the same detector.
     """
-    resolved: list[tuple[str, str]] = []
+    resolved: list[tuple[str, DetectorKey]] = []
     for raw in detector_specs:
         if isinstance(raw, str):
             name = str(raw)
@@ -81,24 +86,45 @@ def resolve_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str,
             detector_fields(name)
             resolved.append((name, name))
         elif isinstance(raw, CustomDetector):
-            resolved.append((raw.name, raw.to_lal().frDetector.prefix))
+            resolved.append((raw.name, raw.geometry_fields()))
         else:
             raise TypeError(f"Unsupported detector specification type: {type(raw).__name__}")
 
-    # Distinct channels must not share a lookup key: the network would then hold one detector
-    # twice under two names. This is also the observable form of a prefix-registration race --
-    # ``CustomDetector.to_lal`` checks and registers without synchronisation, so two threads can
-    # both claim one explicit prefix -- which would otherwise give two channels the same geometry
-    # with no error at all.
-    keys = [key for _, key in resolved]
-    duplicated = sorted({key for key in keys if keys.count(key) > 1})
+    # Distinct channels must not be one detector: the network would then hold it twice under two
+    # names. A code is identified by itself and a CustomDetector by its LAL prefix once it has one,
+    # so the same detector given twice, or a CustomDetector given alongside its own registered
+    # prefix, is caught -- while two distinct CustomDetectors may share a geometry.
+    identities = [_identity(raw) for raw in detector_specs]
+    duplicated = [identity for identity in dict.fromkeys(identities) if identities.count(identity) > 1]
     if duplicated:
-        colliding = {key: [name for name, other in resolved if other == key] for key in duplicated}
+        colliding = {
+            _describe(identity): [
+                name for (name, _), other in zip(resolved, identities, strict=True) if other == identity
+            ]
+            for identity in duplicated
+        }
         raise ValueError(
-            f"Detectors resolve to the same LAL detector: {colliding}. Each channel must be a "
+            f"Detectors resolve to the same detector: {colliding}. Each channel must be a "
             f"distinct detector; a CustomDetector and its own registered prefix are the same one."
         )
     return resolved
+
+
+def _identity(spec: DetectorSpec) -> object:
+    """Return what makes two detector specifications the same detector."""
+    if isinstance(spec, CustomDetector):
+        return spec._lal_prefix or ("CustomDetector", id(spec))
+    return str(spec)
+
+
+def _describe(identity: object) -> str:
+    """Return a readable name for a detector identity, for error messages."""
+    return identity if isinstance(identity, str) else "the same CustomDetector"
+
+
+def _fields(key: DetectorKey) -> tuple[float, ...]:
+    """Return the defining fields a lookup key stands for."""
+    return key if isinstance(key, tuple) else detector_fields(key)
 
 
 def get_lal_detector(prefix: str) -> lal.Detector:
@@ -142,12 +168,12 @@ def detector_fields(code: str) -> tuple[float, ...]:
     return _defining_fields(registered.frDetector)
 
 
-def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return the response tensor and location of the detector named by ``prefix``.
+def reconstructed_geometry(key: DetectorKey) -> tuple[np.ndarray, np.ndarray]:
+    """Return the response tensor and location of the detector ``key`` stands for.
 
     Args:
-        prefix: LAL registry key -- a built-in interferometer code, or the prefix a
-            :class:`~gwmock_signal.detector.CustomDetector` registered itself under.
+        key: A lookup key from :func:`resolve_detectors` -- a detector code, or a
+            :class:`~gwmock_signal.detector.CustomDetector`'s defining fields.
 
     Returns:
         A ``(response, location)`` tuple where ``response`` is the 3x3 detector
@@ -166,7 +192,7 @@ def reconstructed_geometry(prefix: str) -> tuple[np.ndarray, np.ndarray]:
     # second, silently and in a way that still looks like a plausible network. The test harness
     # used to clear this cache after any test that registered a detector, which is how the hazard
     # is known to be real; that hook is gone because keying on the geometry removes the need.
-    return _geometry_from_fields(detector_fields(prefix))
+    return _geometry_from_fields(_fields(key))
 
 
 def _defining_fields(fr_detector: object) -> tuple[float, ...]:

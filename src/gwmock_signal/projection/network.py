@@ -23,7 +23,7 @@ from typing import cast
 import numpy as np
 from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-from gwmock_signal.projection.geometry import DetectorSpec, reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
@@ -97,7 +97,7 @@ def _gmst_accurate_array(t_gps: np.ndarray) -> np.ndarray:
 
 
 def _time_delay_from_earth_center_lal(
-    prefix: str,
+    prefix: DetectorKey,
     *,
     right_ascension: float,
     declination: float,
@@ -109,7 +109,7 @@ def _time_delay_from_earth_center_lal(
 
 
 def _antenna_pattern_lal(
-    prefix: str,
+    prefix: DetectorKey,
     *,
     right_ascension: float,
     declination: float,
@@ -124,8 +124,8 @@ def _antenna_pattern_lal(
     return float(f_plus), float(f_cross)
 
 
-def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, str]]:
-    """Resolve detector names to one LAL lookup key per output channel.
+def _make_detectors(detector_specs: Sequence[DetectorSpec]) -> list[tuple[str, DetectorKey]]:
+    """Resolve detector names to one lookup key per output channel.
 
     Delegates to :func:`~gwmock_signal.projection.geometry.resolve_detectors` so this path and
     the device path cannot diverge on what a detector specification means.
@@ -284,7 +284,7 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
 def _project_rotating_on_device(  # noqa: PLR0913
     hp: GWpyTimeSeries,
     hc: GWpyTimeSeries,
-    detectors: Sequence[tuple[str, str]],
+    detectors: Sequence[tuple[str, DetectorKey]],
     *,
     time_array: np.ndarray,
     right_ascension: float,

@@ -26,9 +26,10 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from gwmock_signal import _lalsuite
+from gwmock_signal._detector_table import lal_storage_precision
 
 if TYPE_CHECKING:
     import lal
@@ -94,8 +95,16 @@ class CustomDetector:
         yarm_tilt_rad: Altitude angle of the y-arm above the local
             horizon in radians.  Defaults to ``0.0``.
         prefix: Optional detector prefix used to register the detector in
-            ``lal.cached_detector_by_prefix``. When omitted, one unused
-            two-character prefix is generated automatically.
+            ``lal.cached_detector_by_prefix`` by :meth:`to_lal`. When omitted, an
+            unused two-character prefix is generated when :meth:`to_lal` is first
+            called. Projection does not register the detector, so it needs neither.
+        precision: ``"double"`` (default) projects with the fields exactly as given.
+            ``"single"`` rounds the elevation and the four arm angles to single
+            precision first, as LAL stores them, so projection reproduces what a
+            LAL-registered copy of this detector gives. Before ``precision`` existed,
+            projection always went through LAL and so always used single precision;
+            the double default changes the projected strain at that rounding, about
+            1.5e-7 of peak for an ET-like detector.
     """
 
     name: str
@@ -107,6 +116,7 @@ class CustomDetector:
     xarm_tilt_rad: float = 0.0
     yarm_tilt_rad: float = 0.0
     prefix: str = ""
+    precision: Literal["double", "single"] = "double"
 
     # Cache for the constructed LAL detector; not exposed as a public attribute.
     _lal_prefix: str = field(default="", init=False, repr=False, compare=False)
@@ -141,20 +151,49 @@ class CustomDetector:
             raise ValueError(f"longitude_rad must be in [-pi, pi]; got {self.longitude_rad!r}.")
         if not (_elev_min <= self.elevation_m <= _elev_max):
             raise ValueError(f"elevation_m must be in [-1e4, 1e5] m; got {self.elevation_m!r}.")
+        self._check_precision()
         if self.prefix:
             object.__setattr__(self, "_lal_prefix", self.prefix)
-        else:
-            lal = _lalsuite.require("lal", _LAL_FEATURE)
-            with _REGISTRY_LOCK:
-                object.__setattr__(self, "_lal_prefix", _generate_detector_prefix(lal))
+
+    def _check_precision(self) -> None:
+        """Reject an unknown precision, and single-precision fields that single precision cannot hold."""
+        if self.precision not in ("double", "single"):
+            raise ValueError(f"precision must be 'double' or 'single'; got {self.precision!r}.")
+        if self.precision == "single":
+            try:
+                self.geometry_fields()
+            except OverflowError as exc:
+                raise ValueError(
+                    "precision='single' needs the elevation and arm angles within the single-precision range."
+                ) from exc
+
+    def geometry_fields(self) -> tuple[float, ...]:
+        """Return the fields that define this detector's projection geometry.
+
+        In the order :func:`gwmock_signal.projection.geometry.reconstructed_geometry` takes them:
+        vertex longitude, latitude and elevation, x- and y-arm azimuth, x- and y-arm altitude. With
+        ``precision="single"`` the elevation and the arm angles are rounded to single precision,
+        which LAL uses for those fields; the longitude and latitude stay double, as in LAL.
+        """
+        fields = (
+            float(self.longitude_rad),
+            float(self.latitude_rad),
+            float(self.elevation_m),
+            float(self.xarm_azimuth_rad),
+            float(self.yarm_azimuth_rad),
+            float(self.xarm_tilt_rad),
+            float(self.yarm_tilt_rad),
+        )
+        return lal_storage_precision(fields) if self.precision == "single" else fields
 
     def to_lal(self) -> lal.Detector:
         """Return a cached :class:`lal.Detector` for this geometry.
 
-        The first call constructs a detector from a ``lal.FrDetector`` and
-        registers it in ``lal.cached_detector_by_prefix`` so the projection
-        layer can resolve built-in and custom detectors through one lookup
-        path. Subsequent calls return the cached object.
+        The first call allocates a prefix if none was given, constructs a detector
+        from a ``lal.FrDetector`` and registers it in ``lal.cached_detector_by_prefix``,
+        for code that needs a LAL detector; projection does not, and builds the
+        geometry from :meth:`geometry_fields`. Subsequent calls return the cached
+        object. Requires ``lalsuite``.
 
         Thread-safe: allocation, the clash check and registration happen together under
         :data:`_REGISTRY_LOCK`. Without that, two threads could each find the same prefix free and
@@ -175,17 +214,19 @@ class CustomDetector:
             if self._lal_detector is not None:
                 return self._lal_detector
             detector_prefix = self._lal_prefix
-            if detector_prefix in lal.cached_detector_by_prefix:
+            if detector_prefix and detector_prefix in lal.cached_detector_by_prefix:
                 if self.prefix:
                     # User explicitly chose this prefix: a clash is a real error.
                     raise ValueError(
                         f"Detector prefix {detector_prefix!r} is already registered in LAL; "
                         "choose a unique prefix for CustomDetector."
                     )
-                # Auto-generated prefix: it was allocated at construction against the
-                # registry as it was then, but another detector (e.g. a sibling in the
-                # same network) has since registered the same prefix. Allocate a fresh
-                # one now, atomically with registration below, to close that window.
+                # An auto-generated prefix left over from a registration that failed, and since
+                # taken by another detector: allocate afresh.
+                detector_prefix = ""
+            if not detector_prefix:
+                # No explicit prefix: allocate one now, under the lock and atomically with the
+                # registration below, so no other detector can claim it in between.
                 detector_prefix = _generate_detector_prefix(lal)
                 object.__setattr__(self, "_lal_prefix", detector_prefix)
             fr_detector = lal.FrDetector()

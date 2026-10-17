@@ -263,25 +263,42 @@ class TestMixedNetworkProjection:
             assert len(ts) == n
 
 
-def test_to_lal_reallocates_auto_generated_prefix_on_collision() -> None:
-    """Two auto-prefixed detectors that initially draw the same prefix must not clash.
+def test_construction_allocates_and_registers_nothing() -> None:
+    """A prefix is allocated, and the detector registered, only when ``to_lal`` is called.
 
-    Reproduces the construct-then-register window: prefixes are allocated at
-    construction, but two siblings built before either registers can draw the same
-    auto prefix. The second ``to_lal`` must re-allocate instead of raising.
+    So constructing and projecting a CustomDetector needs no LAL, and two siblings built before
+    either registers cannot draw the same prefix: allocation and registration happen together under
+    the registry lock.
     """
-    prefixes = iter(["ZZ", "ZZ", "ZY"])  # both built as 'ZZ'; the re-allocation yields 'ZY'
+    before = set(lal.cached_detector_by_prefix)
+    first = _make_h1_custom(name="auto_first")
+    second = _make_h1_custom(name="auto_second")
+    assert set(lal.cached_detector_by_prefix) == before
+    assert first._lal_prefix == second._lal_prefix == ""
+
+    first_prefix = first.to_lal().frDetector.prefix
+    second_prefix = second.to_lal().frDetector.prefix
+    try:
+        assert first_prefix != second_prefix
+        assert {first_prefix, second_prefix} <= set(lal.cached_detector_by_prefix)
+        assert second.to_lal() is second.to_lal()  # cached, idempotent
+    finally:
+        for prefix in (first_prefix, second_prefix):
+            lal.cached_detector_by_prefix.pop(prefix, None)
+
+
+def test_to_lal_reallocates_a_stale_auto_prefix() -> None:
+    """An auto prefix left from a failed registration, since taken by another detector, is replaced."""
+    prefixes = iter(["ZY"])
     for stale in ("ZZ", "ZY"):
         lal.cached_detector_by_prefix.pop(stale, None)
+    taken = _make_h1_custom(name="taken", prefix="ZZ")
+    taken.to_lal()
+    stale = _make_h1_custom(name="stale")
+    object.__setattr__(stale, "_lal_prefix", "ZZ")  # as a failed earlier registration would leave it
     try:
         with patch("gwmock_signal.detector._generate_detector_prefix", lambda lal: next(prefixes)):
-            first = _make_h1_custom(name="auto_first")  # prefix="" -> 'ZZ'
-            second = _make_h1_custom(name="auto_second")  # -> 'ZZ'
-            first_lal = first.to_lal()  # registers 'ZZ'
-            second_lal = second.to_lal()  # 'ZZ' taken + auto-generated -> re-allocate -> 'ZY'
-        assert first_lal.frDetector.prefix == "ZZ"
-        assert second_lal.frDetector.prefix == "ZY"
-        assert second.to_lal() is second_lal  # cached, idempotent
+            assert stale.to_lal().frDetector.prefix == "ZY"
     finally:
         for prefix in ("ZZ", "ZY"):
             lal.cached_detector_by_prefix.pop(prefix, None)

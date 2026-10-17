@@ -156,13 +156,18 @@ def _detector_from_entry(entry: dict) -> str | CustomDetector:
         or a :class:`CustomDetector` instance.
 
     Raises:
-        ValueError: If a required angle is absent or if both ``*_deg`` and
-            ``*_rad`` variants of the same angle are present simultaneously.
+        ValueError: If a required angle is absent, if both ``*_deg`` and
+            ``*_rad`` variants of the same angle are present simultaneously, or
+            if ``precision`` is invalid or given for a detector code.
     """
     from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
 
     det_name: str = entry["name"]
     if not _geometry_keys & set(entry.keys()):
+        if "precision" in entry:
+            raise ValueError(
+                f"Detector {det_name!r}: 'precision' applies only to a custom detector, one given by its geometry."
+            )
         return det_name
 
     if "elevation_m" not in entry:
@@ -172,6 +177,7 @@ def _detector_from_entry(entry: dict) -> str | CustomDetector:
         return CustomDetector(
             name=det_name,
             prefix=str(entry.get("prefix", "")),
+            precision=entry.get("precision", "double"),
             latitude_rad=_parse_angle(entry, "latitude", required=True),
             longitude_rad=_parse_angle(entry, "longitude", required=True),
             elevation_m=float(entry["elevation_m"]),

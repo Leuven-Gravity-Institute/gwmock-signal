@@ -30,6 +30,7 @@ Each **detector object** is a mapping:
 | ------------------ | -------- | -------- | ---------------------------------------------------------------- |
 | `name`             | `string` | Yes      | Detector identifier (e.g. `"H1"`, `"ET1"`).                      |
 | `prefix`           | `string` | No       | Two-character LAL prefix (auto-generated).                       |
+| `precision`        | `string` | No       | `"double"` (default) or `"single"`; see below.                   |
 | `latitude_deg`     | `float`  | \*       | Geodetic latitude in degrees.                                    |
 | `latitude_rad`     | `float`  | \*       | Geodetic latitude in radians.                                    |
 | `longitude_deg`    | `float`  | \*       | Geodetic longitude in degrees.                                   |
@@ -142,6 +143,12 @@ detectors:
 You can mix `_deg` and `_rad` variants across parameters (but not for the same
 parameter in the same entry).
 
+`precision` sets the custom detector's
+[projection precision](custom-detectors.md): `"double"` (the default) projects
+with the values as given, and `"single"` rounds the elevation and arm angles as
+LAL stores them, reproducing a LAL-registered copy of the detector. It is
+rejected on an entry that names a detector code.
+
 ---
 
 ## Example 4 — Mixed built-in and custom detectors
@@ -187,6 +194,11 @@ from gwmock_signal.network import Network
 
 net = Network.from_preset("ET-Triangle-Sardinia")
 ```
+
+The presets are custom detectors, so they project in double precision by
+default. Earlier versions projected them through LAL, in single precision; the
+strain differs at that rounding, about 1.5e-7 of peak. Set `precision: single`
+on each detector of a copied preset file to reproduce the earlier values.
 
 ---
 

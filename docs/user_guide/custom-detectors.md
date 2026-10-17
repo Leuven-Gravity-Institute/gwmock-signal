@@ -34,9 +34,16 @@ ground-based interferometer:
 | `xarm_tilt_rad`    | `float` | radians | finite (default `0`) | X-arm altitude above local horizon.                               |
 | `yarm_tilt_rad`    | `float` | radians | finite (default `0`) | Y-arm altitude above local horizon.                               |
 
-The `prefix` parameter is optional — when omitted, a unique two-character LAL
-prefix is generated automatically so the projection layer can look up the
-detector.
+Projection builds the detector's geometry directly from these fields, so it
+needs neither `lalsuite` nor a LAL prefix. Two optional parameters remain:
+
+- `precision` — `"double"` (default) projects with the fields exactly as given.
+  `"single"` first rounds the elevation and the four arm angles to single
+  precision, the way LAL stores them, so the projection reproduces what a
+  LAL-registered copy of the detector gives. The difference is about one part in
+  1e7 of the strain.
+- `prefix` — the two-character prefix used by `to_lal()` to register the
+  detector with LAL; see [below](#lal-registration).
 
 !!! tip "Degrees vs. radians" The `CustomDetector` constructor uses radians.
 Network YAML/JSON files support `_deg` variants as well. See
@@ -152,21 +159,23 @@ cust = CustomDetector(
 # Mix: built-in H1 and L1 plus a custom ET1
 net = Network.from_detectors(["H1", "L1", cust], name="HL + ET")
 print(net.detector_names)
-# ('H1', 'L1', CustomDetector(name='ET1', latitude_rad=0.7, longitude_rad=0.16, elevation_m=100.0, xarm_azimuth_rad=1.23, yarm_azimuth_rad=2.28, xarm_tilt_rad=0.0, yarm_tilt_rad=0.0, prefix=''))
+# ('H1', 'L1', CustomDetector(name='ET1', latitude_rad=0.7, longitude_rad=0.16, elevation_m=100.0, xarm_azimuth_rad=1.23, yarm_azimuth_rad=2.28, xarm_tilt_rad=0.0, yarm_tilt_rad=0.0, prefix='', precision='double'))
 ```
 
 When a `Network` contains `CustomDetector` instances, the projection layer
-registers them with LAL's prefix cache automatically on first use. Subsequent
-lookups within the same process are cached.
+builds their geometry from their fields; nothing is registered with LAL. The
+geometry is cached by those fields within the process.
 
 ---
 
-## Automatic LAL prefix generation
+## LAL registration
 
-Each `CustomDetector` registers itself in `lal.cached_detector_by_prefix` under
-a two-character prefix. If you don't supply a `prefix`, one is generated
-automatically (two unused uppercase/digit characters). If you _do_ supply one,
-it must be exactly two characters and not already registered in LAL.
+`CustomDetector.to_lal()` registers the detector in
+`lal.cached_detector_by_prefix` under a two-character prefix and returns the
+`lal.Detector`, for code that needs one; it requires `lalsuite`. If you don't
+supply a `prefix`, an unused one (two uppercase/digit characters) is generated
+when `to_lal()` is first called. If you _do_ supply one, it must be exactly two
+characters and not already registered in LAL.
 
 ```python
 # Explicit prefix (must be unique and not in use)
