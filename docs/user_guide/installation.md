@@ -134,7 +134,7 @@ python -c "import gwmock_signal; print(gwmock_signal.__version__)"
 Declared in `pyproject.toml` for the library:
 
 - **typer** — CLI (`gwmock-signal` entry point)
-- **gwpy** — `TimeSeries` / GW I/O conventions
+- **gwpy** — `TimeSeries.to_gwpy()`/`from_gwpy()` and frame (GWF) output
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
   LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
   publishes no wheel yet; there, the LAL-based waveform backends and detector
@@ -150,6 +150,11 @@ Declared in `pyproject.toml` for the library:
 
 - **rippleGW** (and JAX) — JAX/ripple waveform backend (`RippleBackend`); CPU
   JAX by default
+
+**Optional** (`pip install 'gwmock-signal[hdf5]'`):
+
+- **h5py** — HDF5 input and output: `DetectorStrainStack.write`/`read` in HDF5,
+  `gwmock_signal.io.write_hdf5`/`read_hdf5`, and the CLI's `--output`
 
 Numerical arrays (`numpy`, etc.) are pulled in transitively (for example by
 `gwpy` and `lalsuite`).

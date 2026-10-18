@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import importlib
 import math
 import sys
 import threading
@@ -48,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from gwmock_signal._optional import require
 from gwmock_signal.sampling_grid import SamplingGrid
 
 if TYPE_CHECKING:
@@ -62,20 +62,6 @@ __all__ = ["TimeSeries", "as_timeseries", "register_pytree"]
 def _namespace(data: Any) -> ModuleType:
     """Return the array namespace of ``data``: ``numpy``, ``jax.numpy``, or another array-API library."""
     return data.__array_namespace__()
-
-
-def _import(module: str, extra: str, feature: str) -> ModuleType:
-    """Import an optional package, naming the extra that provides it when it is missing."""
-    try:
-        return importlib.import_module(module)
-    except ModuleNotFoundError as exc:
-        if exc.name is None or exc.name.split(".")[0] != module.split(".", maxsplit=1)[0]:
-            raise
-        raise ModuleNotFoundError(
-            f"{feature} needs {module.split('.', maxsplit=1)[0]}, which is not installed. "
-            f"Install it with: pip install 'gwmock-signal[{extra}]'",
-            name=exc.name,
-        ) from exc
 
 
 @dataclass(frozen=True, eq=False)
@@ -292,7 +278,7 @@ class TimeSeries:
             RuntimeError: If JAX is not in 64-bit mode, in which it would round double-precision
                 samples to single precision.
         """
-        jax = _import("jax", "jax", "TimeSeries.to_jax")
+        jax = require("jax", "jax", "TimeSeries.to_jax")
         _require_x64(jax)
         return self.with_data(jax.device_put(jax.numpy.asarray(self.data), device))
 
@@ -309,7 +295,7 @@ class TimeSeries:
         """
         if len(self.data.shape) != 1:
             raise ValueError(f"a GWpy TimeSeries is one-dimensional; this series has shape {tuple(self.data.shape)}.")
-        timeseries = _import("gwpy.timeseries", "gwpy", "TimeSeries.to_gwpy")
+        timeseries = require("gwpy.timeseries", "gwpy", "TimeSeries.to_gwpy")
         return timeseries.TimeSeries(
             np.asarray(self.data),
             t0=self.t0,
@@ -356,7 +342,7 @@ class TimeSeries:
         """
         if len(self.data.shape) != 1:
             raise ValueError(f"a PyCBC TimeSeries is one-dimensional; this series has shape {tuple(self.data.shape)}.")
-        types = _import("pycbc.types", "pycbc", "TimeSeries.to_pycbc")
+        types = require("pycbc.types", "pycbc", "TimeSeries.to_pycbc")
         return types.TimeSeries(np.asarray(self.data), delta_t=self.dt, epoch=self.t0)
 
     @classmethod
@@ -433,7 +419,7 @@ def register_pytree() -> None:
 # Cached, so registration, which JAX keeps per process, happens once.
 @functools.cache
 def _register_pytree_once() -> None:
-    jax = _import("jax", "jax", "Registering TimeSeries with JAX")
+    jax = require("jax", "jax", "Registering TimeSeries with JAX")
     tree_util = jax.tree_util
 
     def flatten(series: TimeSeries) -> tuple[tuple[Any, Any], tuple[float, str | None, str | None]]:

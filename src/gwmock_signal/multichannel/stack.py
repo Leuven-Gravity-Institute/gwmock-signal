@@ -21,9 +21,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import h5py
 import numpy as np
 
+from gwmock_signal._optional import require
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
@@ -226,9 +226,11 @@ class DetectorStrainStack:
 
         Raises:
             ValueError: If ``format`` is not recognised.
+            ModuleNotFoundError: If ``'hdf5'`` is asked for without the ``hdf5`` extra, or
+                ``'gwf'`` without the ``gwpy`` extra.
 
         Note:
-            GWF writing requires an optional frame library
+            GWF writing also requires a frame library
             (``python-ldas-tools-framecpp`` or ``framel``).  Install via your
             system package manager or conda.
         """
@@ -238,14 +240,13 @@ class DetectorStrainStack:
         channel_names = list(self._names)
 
         if format == "gwf":
-            from gwpy.timeseries import TimeSeriesDict  # noqa: PLC0415 -- only frame output needs GWpy
-
-            tsd = TimeSeriesDict()
+            tsd = require("gwpy.timeseries", "gwpy", "Frame (GWF) output").TimeSeriesDict()
             for name, ts in zip(self._names, self._channels, strict=True):
                 tsd[name] = dataclasses.replace(ts, name=name).to_gwpy()
             tsd.write(str(path), format="gwf")
 
         elif format == "hdf5":
+            h5py = require("h5py", "hdf5", "HDF5 output")
             with h5py.File(path, "w") as fh:
                 # Preserve the detector/channel ordering explicitly since HDF5
                 # group key iteration order is not guaranteed across environments.
@@ -290,6 +291,7 @@ class DetectorStrainStack:
             NotImplementedError: If ``format`` is ``'gwf'`` or ``'txt'``
                 (write-only formats).
             ValueError: If ``format`` is not recognised.
+            ModuleNotFoundError: If ``'hdf5'`` is asked for without the ``hdf5`` extra.
         """
         path = Path(path)
 
@@ -297,6 +299,7 @@ class DetectorStrainStack:
             raise NotImplementedError(f"Reading format {format!r} is not yet supported.")
 
         if format == "hdf5":
+            h5py = require("h5py", "hdf5", "HDF5 input")
             with h5py.File(path, "r") as fh:
                 names = list(fh.keys())
                 ordered_names = names

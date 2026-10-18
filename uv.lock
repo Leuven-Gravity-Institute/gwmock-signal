@@ -868,6 +868,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+gwpy = [
+    { name = "gwpy" },
+]
+hdf5 = [
+    { name = "h5py" },
+]
 jax = [
     { name = "ripplegw" },
 ]
@@ -903,13 +909,15 @@ release = [
 requires-dist = [
     { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
     { name = "gwpy", specifier = ">=4.0.0" },
+    { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
+    { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.12" },
     { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.6.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ripplegw", marker = "extra == 'jax'", specifier = ">=0.3.1" },
     { name = "typer", specifier = ">=0.16.0" },
 ]
-provides-extras = ["jax", "pycbc", "sgwb"]
+provides-extras = ["gwpy", "hdf5", "jax", "pycbc", "sgwb"]
 
 [package.metadata.requires-dev]
 build = [{ name = "hatch", specifier = ">=1.18.1" }]

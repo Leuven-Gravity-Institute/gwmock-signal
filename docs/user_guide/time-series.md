@@ -59,6 +59,22 @@ converted without copying its samples.
 
 `to_gwpy()` and `from_gwpy()` share NumPy samples rather than copying them.
 
+## Files
+
+`gwmock_signal.io.write_hdf5` and `read_hdf5` write and read a mapping of series
+as HDF5 in the layout GWpy's `TimeSeriesDict` uses, so either side can read what
+the other wrote. They need only `h5py` (the `[hdf5]` extra), not GWpy.
+
+```python
+from gwmock_signal.io import read_hdf5, write_hdf5
+
+write_hdf5({"H1": series}, "strain.h5")
+again = read_hdf5("strain.h5")  # {"H1": TimeSeries(...)}
+```
+
+`DetectorStrainStack.write` and `read` cover a whole stack, in HDF5, NumPy or
+text; frame (GWF) output goes through GWpy.
+
 ## Moving from GWpy series
 
 Earlier versions returned GWpy `TimeSeries`. Code that read their attributes
