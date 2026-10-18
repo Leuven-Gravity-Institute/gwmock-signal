@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from gwmock_signal.sampling_grid import SamplingGrid
-from gwmock_signal.timeseries import TimeSeries, register_pytree
+from gwmock_signal.timeseries import TimeSeries, as_timeseries, register_pytree
 
 _T0 = 1_400_000_000.25
 _FS = 4096.0
@@ -533,3 +533,38 @@ class TestJAXIn32BitMode:
     def test_numpy_times_are_unaffected(self):
         """JAX's mode does not concern the times of NumPy samples."""
         assert _series().times.dtype == np.float64
+
+
+class TestAsTimeSeries:
+    """The coercion every function that takes a time series applies to its input."""
+
+    def test_a_native_series_is_returned_as_is(self):
+        """No copy, no conversion."""
+        series = _series()
+
+        assert as_timeseries(series) is series
+
+    def test_a_gwpy_series_is_converted(self):
+        """Samples, timing, name and unit carry over."""
+        pytest.importorskip("gwpy.timeseries")
+        converted = as_timeseries(_series(name="H1", unit="strain").to_gwpy())
+
+        assert isinstance(converted, TimeSeries)
+        assert (converted.t0, converted.sample_rate, converted.name, converted.unit) == (_T0, _FS, "H1", "strain")
+
+    @pytest.mark.parametrize("other", [np.zeros(4), [1.0, 2.0], None])
+    def test_anything_else_is_rejected(self, other):
+        """A bare array has no timing, so it is not a time series."""
+        with pytest.raises(TypeError, match=r"expected a gwmock_signal\.TimeSeries or a gwpy\.timeseries\.TimeSeries"):
+            as_timeseries(other)
+
+    def test_checking_does_not_import_gwpy(self):
+        """Rejecting a non-series must not pull in GWpy just to compare against its class."""
+        code = (
+            "import sys; from gwmock_signal.timeseries import as_timeseries\n"
+            "try:\n    as_timeseries(1.0)\nexcept TypeError:\n    pass\n"
+            "print('gwpy' in sys.modules)"
+        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)  # noqa: S603
+
+        assert result.stdout.strip() == "False"
