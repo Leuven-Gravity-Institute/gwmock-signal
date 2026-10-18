@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from gwmock_data.resampling import _WINDOW_FIT_TOLERANCE
 
 from gwmock_signal.projection.resampling import (
-    _WINDOW_FIT_TOLERANCE,
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
     kaiser_window_chebyshev,
