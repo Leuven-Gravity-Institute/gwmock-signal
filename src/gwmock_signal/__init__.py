@@ -18,12 +18,14 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from gwmock_signal.version import __version__
 
 #: Public name -> (module, attribute). Resolved lazily by ``__getattr__`` so the optional ``[jax]``
 #: dependency stays optional: importing this package must not import JAX, only touching one of the
 #: device symbols may.
 _PUBLIC_SYMBOLS = {
+    # Resolved on first access: it reads the installed metadata through importlib.metadata, which
+    # was about half the cost of importing the package.
+    "__version__": ("gwmock_signal.version", "__version__"),
     "BatchedDetectorStrain": ("gwmock_signal.jax_batch", "BatchedDetectorStrain"),
     "CBCSimulator": ("gwmock_signal.simulator", "CBCSimulator"),
     "CustomDetector": ("gwmock_signal.detector", "CustomDetector"),
@@ -81,4 +83,4 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))
 
 
-__all__ = [*_PUBLIC_SYMBOLS, "__version__"]  # noqa: PLE0604
+__all__ = [*_PUBLIC_SYMBOLS]  # noqa: PLE0604

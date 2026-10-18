@@ -160,3 +160,53 @@ def test_hdf5_without_h5py_names_the_extra():
             write_hdf5({"H1": TimeSeries([0.0], t0=0.0, sample_rate=1.0)}, "unused.h5")
     else:
         pytest.skip("h5py is installed; tests/io/test_hdf5.py covers this case")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 15), reason="lazy imports (PEP 810) need Python 3.15")
+def test_the_cli_defers_what_only_its_commands_need():
+    """From Python 3.15, building the command-line app imports neither the simulator nor astropy.
+
+    They are declared in ``__lazy_modules__``, so the CLI and ``--help`` start without them; a
+    command imports them when it runs.
+    """
+    outcome = _run(
+        """
+        import sys
+        import gwmock_signal.cli.main
+        heavy = ("astropy", "numpy", "gwmock_signal.pipeline", "gwmock_signal.simulator")
+        result = sorted(name for name in heavy if name in sys.modules)
+        """
+    )
+
+    assert outcome["result"] == []
+
+
+@pytest.mark.skipif(sys.version_info < (3, 15), reason="lazy imports (PEP 810) need Python 3.15")
+def test_projection_defers_astropy_until_sidereal_time_is_needed():
+    """Importing the projection does not load astropy; computing sidereal time does."""
+    outcome = _run(
+        """
+        import sys
+        from gwmock_signal.projection.sidereal import gmst_rad_astropy
+        before = "astropy" in sys.modules
+        gmst_rad_astropy(1_400_000_000.0)
+        result = [before, "astropy" in sys.modules]
+        """
+    )
+
+    assert outcome["result"] == [False, True]
+
+
+def test_the_version_is_read_when_asked_for():
+    """Importing the package does not read its installed metadata; ``__version__`` does, once."""
+    outcome = _run(
+        """
+        import sys
+        import gwmock_signal
+        before = "gwmock_signal.version" in sys.modules
+        version = gwmock_signal.__version__
+        result = [before, "gwmock_signal.version" in sys.modules, isinstance(version, str) and bool(version)]
+        """
+    )
+
+    assert outcome["result"] == [False, True, True]
