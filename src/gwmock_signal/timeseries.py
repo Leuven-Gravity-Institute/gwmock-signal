@@ -38,8 +38,10 @@ GPS times need float64, and in 32-bit mode the methods that would lose it raise 
 from __future__ import annotations
 
 import dataclasses
+import functools
 import importlib
 import math
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -352,11 +354,12 @@ def _require_x64(jax: ModuleType) -> None:
         raise RuntimeError(_NO_FLOAT64)
 
 
-_registered = False
+#: Serialises the first registrations: the cache alone lets concurrent first calls both run.
+_REGISTRATION_LOCK = threading.Lock()
 
 
 def register_pytree() -> None:
-    """Register :class:`TimeSeries` as a JAX pytree; safe to call more than once.
+    """Register :class:`TimeSeries` as a JAX pytree; safe to call more than once, from any thread.
 
     The samples and ``t0`` are leaves, so a batch of series differing in start time can be mapped
     over without recompiling. The sample rate, name and unit are static: they decide shapes and
@@ -371,9 +374,13 @@ def register_pytree() -> None:
     Raises:
         ModuleNotFoundError: If JAX is not installed.
     """
-    global _registered  # noqa: PLW0603 -- registration is process-wide, as JAX's registry is
-    if _registered:
-        return
+    with _REGISTRATION_LOCK:
+        _register_pytree_once()
+
+
+# Cached, so registration, which JAX keeps per process, happens once.
+@functools.cache
+def _register_pytree_once() -> None:
     jax = _import("jax", "jax", "Registering TimeSeries with JAX")
     tree_util = jax.tree_util
 
@@ -396,4 +403,3 @@ def register_pytree() -> None:
         return series
 
     tree_util.register_pytree_node(TimeSeries, flatten, unflatten)
-    _registered = True

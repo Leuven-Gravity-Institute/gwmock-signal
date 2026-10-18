@@ -444,6 +444,32 @@ class TestJAX:
         register_pytree()
         register_pytree()
 
+    def test_concurrent_first_registrations_register_once(self):
+        """Threads that call it together, before anything has registered, do not race into JAX twice.
+
+        Run in a fresh process, since this one has already registered. A barrier releases every
+        thread at once, and JAX's registration is slowed so they are all inside together; a cache
+        alone would let each of them in, and JAX would reject every registration after the first.
+        """
+        code = (
+            "import threading, time, jax\n"
+            "original = jax.tree_util.register_pytree_node\n"
+            "def slow(*args):\n    time.sleep(0.05)\n    original(*args)\n"
+            "jax.tree_util.register_pytree_node = slow\n"
+            "from gwmock_signal.timeseries import register_pytree\n"
+            "barrier = threading.Barrier(16); errors = []\n"
+            "def call():\n"
+            "    barrier.wait()\n"
+            "    try:\n        register_pytree()\n"
+            "    except Exception as exc:\n        errors.append(repr(exc))\n"
+            "threads = [threading.Thread(target=call) for _ in range(16)]\n"
+            "[t.start() for t in threads]; [t.join() for t in threads]\n"
+            "print(errors)"
+        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)  # noqa: S603
+
+        assert result.stdout.strip() == "[]"
+
 
 class TestJAXIn32BitMode:
     """Without 64-bit mode JAX cannot hold GPS times, so the methods that need them refuse."""
