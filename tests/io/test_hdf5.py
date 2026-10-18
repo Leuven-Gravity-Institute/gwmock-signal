@@ -35,8 +35,7 @@ def _series(rate: float = 4096.0, **kwargs: object) -> TimeSeries:
 
 
 def test_a_stack_round_trips_through_hdf5(tmp_path):
-    """The stack's samples and timing survive a write and a read."""
-    pytest.importorskip("h5py")
+    """The stack's samples and timing survive a write and a read, with or without h5py."""
     stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _series(), "L1": _series()})
     stack.write(tmp_path / "stack.h5")
 
@@ -48,28 +47,16 @@ def test_a_stack_round_trips_through_hdf5(tmp_path):
     np.testing.assert_array_equal(back.data, stack.data)
 
 
-@pytest.mark.parametrize(
-    ("call", "package", "extra"),
-    [
-        (lambda path: DetectorStrainStack.from_mapping(["H1"], {"H1": _series()}).write(path), "h5py", "hdf5"),
-        (lambda path: DetectorStrainStack.read(path, format="hdf5"), "h5py", "hdf5"),
-        (
-            lambda path: DetectorStrainStack.from_mapping(["H1"], {"H1": _series()}).write(path, format="gwf"),
-            "gwpy",
-            "gwpy",
-        ),
-    ],
-)
-def test_a_missing_package_names_its_extra(monkeypatch, tmp_path, call, package, extra):
-    """HDF5 needs only h5py and frames only GWpy, each from its own extra."""
+def test_frames_without_gwpy_name_the_extra(monkeypatch, tmp_path):
+    """Frames need GWpy; the stack is gwmock-data's, so the message names gwmock-data's extra of that name."""
     real_import = importlib.import_module
 
     def missing(name, *args, **kwargs):
-        if name == package or name.startswith(f"{package}."):
-            raise ModuleNotFoundError(f"No module named {package!r}", name=package)
+        if name == "gwpy" or name.startswith("gwpy."):
+            raise ModuleNotFoundError("No module named 'gwpy'", name="gwpy")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(importlib, "import_module", missing)
 
-    with pytest.raises(ModuleNotFoundError, match=rf"pip install 'gwmock-signal\[{extra}\]'"):
-        call(tmp_path / "out")
+    with pytest.raises(ModuleNotFoundError, match=r"pip install 'gwmock-data\[gwpy\]'"):
+        DetectorStrainStack.from_mapping(["H1"], {"H1": _series()}).write(tmp_path / "out", format="gwf")

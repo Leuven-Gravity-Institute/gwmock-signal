@@ -147,19 +147,34 @@ def test_text_and_numpy_files_need_no_optional_package(tmp_path):
     assert outcome["result"] == {"t0": 10.0, "rate": 4.0, "equal": True}
 
 
-def test_hdf5_without_h5py_names_the_extra():
-    """Asking for HDF5 without h5py says how to install it, rather than failing at import."""
-    pytest.importorskip("numpy")
-    try:
-        import h5py  # noqa: F401
-    except ModuleNotFoundError:
-        from gwmock_signal import DetectorStrainStack, TimeSeries
+def test_hdf5_works_without_h5py(tmp_path):
+    """A stack and a mapping of series round-trip through HDF5 with h5py hidden, which is not imported."""
+    outcome = _run(
+        f"""
+        import importlib.abc, sys
 
-        stack = DetectorStrainStack.from_mapping(["H1"], {"H1": TimeSeries([0.0], t0=0.0, sample_rate=1.0)})
-        with pytest.raises(ModuleNotFoundError, match=r"pip install 'gwmock-signal\[hdf5\]'"):
-            stack.write("unused.h5")
-    else:
-        pytest.skip("h5py is installed; tests/io/test_hdf5.py covers this case")
+        class _HideH5py(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path=None, target=None):
+                if name == "h5py" or name.startswith("h5py."):
+                    raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
+                return None
+
+        sys.meta_path.insert(0, _HideH5py())
+
+        from gwmock_signal import DetectorStrainStack, TimeSeries
+        from gwmock_signal.io import read_hdf5, write_hdf5
+
+        series = TimeSeries([0.0, 1.0, 2.0], t0=10.0, sample_rate=4.0)
+        DetectorStrainStack.from_mapping(["L1", "H1"], {{"L1": series, "H1": series}}).write({str(tmp_path / "stack.h5")!r})
+        stack = DetectorStrainStack.read({str(tmp_path / "stack.h5")!r}, format="hdf5")
+        write_hdf5({{"H1": series}}, {str(tmp_path / "series.h5")!r})
+        back = read_hdf5({str(tmp_path / "series.h5")!r})["H1"]
+        result = {{"order": list(stack.detector_names), "t0": back.t0, "data": [float(x) for x in back.data]}}
+        """
+    )
+
+    assert outcome["optional_loaded"] == []
+    assert outcome["result"] == {"order": ["L1", "H1"], "t0": 10.0, "data": [0.0, 1.0, 2.0]}
 
 
 @pytest.mark.skipif(sys.version_info < (3, 15), reason="lazy imports (PEP 810) need Python 3.15")

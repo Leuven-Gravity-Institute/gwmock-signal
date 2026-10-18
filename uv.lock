@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -697,6 +697,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fsspec"
+version = "2026.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/cd/9be253869fc42e764de7f3dedd6969af7d44ff9c3375214a3442a6f3fc08/fsspec-2026.9.0.tar.gz", hash = "sha256:0f08147951c8cb31d844c3547d631053b127863b60be04cf06e121333ee0e2fe", size = 333545, upload-time = "2026-09-18T17:50:42.825Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/c0/a98505f18594f1bce828bb159cec0fcf9860562f1a2c85913409fc8f3d9e/fsspec-2026.9.0-py3-none-any.whl", hash = "sha256:8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f", size = 221738, upload-time = "2026-09-18T17:50:41.341Z" },
+]
+
+[[package]]
 name = "ghp-import"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -752,14 +761,15 @@ wheels = [
 
 [[package]]
 name = "gwmock-data"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
+    { name = "pyfive" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/dc/5b8b5d9b3f4b67bf1643a61f0716f70dc6049e4584f193f347a5a9552a2e/gwmock_data-0.1.0.tar.gz", hash = "sha256:cf178053890583b29300b4fc4b1829f40dd8ebb36fae5f1c82c5afbc25e6fe5e", size = 213662, upload-time = "2026-10-18T12:14:35.6Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/0f/0b8727939c2da210b3ff9403b8c8e3f3bcea65196faa680d270a104f37a8/gwmock_data-0.2.0.tar.gz", hash = "sha256:705db728c9c77731cdef5dafb211ce3f6791cae621c2fd839d8afd596acc9c4b", size = 234288, upload-time = "2026-10-18T15:23:51.96Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/f5/e8d705d744f19ce1e968cd20cb36171328a657cd6b65ca798642a29ad922/gwmock_data-0.1.0-py3-none-any.whl", hash = "sha256:b69dd61ff8813d93b48a47f8b3cf1270abef84f29951f544e3ee5f3698392d06", size = 15338, upload-time = "2026-10-18T12:14:34.279Z" },
+    { url = "https://files.pythonhosted.org/packages/23/2c/ef8ac77b4bbc1ff15791be76f5f39b0bc01ff0cdc4119b83511105da34aa/gwmock_data-0.2.0-py3-none-any.whl", hash = "sha256:14347cdbdf651a2cfd3883c0abfd86126eee9283c407539a35d01cbc91fecf11", size = 26971, upload-time = "2026-10-18T15:23:50.973Z" },
 ]
 
 [[package]]
@@ -834,7 +844,7 @@ release = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", specifier = ">=7.0" },
-    { name = "gwmock-data", specifier = ">=0.1.0" },
+    { name = "gwmock-data", specifier = ">=0.2.0" },
     { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.12" },
@@ -2209,6 +2219,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/f5/ff91ee77308793ae32fa1e1de95e9edd4551456dd888b4e87c5938657ca5/pyerfa-2.0.1.5-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:07b80cd70701f5d066b1ac8cce406682cfcd667a1186ec7d7ade597239a6021d", size = 722966, upload-time = "2024-11-11T15:22:21.905Z" },
     { url = "https://files.pythonhosted.org/packages/2c/56/b22b35c8551d2228ff8d445e63787112927ca13f6dc9e2c04f69d742c95b/pyerfa-2.0.1.5-cp39-abi3-win32.whl", hash = "sha256:d30b9b0df588ed5467e529d851ea324a67239096dd44703125072fd11b351ea2", size = 339955, upload-time = "2024-11-11T15:22:23.087Z" },
     { url = "https://files.pythonhosted.org/packages/b4/11/97233cf23ad5411ac6f13b1d6ee3888f90ace4f974d9bf9db887aa428912/pyerfa-2.0.1.5-cp39-abi3-win_amd64.whl", hash = "sha256:66292d437dcf75925b694977aa06eb697126e7b86553e620371ed3e48b5e0ad0", size = 349410, upload-time = "2024-11-11T15:22:24.817Z" },
+]
+
+[[package]]
+name = "pyfive"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/a1/f36c159d6fd24fb0e2cc68c489eb25b39d7cf6f771a4dac2b34884dfda9c/pyfive-1.2.1.tar.gz", hash = "sha256:d44149120bc0d21c1c0dbbc9d84ea2d2fef4be7ae4e15b7fac69eb627c1d11ce", size = 76298149, upload-time = "2026-09-21T11:21:48.19Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/73/bb0f43aa778b809444cb248f609dc2bcc9b1a274bde7f6b12e8a76bcc87b/pyfive-1.2.1-py3-none-any.whl", hash = "sha256:c5ab3e1a3f04512077aeb75a402d55a4bdf1f92d3246a471e4dac3638b0397bd", size = 69418, upload-time = "2026-09-21T11:21:44.951Z" },
 ]
 
 [[package]]
