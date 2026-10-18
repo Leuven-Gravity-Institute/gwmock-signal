@@ -18,11 +18,12 @@ from __future__ import annotations
 import importlib
 import logging
 from collections.abc import Callable
-from typing import Any
-
-from gwpy.timeseries import TimeSeries
+from typing import TYPE_CHECKING, Any
 
 from gwmock_signal.waveform.backends import LALSimulationBackend, WaveformBackend
+
+if TYPE_CHECKING:
+    from gwpy.timeseries import TimeSeries
 
 logger = logging.getLogger("gwmock_signal.waveform")
 

@@ -31,14 +31,18 @@ implementation of the ``dt = 1/deltaF + epoch`` conditioning correction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
 from gwmock_signal import _lalsuite
 from gwmock_signal.constants import MPC_SI, MSUN_SI
+from gwmock_signal.timeseries import TimeSeries, _public_output
 from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
 
 MSUN = MSUN_SI
 MPC = MPC_SI
@@ -354,7 +358,7 @@ class LALSimulationBackend(WaveformBackend):
         sampling_frequency: float,
         minimum_frequency: float,
         **params: object,
-    ) -> dict[str, TimeSeries]:
+    ) -> dict[str, gwpy.timeseries.TimeSeries]:
         """Generate plus/cross polarizations, conditioned from frequency to time domain."""
         p = self._resolve_parameters(sampling_frequency, minimum_frequency, **params)
 
@@ -381,9 +385,8 @@ class LALSimulationBackend(WaveformBackend):
         hp_t, hc_t, epoch = conditioning.condition_fd_to_td(
             hp_f, hc_f, n_samples, sampling_frequency, self._ringdown_fraction
         )
-        dt = 1.0 / sampling_frequency
         t0 = epoch + tc
         return {
-            "plus": TimeSeries(hp_t, t0=t0, dt=dt),
-            "cross": TimeSeries(hc_t, t0=t0, dt=dt),
+            "plus": _public_output(TimeSeries(hp_t, t0=t0, sample_rate=sampling_frequency)),
+            "cross": _public_output(TimeSeries(hc_t, t0=t0, sample_rate=sampling_frequency)),
         }

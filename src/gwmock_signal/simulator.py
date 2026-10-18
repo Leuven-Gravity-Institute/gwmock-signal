@@ -22,21 +22,27 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from gwpy.timeseries import TimeSeries
-
-from gwmock_signal.injection import inject_strain
+from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import project_polarizations_to_network, validate_projection_backend
+from gwmock_signal.projection.network import _project, validate_projection_backend
+from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform import WaveformBackend, WaveformFactory
 
 if TYPE_CHECKING:
+    import gwpy.timeseries
+
     from gwmock_signal.detector import CustomDetector
 
 logger = logging.getLogger("gwmock_signal.simulator")
 
 _POLARIZATION_COUNT = 2
-RegisteredWaveformOutput = dict[str, TimeSeries] | tuple[TimeSeries, TimeSeries]
-RegisteredWaveformFactory = Callable[..., RegisteredWaveformOutput] | WaveformBackend
+#: What a registered waveform callable returns: the package's or GWpy's series, as a pair or mapping.
+type RegisteredWaveformOutput = (
+    dict[str, TimeSeries | gwpy.timeseries.TimeSeries]
+    | tuple[TimeSeries | gwpy.timeseries.TimeSeries, TimeSeries | gwpy.timeseries.TimeSeries]
+)
+type RegisteredWaveformFactory = Callable[..., RegisteredWaveformOutput] | WaveformBackend
 
 
 def _json_default(obj: Any) -> Any:
@@ -48,7 +54,9 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def _normalize_registered_waveform_output(result: RegisteredWaveformOutput) -> dict[str, TimeSeries]:
+def _normalize_registered_waveform_output(
+    result: RegisteredWaveformOutput,
+) -> dict[str, TimeSeries | gwpy.timeseries.TimeSeries]:
     """Return one ``{"plus": ..., "cross": ...}`` mapping for a registered model."""
     if isinstance(result, tuple):
         if len(result) != _POLARIZATION_COUNT:
@@ -63,8 +71,16 @@ def _normalize_registered_waveform_output(result: RegisteredWaveformOutput) -> d
     else:
         raise TypeError("Registered waveform callables must return a ('plus', 'cross') tuple or mapping.")
 
-    if not isinstance(plus, TimeSeries) or not isinstance(cross, TimeSeries):
-        raise TypeError("Registered waveform callables must return GWpy TimeSeries objects for both polarizations.")
+    # Checked by coercing, but the objects themselves are passed on, so a model's own series are
+    # what the factory returns.
+    try:
+        as_timeseries(plus)
+        as_timeseries(cross)
+    except TypeError as exc:
+        raise TypeError(
+            "Registered waveform callables must return gwmock_signal.TimeSeries or GWpy TimeSeries objects "
+            "for both polarizations."
+        ) from exc
     return {"plus": plus, "cross": cross}
 
 
@@ -144,7 +160,7 @@ class GWSimulator(ABC):
         self,
         params: Mapping[str, Any],
         detector_names: Sequence[str],
-        background: Mapping[str, TimeSeries] | None = None,
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries] | None = None,
         *,
         sampling_frequency: float,
         minimum_frequency: float,
@@ -206,7 +222,7 @@ class TransientSimulator(GWSimulator):
         params: Mapping[str, Any],
         sampling_frequency: float,
         minimum_frequency: float,
-    ) -> tuple[TimeSeries, TimeSeries]:
+    ) -> tuple[TimeSeries | gwpy.timeseries.TimeSeries, TimeSeries | gwpy.timeseries.TimeSeries]:
         """Generate plus and cross polarization time series.
 
         Args:
@@ -215,7 +231,7 @@ class TransientSimulator(GWSimulator):
             minimum_frequency: Low-frequency cutoff in Hz.
 
         Returns:
-            Tuple of ``(hp, hc)`` GWpy ``TimeSeries`` objects.
+            Tuple of ``(hp, hc)`` time series, each the package's or GWpy's.
         """
 
     def register_waveform_model(
@@ -267,7 +283,7 @@ class TransientSimulator(GWSimulator):
         self,
         params: Mapping[str, Any],
         detector_names: Sequence[str | CustomDetector],
-        background: Mapping[str, TimeSeries] | None = None,
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries] | None = None,
         *,
         sampling_frequency: float,
         minimum_frequency: float,
@@ -276,9 +292,10 @@ class TransientSimulator(GWSimulator):
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
-        Calls ``_validate_params``, ``generate_polarizations``,
-        ``project_polarizations_to_network``, and ``inject_strain`` in order,
-        then assembles the result into a ``DetectorStrainStack``.
+        Calls ``_validate_params`` and ``generate_polarizations``, projects the polarizations
+        onto the network and injects them into the background, as
+        ``project_polarizations_to_network`` and ``inject_strain`` do, then assembles the
+        result into a ``DetectorStrainStack``.
 
         Args:
             params: Source parameters; must contain all ``required_params`` keys
@@ -286,7 +303,7 @@ class TransientSimulator(GWSimulator):
                 for antenna-response projection.
             detector_names: IFO codes (e.g. ``'H1'``, ``'L1'``, ``'V1'``).
             background: Optional mapping of detector name to background
-                ``TimeSeries`` (e.g. noise or zeros). If omitted, the projected
+                ``TimeSeries`` (e.g. noise or zeros), the package's or GWpy's. If omitted, the projected
                 detector response is returned directly on the waveform time grid.
             sampling_frequency: Sample rate in Hz.
             minimum_frequency: Low-frequency cutoff in Hz.
@@ -318,20 +335,23 @@ class TransientSimulator(GWSimulator):
         str_names: list[str] = [d.name if hasattr(d, "name") and not isinstance(d, str) else d for d in detector_names]
 
         hp, hc = self.generate_polarizations(params, sampling_frequency, minimum_frequency)
-        projected = project_polarizations_to_network(
+        projected = _project(
             {"plus": hp, "cross": hc},
             detector_names,
             right_ascension=params["right_ascension"],
             declination=params["declination"],
             polarization_angle=params["polarization_angle"],
             earth_rotation=earth_rotation,
+            precess_source_direction=False,
             backend=self.projection_backend,
+            sinc_taps=DEFAULT_SINC_TAPS,
+            kaiser_beta=DEFAULT_KAISER_BETA,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
         injected = {
-            name: inject_strain(
-                background[name],
+            name: _inject(
+                as_timeseries(background[name]),
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
             )
@@ -537,7 +557,7 @@ class CBCSimulator(TransientSimulator):
         params: Mapping[str, Any],
         sampling_frequency: float,
         minimum_frequency: float,
-    ) -> tuple[TimeSeries, TimeSeries]:
+    ) -> tuple[TimeSeries | gwpy.timeseries.TimeSeries, TimeSeries | gwpy.timeseries.TimeSeries]:
         """Delegate waveform generation to ``WaveformFactory``.
 
         Projection-specific keys are excluded because they are consumed by
@@ -550,7 +570,8 @@ class CBCSimulator(TransientSimulator):
             minimum_frequency: Low-frequency cutoff in Hz.
 
         Returns:
-            Tuple of ``(hp, hc)`` GWpy ``TimeSeries`` objects.
+            Tuple of ``(hp, hc)`` as the waveform model returns them: GWpy ``TimeSeries`` from
+            a backend, or either kind from a registered model.
         """
         waveform_params = _waveform_parameters(params)
 
@@ -568,7 +589,7 @@ class CBCSimulator(TransientSimulator):
         path: str | Path,
         params: Mapping[str, Any],
         detector_names: Sequence[str | CustomDetector],
-        background: Mapping[str, TimeSeries],
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
         *,
         sampling_frequency: float,
         minimum_frequency: float,

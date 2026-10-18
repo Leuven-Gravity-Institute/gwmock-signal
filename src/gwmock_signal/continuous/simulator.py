@@ -69,14 +69,17 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import project_polarizations_to_network, validate_projection_backend
-from gwmock_signal.projection.resampling import edge_padding
+from gwmock_signal.projection.network import _project, validate_projection_backend
+from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.simulator import GWSimulator
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    import gwpy.timeseries
+
     from gwmock_signal.stochastic.overlap import DetectorSpec
 
 #: Parameters every continuous-wave source must supply.
@@ -308,6 +311,24 @@ class ContinuousWaveSimulator(GWSimulator):
             )
 
     @staticmethod
+    def _as_series(background: Mapping[str, Any], names: Sequence[str]) -> dict[str, TimeSeries]:
+        """Return the background channels for ``names`` as the package's time series.
+
+        Raises:
+            TypeError: If a background value is not a time series.
+        """
+        channels = {}
+        for name in names:
+            try:
+                channels[name] = as_timeseries(background[name])
+            except TypeError as exc:
+                raise TypeError(
+                    f"background values must be gwmock_signal.TimeSeries or GWpy TimeSeries; {name!r} is a "
+                    f"{type(background[name]).__name__}."
+                ) from exc
+        return channels
+
+    @staticmethod
     def _resolve_segment(
         background: Mapping[str, TimeSeries], names: Sequence[str], sampling_frequency: float
     ) -> tuple[float, int]:
@@ -322,15 +343,13 @@ class ContinuousWaveSimulator(GWSimulator):
             The segment's epoch in GPS seconds and its length in samples.
 
         Raises:
-            TypeError: If a background value is not a GWpy time series.
+            TypeError: If a background value is not a time series.
             ValueError: If the channels disagree, or the caller's rate differs from theirs.
         """
         reference = background[names[0]]
-        if not hasattr(reference, "t0") or not hasattr(reference, "sample_rate"):
-            raise TypeError(f"background values must be gwpy TimeSeries; {names[0]!r} is a {type(reference).__name__}.")
-        epoch = float(reference.t0.value)
-        n_samples = len(reference)
-        rate = float(reference.sample_rate.value)
+        epoch = reference.t0
+        n_samples = reference.n_samples
+        rate = reference.sample_rate
 
         # The argument drives generation while the background defines the grid the result is added
         # to, so a disagreement produces a signal sampled at one rate and labelled at another --
@@ -347,20 +366,20 @@ class ContinuousWaveSimulator(GWSimulator):
         # would silently receive a signal from the wrong interval rather than failing.
         for name in names[1:]:
             channel = background[name]
-            if len(channel) != n_samples:
+            if channel.n_samples != n_samples:
                 raise ValueError(
-                    f"background channels must share a length; {name!r} has {len(channel)} samples "
+                    f"background channels must share a length; {name!r} has {channel.n_samples} samples "
                     f"against {n_samples} for {names[0]!r}."
                 )
-            if float(channel.t0.value) != epoch:
+            if channel.t0 != epoch:
                 raise ValueError(
                     f"background channels must share an epoch; {name!r} starts at "
-                    f"{float(channel.t0.value)!r} against {epoch!r} for {names[0]!r}."
+                    f"{channel.t0!r} against {epoch!r} for {names[0]!r}."
                 )
-            if float(channel.sample_rate.value) != rate:
+            if channel.sample_rate != rate:
                 raise ValueError(
                     f"background channels must share a sample rate; {name!r} is at "
-                    f"{float(channel.sample_rate.value)!r} Hz against {rate!r} for {names[0]!r}."
+                    f"{channel.sample_rate!r} Hz against {rate!r} for {names[0]!r}."
                 )
         return epoch, n_samples
 
@@ -368,7 +387,7 @@ class ContinuousWaveSimulator(GWSimulator):
         self,
         params: Mapping[str, Any],
         detector_names: Sequence[DetectorSpec],
-        background: Mapping[str, TimeSeries] | None = None,
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries] | None = None,
         *,
         sampling_frequency: float,
         minimum_frequency: float,
@@ -435,6 +454,7 @@ class ContinuousWaveSimulator(GWSimulator):
         # Every channel must describe the same stretch of time. The polarizations are generated
         # once, for one epoch and length, and added to all of them -- so a channel that disagreed
         # would silently receive a signal from the wrong interval rather than failing.
+        background = self._as_series(background, names)
         epoch, n_samples = self._resolve_segment(background, names, sampling_frequency)
 
         # Generated with a margin at both ends and trimmed after projecting. The rotating
@@ -455,7 +475,7 @@ class ContinuousWaveSimulator(GWSimulator):
             "plus": TimeSeries(plus, t0=padded_epoch, sample_rate=sampling_frequency, unit="strain"),
             "cross": TimeSeries(cross, t0=padded_epoch, sample_rate=sampling_frequency, unit="strain"),
         }
-        projected = project_polarizations_to_network(
+        projected = _project(
             polarizations,
             detector_names,
             right_ascension=float(params["right_ascension"]),
@@ -477,18 +497,15 @@ class ContinuousWaveSimulator(GWSimulator):
             #
             # Defaults to the device path; see ``projection_backend`` for why it can be changed.
             backend=self.projection_backend,
+            sinc_taps=DEFAULT_SINC_TAPS,
+            kaiser_beta=DEFAULT_KAISER_BETA,
         )
 
-        # Rebuilt rather than added directly: the projection returns dimensionless series, and
-        # adding those to a ``strain`` background raises a unit-conversion error. Same approach as
-        # the stochastic simulator, which constructs its output series explicitly.
+        # The projection returns dimensionless series; the trimmed signal is labelled ``strain``, as
+        # it is, and added to a background that must be strain too.
         strains = {
-            name: background[name]
-            + TimeSeries(
-                np.asarray(projected[name], dtype=float)[margin : margin + n_samples],
-                t0=epoch,
-                sample_rate=sampling_frequency,
-                unit="strain",
+            name: _add_strain(
+                background[name], np.asarray(projected[name].data, dtype=float)[margin : margin + n_samples]
             )
             for name in names
         }

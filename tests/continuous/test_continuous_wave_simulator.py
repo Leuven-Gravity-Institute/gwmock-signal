@@ -29,7 +29,7 @@ pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
 
 from gwmock_signal.continuous import ContinuousWaveSimulator
 from gwmock_signal.projection import network
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import _project
 from gwmock_signal.projection.resampling import edge_padding
 
 _EARTH = "earth00-40-DE405.dat.gz"
@@ -286,7 +286,7 @@ class TestConstruction:
         simulator = _simulator()
         background = {name: np.zeros(64) for name in _DETECTORS}
 
-        with pytest.raises(TypeError, match="must be gwpy TimeSeries"):
+        with pytest.raises(TypeError, match=r"must be gwmock_signal\.TimeSeries or GWpy TimeSeries"):
             simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
 
     def test_a_background_is_required(self):
@@ -585,8 +585,8 @@ def test_the_continuous_wave_path_precesses_the_source_direction():
         name: TimeSeries(np.zeros(n_samples), t0=_EPOCH, sample_rate=_FS, unit="strain") for name in _DETECTORS
     }
     with patch(
-        "gwmock_signal.continuous.simulator.project_polarizations_to_network",
-        side_effect=project_polarizations_to_network,
+        "gwmock_signal.continuous.simulator._project",
+        side_effect=_project,
     ) as spy:
         simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
 
@@ -596,3 +596,22 @@ def test_the_continuous_wave_path_precesses_the_source_direction():
             "the continuous-wave path must ask for the frame-of-date convention explicitly; the "
             "projection defaults to the compact-binary one"
         )
+
+
+def test_a_background_of_native_series_gives_the_same_strain_as_gwpy():
+    """The package's own series and GWpy's, as background, give identical continuous-wave strain."""
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+    simulator = _simulator()
+    n_samples = int(8 * _FS)
+    native = {
+        name: NativeTimeSeries(np.zeros(n_samples), t0=_EPOCH, sample_rate=_FS, unit="strain") for name in _DETECTORS
+    }
+
+    from_native = simulator.simulate(_SOURCE, _DETECTORS, native, sampling_frequency=_FS, minimum_frequency=0.0)
+    from_gwpy = simulator.simulate(
+        _SOURCE, _DETECTORS, _zeros(_EPOCH, n_samples), sampling_frequency=_FS, minimum_frequency=0.0
+    )
+
+    assert np.array_equal(from_native.data, from_gwpy.data)
+    assert np.any(from_native.data != 0.0)
