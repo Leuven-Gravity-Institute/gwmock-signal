@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.snr import _pycbc
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
 
 # ---------------------------------------------------------------------------
@@ -25,6 +26,17 @@ def _flat_psd(n_freq: int, delta_f: float) -> object:
     """Return a flat (white) pycbc FrequencySeries PSD."""
     pycbc_types = pytest.importorskip("pycbc.types")
     return pycbc_types.FrequencySeries(np.ones(n_freq), delta_f=delta_f)
+
+
+@pytest.fixture
+def _series_pass_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a mock stand in for a time series, for the tests that check calls into a mocked pycbc.
+
+    Those tests pass mocks whose ``to_pycbc`` returns a mock, so the input coercion and the
+    conversion of the result, which need a real series, are made to pass their argument through.
+    """
+    monkeypatch.setattr(_pycbc, "as_timeseries", lambda series: series)
+    monkeypatch.setattr(_pycbc, "_public_output", lambda series: series)
 
 
 def _sine_strain(freq: float = 50.0) -> TimeSeries:
@@ -87,6 +99,7 @@ class TestOptimalSNR:
 
         assert callable(gwmock_signal.optimal_snr)
 
+    @pytest.mark.usefixtures("_series_pass_through")
     def test_calls_sigma_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Success path runs and returns float even when pycbc is replaced by a mock."""
         mock_htilde = MagicMock()
@@ -119,6 +132,7 @@ class TestOptimalSNR:
         assert result == 7.5
         mock_pycbc_filter.sigma.assert_called_once_with(mock_htilde, psd=mock_psd_interp, low_frequency_cutoff=30.0)
 
+    @pytest.mark.usefixtures("_series_pass_through")
     def test_padding_branch_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Padding branch runs (natural_delta_f > target_delta_f) under mocked pycbc.
 
@@ -217,6 +231,7 @@ class TestMatchedFilterSNR:
 
         assert callable(gwmock_signal.matched_filter_snr)
 
+    @pytest.mark.usefixtures("_series_pass_through")
     def test_calls_matched_filter_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Success path runs and returns a TimeSeries even when pycbc is replaced by a mock."""
         mock_htilde = MagicMock()
@@ -266,6 +281,7 @@ class TestMatchedFilterSNR:
         )
         mock_ts_class.from_pycbc.assert_called_once_with(mock_snr_trimmed)
 
+    @pytest.mark.usefixtures("_series_pass_through")
     def test_padding_branch_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Padding branch runs (natural_delta_f > target_delta_f) under mocked pycbc.
 
@@ -490,3 +506,39 @@ class TestMatchedFilterSNRPadding:
         snr_mf = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=20.0)
         snr_opt = optimal_snr(strain, psd, low_frequency_cutoff=20.0)
         assert abs(snr_mf.value.max() / snr_opt - 1.0) < 5e-4
+
+
+class TestNativeInput:
+    """Both SNR functions take the package's own time series and give what GWpy input gives."""
+
+    def test_optimal_snr(self) -> None:
+        """Identical values for either kind of strain."""
+        pytest.importorskip("pycbc")
+        from pycbc.types import FrequencySeries
+
+        from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+        strain = _sine_strain()
+        psd = FrequencySeries(np.ones(len(strain) // 2 + 1), delta_f=1.0 / float(strain.duration.value))
+
+        assert optimal_snr(NativeTimeSeries.from_gwpy(strain), psd, low_frequency_cutoff=_FMIN) == optimal_snr(
+            strain, psd, low_frequency_cutoff=_FMIN
+        )
+
+    def test_matched_filter_snr(self) -> None:
+        """Identical series, returned as GWpy, for either kind of data and template."""
+        pytest.importorskip("pycbc")
+        from pycbc.types import FrequencySeries
+
+        from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+        strain = _sine_strain()
+        psd = FrequencySeries(np.ones(len(strain) // 2 + 1), delta_f=1.0 / float(strain.duration.value))
+        native = NativeTimeSeries.from_gwpy(strain)
+
+        result = matched_filter_snr(native, native, psd, low_frequency_cutoff=_FMIN)
+        reference = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=_FMIN)
+
+        assert isinstance(result, TimeSeries)
+        assert np.array_equal(result.value, reference.value)
+        assert result.t0 == reference.t0

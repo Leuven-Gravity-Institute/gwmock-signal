@@ -285,6 +285,12 @@ class TestGWpy:
 
         assert np.shares_memory(TimeSeries.from_gwpy(original).data, original.value)
 
+    def test_to_gwpy_shares_numpy_samples(self):
+        """As ``from_gwpy`` does in the other direction: one array, seen through both objects."""
+        series = _series()
+
+        assert np.shares_memory(series.to_gwpy().value, series.data)
+
     def test_gwpy_takes_one_dimension_only(self):
         """A multi-row series has no GWpy ``TimeSeries`` counterpart."""
         with pytest.raises(ValueError, match="one-dimensional"):

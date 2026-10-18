@@ -21,11 +21,12 @@ from typing import Annotated
 
 import numpy as np
 import typer
-from gwpy.timeseries import TimeSeries, TimeSeriesDict
+from gwpy.timeseries import TimeSeriesDict
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
+from gwmock_signal.timeseries import TimeSeries
 from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
 
 inject_app = typer.Typer(

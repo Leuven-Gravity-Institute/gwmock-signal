@@ -286,6 +286,10 @@ class TimeSeries:
     def to_gwpy(self) -> gwpy.timeseries.TimeSeries:
         """Return a GWpy ``TimeSeries`` with the same samples, timing, name and unit.
 
+        NumPy samples are shared, not copied, as :meth:`from_gwpy` shares GWpy's, so a write through
+        either object is seen by the other. JAX samples are brought to the host with
+        :func:`numpy.asarray`; for a CPU array that is a read-only view of JAX's buffer.
+
         Raises:
             ValueError: If the series has more than one axis; GWpy's is one-dimensional.
             ModuleNotFoundError: If GWpy is not installed.
@@ -294,7 +298,12 @@ class TimeSeries:
             raise ValueError(f"a GWpy TimeSeries is one-dimensional; this series has shape {tuple(self.data.shape)}.")
         timeseries = _import("gwpy.timeseries", "gwpy", "TimeSeries.to_gwpy")
         return timeseries.TimeSeries(
-            np.asarray(self.data), t0=self.t0, sample_rate=self.sample_rate, name=self.name, unit=self.unit
+            np.asarray(self.data),
+            t0=self.t0,
+            sample_rate=self.sample_rate,
+            name=self.name,
+            unit=self.unit,
+            copy=False,
         )
 
     @classmethod
@@ -303,12 +312,22 @@ class TimeSeries:
 
         The samples are GWpy's array itself, not a copy. A dimensionless GWpy series gets
         ``unit=None``.
+
+        Raises:
+            ValueError: If the GWpy series is irregularly sampled.
         """
+        try:
+            sample_rate = series.sample_rate.to_value("Hz")
+        except AttributeError as exc:
+            # GWpy has no sample rate for a series built from an explicit, irregular times array.
+            raise ValueError(
+                "a TimeSeries is uniformly sampled; this GWpy series has an irregular time index."
+            ) from exc
         unit = series.unit.to_string() if series.unit is not None else ""
         return cls(
             series.value,
             t0=series.t0.to_value("s"),
-            sample_rate=series.sample_rate.to_value("Hz"),
+            sample_rate=sample_rate,
             name=None if series.name is None else str(series.name),
             unit=unit or None,
         )

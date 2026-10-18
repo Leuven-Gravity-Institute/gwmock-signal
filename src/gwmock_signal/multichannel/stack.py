@@ -11,19 +11,24 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""Stack per-detector GWpy strains with a fixed channel order."""
+"""Stack per-detector strains with a fixed channel order."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from functools import cached_property
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import h5py
 import numpy as np
-from astropy.units.quantity import Quantity
-from gwpy.timeseries import TimeSeries, TimeSeriesDict
+
+from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
+    from astropy.units.quantity import Quantity
 
 # Top-level HDF5 attribute storing the detector/channel name order.
 #
@@ -32,42 +37,29 @@ from gwpy.timeseries import TimeSeries, TimeSeriesDict
 _HDF5_STACK_ORDER_ATTR = "gwmock_signal_detector_strain_stack_order"
 
 
-def _same_time_samples(series: TimeSeries, reference: TimeSeries) -> bool:
-    """Return whether two equal-length series sample the same times.
-
-    Compared through ``t0`` and ``dx`` rather than by materialising both time indices. GWpy
-    builds a regular index as ``t0 + arange(n) * dx``, so for equal lengths those two scalars
-    matching is not an approximation of index equality -- it is exactly equivalent, and it
-    avoids allocating and comparing an array per channel. Assembly builds one stack per segment,
-    where that allocation showed up as ~10% of the host cost.
-
-    A series constructed with an explicit irregular ``times=`` array has no ``dx``; those fall
-    back to comparing the indices directly.
-    """
-    try:
-        return bool(series.t0 == reference.t0 and series.dx == reference.dx)
-    except AttributeError:
-        return bool(np.array_equal(series.times.value, reference.times.value))
-
-
 def _validate_aligned_channels(channels: Sequence[TimeSeries]) -> None:
-    """Require identical length, sample rate, and time samples across channels."""
+    """Require one-dimensional channels of identical length, sample rate, unit and start time.
+
+    Compared through ``t0`` and the sample rate rather than by materialising both time indices:
+    for equal lengths those matching is exactly equivalent to the indices matching, and it avoids
+    allocating and comparing an array per channel. Assembly builds one stack per segment, where
+    that allocation showed up as ~10% of the host cost.
+    """
     if len(channels) == 0:
         raise ValueError("At least one channel is required.")
+    for i, s in enumerate(channels):
+        if len(s.data.shape) != 1:
+            raise ValueError(f"Channel {i} must be one-dimensional; it has shape {tuple(s.data.shape)}.")
     ref = channels[0]
     for i, s in enumerate(channels[1:], start=1):
-        # GWpy's is_compatible() returns True or raises -- it never returns False -- so testing
-        # its return value left this branch unreachable and reported gwpy's message without
-        # saying which channel was at fault. Its own exception is re-raised with that index.
-        try:
-            s.check_compatible(ref)
-        except ValueError as error:
+        if not s.is_compatible(ref):
             raise ValueError(
-                f"Channel {i} is not compatible with reference channel 0 (mismatched unit or sample rate): {error}"
-            ) from error
-        if len(s) != len(ref):
-            raise ValueError(f"Channel {i} length {len(s)} does not match reference length {len(ref)}.")
-        if not _same_time_samples(s, ref):
+                f"Channel {i} is not compatible with reference channel 0 (mismatched unit or sample rate): "
+                f"sample rates {s.sample_rate} and {ref.sample_rate} Hz, units {s.unit!r} and {ref.unit!r}."
+            )
+        if s.n_samples != ref.n_samples:
+            raise ValueError(f"Channel {i} length {s.n_samples} does not match reference length {ref.n_samples}.")
+        if s.t0 != ref.t0:
             raise ValueError(
                 f"Channel {i} time grid does not match reference (channel 0); "
                 "all detectors must share identical sample times."
@@ -75,26 +67,35 @@ def _validate_aligned_channels(channels: Sequence[TimeSeries]) -> None:
 
 
 class DetectorStrainStack:
-    """Aligned strains for a fixed list of detectors (one GWpy series per row).
+    """Aligned strains for a fixed list of detectors (one series per row).
+
+    Channels may be given as :class:`~gwmock_signal.timeseries.TimeSeries` or GWpy ``TimeSeries``;
+    they are held as the former. Reading a channel back returns a GWpy series: the one given, if it
+    was GWpy, so the same object comes back, or one conversion of it, made once.
 
     See ``docs/user_guide/multi-channel-strains.md`` (examples) and
     ``docs/api/multichannel/index.md`` (API reference).
     """
 
-    def __init__(self, detector_names: tuple[str, ...], channels: tuple[TimeSeries, ...]) -> None:
+    def __init__(
+        self,
+        detector_names: tuple[str, ...],
+        channels: tuple[TimeSeries | gwpy.timeseries.TimeSeries, ...],
+    ) -> None:
         """Prefer the ``from_mapping`` classmethod for public construction.
 
         Args:
             detector_names: Channel order; row ``i`` of ``data`` corresponds to
                 ``detector_names[i]``.
-            channels: Tuple of GWpy time series objects, one per detector.
+            channels: One time series per detector, each a
+                :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy ``TimeSeries``.
 
         Raises:
             ValueError: If ``detector_names`` and ``channels`` have different lengths.
             ValueError: If ``detector_names`` is not unique.
             ValueError: If ``channels`` is empty.
-            TypeError: If a channel is not a GWpy [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/).
-            ValueError: If the channels are not aligned on the same grid.
+            TypeError: If a channel is neither kind of time series.
+            ValueError: If the channels are not aligned on the same grid, or not one-dimensional.
             ValueError: If the channels are not compatible (mismatched unit or sample rate).
 
         """
@@ -102,18 +103,24 @@ class DetectorStrainStack:
             raise ValueError("detector_names and channels must have the same length.")
         if len(set(detector_names)) != len(detector_names):
             raise ValueError("detector_names must be unique.")
+        native = []
         for i, s in enumerate(channels):
-            if not isinstance(s, TimeSeries):
-                raise TypeError(f"channels[{i}] must be gwpy.timeseries.TimeSeries, got {type(s)}")
-        _validate_aligned_channels(channels)
+            try:
+                native.append(as_timeseries(s))
+            except TypeError as exc:
+                raise TypeError(
+                    f"channels[{i}] must be a gwmock_signal.TimeSeries or gwpy.timeseries.TimeSeries, got {type(s)}"
+                ) from exc
+        _validate_aligned_channels(native)
         self._names = detector_names
-        self._channels = channels
+        self._channels = tuple(native)
+        self._given = tuple(channels)
 
     @classmethod
     def from_mapping(
         cls,
         detector_names: Sequence[str],
-        strains: Mapping[str, TimeSeries],
+        strains: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
     ) -> DetectorStrainStack:
         """Build a stack in the given detector order; validate a single shared time grid.
 
@@ -128,7 +135,8 @@ class DetectorStrainStack:
         Raises:
             KeyError: If any ``detector_names`` entry is missing from ``strains``.
             ValueError: If channels are not aligned on the same grid.
-            TypeError: If a strain is not a GWpy [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/).
+            TypeError: If a strain is neither a :class:`~gwmock_signal.timeseries.TimeSeries` nor a
+                GWpy ``TimeSeries``.
         """
         names = tuple(str(n) for n in detector_names)
         if not names:
@@ -136,15 +144,15 @@ class DetectorStrainStack:
         missing = [n for n in names if n not in strains]
         if missing:
             raise KeyError(f"Missing strain keys for detectors: {missing}")
-        channels = []
         for n in names:
-            s = strains[n]
-            if not isinstance(s, TimeSeries):
-                raise TypeError(f"strains[{n!r}] must be gwpy.timeseries.TimeSeries, got {type(s)}")
-            channels.append(s)
-        ch_tuple = tuple(channels)
-        _validate_aligned_channels(ch_tuple)
-        return cls(names, ch_tuple)
+            try:
+                as_timeseries(strains[n])
+            except TypeError as exc:
+                raise TypeError(
+                    f"strains[{n!r}] must be a gwmock_signal.TimeSeries or gwpy.timeseries.TimeSeries, "
+                    f"got {type(strains[n])}"
+                ) from exc
+        return cls(names, tuple(strains[n] for n in names))
 
     @property
     def detector_names(self) -> tuple[str, ...]:
@@ -152,9 +160,9 @@ class DetectorStrainStack:
         return self._names
 
     @property
-    def t0(self):
-        """GPS start of the first sample (same for every channel)."""
-        return self._channels[0].t0
+    def t0(self) -> Quantity:
+        """GPS start of the first sample (same for every channel), as a GWpy quantity."""
+        return self._public_channels[0].t0
 
     @property
     def sample_rate(self) -> Quantity:
@@ -163,7 +171,19 @@ class DetectorStrainStack:
         Returns:
             Sample rate of the first channel.
         """
-        return self._channels[0].sample_rate
+        return self._public_channels[0].sample_rate
+
+    @cached_property
+    def _public_channels(self) -> tuple[Any, ...]:
+        """The channels as GWpy series: each one given as GWpy, else its one conversion."""
+        return tuple(
+            given if not isinstance(given, TimeSeries) else _public_output(channel)
+            for given, channel in zip(self._given, self._channels, strict=True)
+        )
+
+    def _native(self) -> dict[str, TimeSeries]:
+        """Map detector name to the channel as held, a :class:`~gwmock_signal.timeseries.TimeSeries`."""
+        return dict(zip(self._names, self._channels, strict=True))
 
     @property
     def data(self) -> np.ndarray:
@@ -172,11 +192,11 @@ class DetectorStrainStack:
         Returns:
             Strain samples shaped ``(n_detectors, n_samples)`` (C-contiguous copy).
         """
-        rows = [np.asarray(s.value, dtype=float) for s in self._channels]
+        rows = [np.asarray(s.data, dtype=float) for s in self._channels]
         return np.stack(rows, axis=0).copy()
 
-    def __getitem__(self, key: int | str) -> TimeSeries:
-        """Return one channel by index or detector name (same object as stored).
+    def __getitem__(self, key: int | str) -> gwpy.timeseries.TimeSeries:
+        """Return one channel by index or detector name, as a GWpy series (the same object each time).
 
         Args:
             key: Index or detector name.
@@ -194,11 +214,11 @@ class DetectorStrainStack:
                 idx = self._names.index(key)
             except ValueError as exc:
                 raise KeyError(key) from exc
-            return self._channels[idx]
+            return self._public_channels[idx]
         if isinstance(key, bool):
             raise TypeError("index must be int or str, got bool")
         if isinstance(key, int):
-            return self._channels[key]
+            return self._public_channels[key]
         raise TypeError(f"index must be int or str, got {type(key)}")
 
     def __len__(self) -> int:
@@ -230,16 +250,20 @@ class DetectorStrainStack:
             system package manager or conda.
         """
         path = Path(path)
+        # From the series read back, as the t0 and sample_rate properties are, so a file and the
+        # stack describe the same timing.
         t0_val = float(self.t0.value)
         dt_val = 1.0 / float(self.sample_rate.value)
         channel_names = list(self._names)
 
         if format == "gwf":
+            from gwpy.timeseries import TimeSeriesDict  # noqa: PLC0415 -- only frame output needs GWpy
+
             tsd = TimeSeriesDict()
-            for name, ts in zip(self._names, self._channels, strict=True):
-                ts_named = ts.copy()
-                ts_named.name = name
-                tsd[name] = ts_named
+            for name, ts in zip(self._names, self._public_channels, strict=True):
+                named = ts.copy()
+                named.name = name
+                tsd[name] = named
             tsd.write(str(path), format="gwf")
 
         elif format == "hdf5":
@@ -248,19 +272,19 @@ class DetectorStrainStack:
                 # group key iteration order is not guaranteed across environments.
                 fh.attrs[_HDF5_STACK_ORDER_ATTR] = json.dumps(channel_names)
                 for name, ts in zip(self._names, self._channels, strict=True):
-                    ds = fh.create_dataset(name, data=np.asarray(ts.value, dtype=np.float64))
+                    ds = fh.create_dataset(name, data=np.asarray(ts.data, dtype=np.float64))
                     ds.attrs["t0"] = t0_val
                     ds.attrs["dt"] = dt_val
                     ds.attrs["unit"] = "strain"
 
         elif format == "npy":
-            arr = np.stack([np.asarray(ts.value, dtype=np.float64) for ts in self._channels], axis=1)
+            arr = np.stack([np.asarray(ts.data, dtype=np.float64) for ts in self._channels], axis=1)
             np.save(path, arr)
             sidecar = Path(path).with_suffix(".json")
             sidecar.write_text(json.dumps({"t0": t0_val, "dt": dt_val, "channels": channel_names}))
 
         elif format == "txt":
-            arr = np.stack([np.asarray(ts.value, dtype=np.float64) for ts in self._channels], axis=1)
+            arr = np.stack([np.asarray(ts.data, dtype=np.float64) for ts in self._channels], axis=1)
             header = f"t0={t0_val} dt={dt_val} channels={','.join(channel_names)}"
             np.savetxt(path, arr, header=header)
 
@@ -321,7 +345,7 @@ class DetectorStrainStack:
                     data = ds[...]
                     t0 = float(ds.attrs["t0"])
                     dt = float(ds.attrs["dt"])
-                    channels.append(TimeSeries(data, t0=t0, dt=dt, unit="strain", name=name))
+                    channels.append(TimeSeries(data, t0=t0, sample_rate=1.0 / dt, unit="strain", name=name))
             return cls(tuple(ordered_names), tuple(channels))
 
         if format == "npy":
@@ -332,16 +356,17 @@ class DetectorStrainStack:
             dt = float(meta["dt"])
             channel_names = meta["channels"]
             channels = [
-                TimeSeries(arr[:, i], t0=t0, dt=dt, unit="strain", name=name) for i, name in enumerate(channel_names)
+                TimeSeries(arr[:, i], t0=t0, sample_rate=1.0 / dt, unit="strain", name=name)
+                for i, name in enumerate(channel_names)
             ]
             return cls(tuple(channel_names), tuple(channels))
 
         raise ValueError(f"Unknown format {format!r}. Choose from 'hdf5', 'npy'.")
 
-    def to_dict(self) -> dict[str, TimeSeries]:
+    def to_dict(self) -> dict[str, gwpy.timeseries.TimeSeries]:
         """Map detector name to GWpy series (same objects as ``__getitem__``).
 
         Returns:
             Mapping of detector name to GWpy series.
         """
-        return dict(zip(self._names, self._channels, strict=True))
+        return dict(zip(self._names, self._public_channels, strict=True))
