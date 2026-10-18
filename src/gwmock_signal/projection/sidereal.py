@@ -47,6 +47,10 @@ and so carried up to 0.9 s of sidereal error, worth 6.7e-4 in the antenna patter
 
 from __future__ import annotations
 
+# Imported on first use from Python 3.15 (PEP 810), and as usual before it: astropy.time is most
+# of the cost of importing the projection, and only the GMST functions below need it.
+__lazy_modules__ = ["astropy.time"]
+
 import numpy as np
 from astropy.time import Time
 

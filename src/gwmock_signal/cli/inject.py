@@ -15,6 +15,18 @@
 
 from __future__ import annotations
 
+# Imported on first use from Python 3.15 (PEP 810), and as usual before it: only the command body
+# needs them, so ``--help`` and building the command-line app do not pay for the simulator.
+__lazy_modules__ = [
+    "numpy",
+    "gwmock_signal.detector",
+    "gwmock_signal.io.hdf5",
+    "gwmock_signal.network",
+    "gwmock_signal.pipeline",
+    "gwmock_signal.timeseries",
+    "gwmock_signal.waveform.backends",
+]
+
 import json
 from pathlib import Path
 from typing import Annotated
