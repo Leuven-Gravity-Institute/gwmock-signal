@@ -70,8 +70,8 @@ lock = "minimal"
 [dependency-groups]
 dev = [
   # The tests compare results with GWpy and exercise HDF5; neither is a core dependency.
-  "gwpy>=4.0.0",
-  "h5py>=3.12",
+  "gwpy>=4.1.0",
+  "h5py>=3.16.0",
   "ruff>=0.17.0",
   "prek>=0.5.5",
   "pytest-cov>=7.1.0",
