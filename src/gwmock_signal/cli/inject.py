@@ -21,9 +21,9 @@ from typing import Annotated
 
 import numpy as np
 import typer
-from gwpy.timeseries import TimeSeriesDict
 
 from gwmock_signal.detector import CustomDetector
+from gwmock_signal.io.hdf5 import write_hdf5
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
 from gwmock_signal.timeseries import TimeSeries
@@ -56,7 +56,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         Path | None,
         typer.Option(
             "--output",
-            help="Output file path (GWpy TimeSeriesDict HDF5). If omitted, a one-line summary per detector is printed to stdout.",
+            help="Output file path (HDF5, one dataset per detector, readable by GWpy's TimeSeriesDict.read). If omitted, a one-line summary per detector is printed to stdout.",
         ),
     ] = None,
     sample_rate: Annotated[
@@ -220,8 +220,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     )
 
     if output is not None:
-        tsd = TimeSeriesDict({name: series.to_gwpy() for name, series in result.to_dict().items()})
-        tsd.write(str(output), format="hdf5")
+        write_hdf5(result.to_dict(), output)
     else:
         for name in det_str_names:
             ts = result[name]
