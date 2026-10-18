@@ -23,7 +23,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
 
@@ -78,6 +84,7 @@ def _generate(simulator: ContinuousWaveSimulator, epoch: float, n_samples: int) 
 class TestPhaseCoherenceAcrossSegments:
     """The property that makes a continuous wave usable, and the one nothing else would catch."""
 
+    @pytest.mark.requires_gwpy
     def test_segmented_generation_matches_one_long_call(self):
         """Three consecutive segments must reconstruct the single long signal.
 
@@ -139,6 +146,7 @@ class TestPhaseCoherenceAcrossSegments:
             "the sub-second part of the epoch is being discarded"
         )
 
+    @pytest.mark.requires_gwpy
     def test_segments_join_up_on_a_fractional_epoch_too(self):
         """The seam property must hold when the run does not start on a whole second."""
         segment_samples = int(600 * _FS)
@@ -152,6 +160,7 @@ class TestPhaseCoherenceAcrossSegments:
         worst = float(np.max(np.abs(stitched - whole))) / peak
         assert worst < 1e-9, f"fractional-epoch segments disagree by {worst:.3e} of peak"
 
+    @pytest.mark.requires_gwpy
     def test_a_later_segment_is_not_a_repeat_of_the_first(self):
         """Guards the opposite failure: agreement achieved by generating the same thing twice.
 
@@ -181,6 +190,7 @@ class TestConstruction:
         with pytest.raises(ValueError, match="finite"):
             _simulator(reference_time_ssb=float("nan"))
 
+    @pytest.mark.requires_gwpy
     def test_required_parameters_are_named_when_missing(self):
         """The error names the absent key, rather than failing later inside ripple."""
         simulator = _simulator()
@@ -195,6 +205,7 @@ class TestConstruction:
                 minimum_frequency=0.0,
             )
 
+    @pytest.mark.requires_gwpy
     def test_the_constant_antenna_pattern_branch_is_refused(self):
         """Refused, not warned about: no continuous wave is short enough for it to be valid.
 
@@ -219,6 +230,7 @@ class TestConstruction:
         with pytest.raises(ValueError, match="spindowns must all be finite"):
             _simulator(spindowns=(-1.0e-10, float("nan")))
 
+    @pytest.mark.requires_gwpy
     def test_background_channels_must_share_a_grid(self):
         """The polarizations are generated once, for one epoch and length, and added to all.
 
@@ -232,6 +244,7 @@ class TestConstruction:
         with pytest.raises(ValueError, match="must share a length"):
             simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
 
+    @pytest.mark.requires_gwpy
     def test_background_channels_must_share_an_epoch(self):
         """Same hazard as the length check, and equally invisible in the output."""
         simulator = _simulator()
@@ -241,6 +254,7 @@ class TestConstruction:
         with pytest.raises(ValueError, match="must share an epoch"):
             simulator.simulate(_SOURCE, _DETECTORS, background, sampling_frequency=_FS, minimum_frequency=0.0)
 
+    @pytest.mark.requires_gwpy
     def test_a_sampling_frequency_disagreeing_with_the_background_is_refused(self):
         """The argument drives generation; the background defines the grid it is added to.
 
@@ -259,6 +273,7 @@ class TestConstruction:
                 minimum_frequency=0.0,
             )
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.parametrize("key", sorted(_SOURCE.keys() - {"polarization_angle"}))
     def test_non_finite_source_parameters_are_refused(self, key: str):
         """A NaN anywhere in the source returns an all-NaN series with nothing naming the cause."""
@@ -269,6 +284,7 @@ class TestConstruction:
         with pytest.raises(ValueError, match=f"{key} must be finite"):
             simulator.simulate(params, _DETECTORS, _zeros(_EPOCH, 64), sampling_frequency=_FS, minimum_frequency=0.0)
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.parametrize(
         ("frequency", "expected"),
         [(0.0, "must be positive"), (-20.0, "must be positive"), (_FS / 2, "Nyquist"), (_FS, "Nyquist")],
@@ -300,6 +316,7 @@ class TestConstruction:
 class TestOutput:
     """Shape, placement and amplitude of what comes back."""
 
+    @pytest.mark.requires_gwpy
     def test_the_signal_is_added_to_the_background(self):
         """A continuous wave joins existing data rather than replacing it."""
         simulator = _simulator()
@@ -320,6 +337,7 @@ class TestOutput:
         peak = float(np.max(np.abs(without)))
         assert float(np.max(np.abs(recovered - without))) / peak < 1e-9
 
+    @pytest.mark.requires_gwpy
     def test_every_detector_gets_a_distinct_projection(self):
         """H1 and L1 see different antenna patterns and different delays."""
         simulator = _simulator()
@@ -338,6 +356,7 @@ class TestOutput:
         assert np.isfinite(h1).all()
         assert np.isfinite(l1).all()
 
+    @pytest.mark.requires_gwpy
     def test_the_amplitude_is_of_the_configured_order(self):
         """Projection scales the polarizations by antenna factors below one, never above."""
         simulator = _simulator()
@@ -356,6 +375,7 @@ class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
     the limit is refused: the padding is what pushes it over.
     """
 
+    @pytest.mark.requires_gwpy
     def test_the_buffer_the_simulator_generates_is_padded_at_both_ends(self, monkeypatch):
         """Pin the sizing itself, which is what makes the guard see a longer span."""
         simulator = _simulator()
@@ -377,6 +397,7 @@ class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
         assert seen["epoch"] < _EPOCH
         assert seen["epoch"] == pytest.approx(_EPOCH - margin / _FS)
 
+    @pytest.mark.requires_gwpy
     def test_the_jax_guard_refuses_between_the_nominal_and_padded_spans(self, monkeypatch):
         """With the limit set between the two, only a padded-span guard refuses.
 
@@ -439,6 +460,7 @@ class TestANonFinitePolarizationIsRefused:
 
         return _generate
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.parametrize("which", ["both", "plus", "cross"])
     @pytest.mark.parametrize("value", [np.nan, np.inf])
     def test_a_non_finite_polarization_raises(self, which, value, monkeypatch):
@@ -464,6 +486,7 @@ class TestANonFinitePolarizationIsRefused:
         with pytest.raises(RuntimeError, match="not all finite"):
             _simulator()._geocentre_polarizations(self._source(), epoch=_EPOCH, n_samples=64, sampling_frequency=64.0)
 
+    @pytest.mark.requires_gwpy
     def test_it_is_refused_through_the_public_entry_point(self, monkeypatch):
         """Guards the placement, not just the condition.
 
@@ -562,6 +585,7 @@ def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
     assert np.all(np.isfinite(plus))
 
 
+@pytest.mark.requires_gwpy
 def test_the_continuous_wave_path_precesses_the_source_direction():
     """This simulator must opt into the frame-of-date convention; the CBC path must not.
 
@@ -598,6 +622,7 @@ def test_the_continuous_wave_path_precesses_the_source_direction():
         )
 
 
+@pytest.mark.requires_gwpy
 def test_a_background_of_native_series_gives_the_same_strain_as_gwpy():
     """The package's own series and GWpy's, as background, give identical continuous-wave strain."""
     from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries

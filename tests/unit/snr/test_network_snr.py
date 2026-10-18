@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.snr._network import network_optimal_snr
@@ -60,6 +66,7 @@ def _single_det_snr_numpy(ts: TimeSeries, psd: np.ndarray, fmin: float = _FMIN) 
 class TestQuadratureSumEquivalence:
     """With cross_psds=None, result equals sqrt(sum of squared per-detector SNRs)."""
 
+    @pytest.mark.requires_gwpy
     def test_two_detectors_different_signals(self) -> None:
         """Two detectors with different sine frequencies and amplitudes."""
         h1 = _sine_ts(freq=50.0, amplitude=1.0)
@@ -74,6 +81,7 @@ class TestQuadratureSumEquivalence:
         assert result > 0.0
         assert result == pytest.approx(expected, rel=1e-6)
 
+    @pytest.mark.requires_gwpy
     def test_identical_signals_scales_with_sqrt2(self) -> None:
         """Two identical detectors give SNR = sqrt(2) * single-detector SNR."""
         h1 = _sine_ts(freq=50.0, amplitude=1.0)
@@ -91,6 +99,7 @@ class TestQuadratureSumEquivalence:
 class TestSensitivityToCorrelation:
     """Non-zero cross_psds changes the network SNR."""
 
+    @pytest.mark.requires_gwpy
     def test_positive_correlation_changes_result(self) -> None:
         """Introducing a real positive cross-PSD changes the SNR from the uncorrelated value."""
         h1 = _sine_ts(freq=50.0)
@@ -106,6 +115,7 @@ class TestSensitivityToCorrelation:
 
         assert corr != pytest.approx(uncorr, rel=1e-3)
 
+    @pytest.mark.requires_gwpy
     def test_cross_psd_conjugate_symmetry(self) -> None:
         """(H1,L1) and (L1,H1) keys produce the same result (Hermitian enforcement)."""
         h1 = _sine_ts(freq=50.0, amplitude=1.0)
@@ -126,6 +136,7 @@ class TestSensitivityToCorrelation:
 class TestSingleDetector:
     """Single-detector stack matches the single-detector formula."""
 
+    @pytest.mark.requires_gwpy
     def test_single_detector_matches_formula(self) -> None:
         """Single-detector network SNR equals the single-detector formula."""
         h1 = _sine_ts(freq=50.0)
@@ -148,6 +159,7 @@ class TestSingleDetector:
 class TestFrequencyMask:
     """Bins outside [low_frequency_cutoff, high_frequency_cutoff] are excluded."""
 
+    @pytest.mark.requires_gwpy
     def test_low_bins_excluded(self) -> None:
         """Signal at 10 Hz is excluded by the default 20 Hz low cutoff."""
         low_freq_ts = _sine_ts(freq=10.0)  # 10 Hz * 4 s = 40 integer cycles → no leakage
@@ -160,6 +172,7 @@ class TestFrequencyMask:
 
         assert result_masked < result_unmasked * 0.01
 
+    @pytest.mark.requires_gwpy
     def test_high_frequency_cutoff_excludes_signal(self) -> None:
         """Signal at 50 Hz is excluded when high_frequency_cutoff=40 Hz."""
         ts = _sine_ts(freq=50.0)  # 50 Hz * 4 s = 200 integer cycles → no leakage

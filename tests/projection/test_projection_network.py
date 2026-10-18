@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.projection.network import (
     _CONSTANT_PATTERN_ERROR_PER_SECOND,
@@ -91,6 +97,7 @@ def test_polarizations_wrong_series_type_raises_type_error() -> None:
         )
 
 
+@pytest.mark.requires_gwpy
 def test_mismatched_sample_rates_raises_value_error() -> None:
     """Plus and cross with different sample rates raise ValueError."""
     hp = _uniform_series(fs=4096.0)
@@ -105,6 +112,7 @@ def test_mismatched_sample_rates_raises_value_error() -> None:
         )
 
 
+@pytest.mark.requires_gwpy
 def test_mismatched_time_grids_raises_value_error() -> None:
     """Plus and cross on different time grids raise ValueError."""
     hp = _uniform_series(t0=100.0)
@@ -119,6 +127,7 @@ def test_mismatched_time_grids_raises_value_error() -> None:
         )
 
 
+@pytest.mark.requires_gwpy
 def test_duplicate_detector_names_raises_value_error() -> None:
     """Duplicate entries in detector_names raise ValueError."""
     hp = hc = _uniform_series()
@@ -132,6 +141,7 @@ def test_duplicate_detector_names_raises_value_error() -> None:
         )
 
 
+@pytest.mark.requires_gwpy
 def test_requires_plus_cross_keys():
     """Polarizations mapping must include plus and cross."""
     hp = _uniform_series()
@@ -145,6 +155,7 @@ def test_requires_plus_cross_keys():
         )
 
 
+@pytest.mark.requires_gwpy
 def test_requires_matching_length():
     """Plus and cross must have the same number of samples."""
     hp = _uniform_series(n=64)
@@ -159,6 +170,7 @@ def test_requires_matching_length():
         )
 
 
+@pytest.mark.requires_gwpy
 def test_unknown_detector_name():
     """Invalid IFO codes raise ValueError with a helpful message."""
     hp = hc = _uniform_series()
@@ -172,6 +184,7 @@ def test_unknown_detector_name():
         )
 
 
+@pytest.mark.requires_gwpy
 @patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0))
 @patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal", return_value=0.0)
 def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
@@ -200,6 +213,7 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
     assert mock_antenna_pattern.call_count == len(names)
 
 
+@pytest.mark.requires_gwpy
 def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
     """The direct-LAL projection path matches the previous PyCBC detector result."""
     n = 1024
@@ -228,6 +242,7 @@ def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
         np.testing.assert_allclose(projected[name].value, expected[name], rtol=1e-10, atol=1e-12)
 
 
+@pytest.mark.requires_gwpy
 def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
     """Tapered 500 Hz sinusoid projected with a known delay retains RMS amplitude to <0.01%."""
     fs, n = 2048.0, 2048
@@ -253,6 +268,7 @@ def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
     assert abs(rms_out / rms_in - 1.0) < 1e-4
 
 
+@pytest.mark.requires_gwpy
 def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
     """Broadband projected signal matches a directly computed FD-shift reference to <1e-10."""
     rng = np.random.default_rng(42)
@@ -280,6 +296,7 @@ def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
     np.testing.assert_allclose(out["H1"].value, ref, rtol=1e-10, atol=1e-12)
 
 
+@pytest.mark.requires_gwpy
 def test_fd_shift_earth_rotation_false_no_circular_wrap_leakage() -> None:
     """Tapered input does not leak energy across segment boundary under the FD shift."""
     fs, n = 2048.0, 4096
@@ -338,6 +355,7 @@ class TestConstantPatternDurationWarning:
             earth_rotation=earth_rotation,
         )
 
+    @pytest.mark.requires_gwpy
     def test_a_long_span_warns(self, caplog):
         """The warning fires at all, and names the span responsible."""
         span = 4 * _CONSTANT_PATTERN_WARN_SECONDS
@@ -350,6 +368,7 @@ class TestConstantPatternDurationWarning:
             "the message must name the span that triggered it"
         )
 
+    @pytest.mark.requires_gwpy
     def test_the_estimate_is_derived_from_the_measured_rate(self, caplog):
         """A bare 'this may be inaccurate' does not tell the reader whether to care.
 
@@ -364,6 +383,7 @@ class TestConstantPatternDurationWarning:
 
         assert f"up to about {expected:.0f}%" in caplog.text
 
+    @pytest.mark.requires_gwpy
     def test_a_saturating_span_names_saturation_rather_than_a_percentage(self, caplog):
         """The linear rate is local. Extrapolated to a day it would claim over 1000% of peak.
 
@@ -380,6 +400,7 @@ class TestConstantPatternDurationWarning:
             "a percentage was quoted past the point where the linear model holds"
         )
 
+    @pytest.mark.requires_gwpy
     def test_a_span_exactly_at_the_threshold_warns(self, caplog):
         """The boundary is inclusive, and pinned here because it is otherwise a coin toss.
 
@@ -410,6 +431,7 @@ class TestConstantPatternDurationWarning:
 
         assert "earth_rotation=False" in caplog.text
 
+    @pytest.mark.requires_gwpy
     def test_a_short_span_is_silent(self, caplog):
         """Otherwise every compact-binary projection would warn and the message would be ignored."""
         with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
@@ -417,6 +439,7 @@ class TestConstantPatternDurationWarning:
 
         assert "earth_rotation" not in caplog.text
 
+    @pytest.mark.requires_gwpy
     def test_the_rotating_branch_never_warns(self, caplog):
         """The warning is about the approximation, not about long signals."""
         with caplog.at_level(logging.WARNING, logger="gwmock_signal"):
@@ -446,11 +469,13 @@ class TestTheBackendArgumentValidation:
     still be running.
     """
 
+    @pytest.mark.requires_gwpy
     def test_an_unknown_backend_is_refused(self):
         """A typo must not fall through to the host path while the caller believes otherwise."""
         with pytest.raises(ValueError, match="backend must be 'numpy' or 'jax'"):
             project_polarizations_to_network(_flat_polarizations(1.0), ["H1"], backend="cuda", **_SKY)
 
+    @pytest.mark.requires_gwpy
     def test_the_constant_pattern_branch_has_no_device_path(self):
         """Serving it from the host would report a backend that did not run."""
         with pytest.raises(ValueError, match="backend='jax' is only available with earth_rotation=True"):
@@ -481,6 +506,7 @@ class TestTheDeviceBackend:
     def _polarizations(duration: float, sampling_frequency: float = 512.0):
         return _flat_polarizations(duration, sampling_frequency)
 
+    @pytest.mark.requires_gwpy
     def test_it_reproduces_the_host_path(self):
         """Same algorithm, so the two may differ only by floating-point reassociation.
 
@@ -500,6 +526,7 @@ class TestTheDeviceBackend:
             worst = float(np.max(np.abs(device[name].value - host[name].value))) / peak
             assert worst < 1e-10, f"{name} differs from the host path by {worst:.3e} of peak"
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.parametrize(("duration", "sampling_frequency"), [(600.0, 256.0), (64.0, 2048.0)])
     def test_it_reproduces_the_host_path_at_other_shapes(self, duration, sampling_frequency):
         """One shape is not evidence for the rest.
@@ -518,6 +545,7 @@ class TestTheDeviceBackend:
         worst = float(np.max(np.abs(device["H1"].value - host["H1"].value))) / peak
         assert worst < 1e-10, f"{duration} s at {sampling_frequency} Hz differs by {worst:.3e} of peak"
 
+    @pytest.mark.requires_gwpy
     def test_a_non_default_kernel_still_agrees(self):
         """The tap count and window reach both implementations, or only one honoured them."""
         polarizations = self._polarizations(16.0)
@@ -532,6 +560,7 @@ class TestTheDeviceBackend:
         worst = float(np.max(np.abs(device["H1"].value - host["H1"].value))) / peak
         assert worst < 1e-10, f"a 63-tap kernel differs between paths by {worst:.3e} of peak"
 
+    @pytest.mark.requires_gwpy
     def test_the_epoch_and_rate_survive_the_round_trip(self):
         """A device path returning bare arrays could lose the time coordinate silently."""
         polarizations = self._polarizations(8.0)
@@ -544,6 +573,7 @@ class TestTheDeviceBackend:
         assert device.sample_rate == 512.0
         assert len(device.value) == len(polarizations["plus"].value)
 
+    @pytest.mark.requires_gwpy
     def test_the_device_kernel_is_what_runs(self):
         """Asserted directly, because no comparison can establish it.
 
@@ -561,6 +591,7 @@ class TestTheDeviceBackend:
 
         device.assert_called_once()
 
+    @pytest.mark.requires_gwpy
     def test_the_host_only_preparation_is_skipped(self):
         """The device path must dispatch before the host branch's setup, not after it.
 
@@ -579,6 +610,7 @@ class TestTheDeviceBackend:
 
         gmst.assert_not_called()
 
+    @pytest.mark.requires_gwpy
     def test_one_kernel_is_compiled_per_shape_not_per_detector(self):
         """Pins the caching contract at the layer that actually caches.
 
@@ -624,6 +656,7 @@ class TestTheDeviceBackend:
         assert network._compiled_rotating_projection.cache_info().maxsize == network._KERNEL_CACHE_SIZE
         assert network._KERNEL_CACHE_SIZE is not None
 
+    @pytest.mark.requires_gwpy
     def test_the_host_backend_does_not_reach_the_device(self):
         """The default must stay on the host, or installing JAX would change existing output."""
         from gwmock_signal.projection import network
@@ -636,6 +669,7 @@ class TestTheDeviceBackend:
 
         device.assert_not_called()
 
+    @pytest.mark.requires_gwpy
     def test_a_span_beyond_the_validated_sidereal_range_is_refused(self):
         """The device path extrapolates sidereal time linearly from a single anchor.
 
@@ -650,6 +684,7 @@ class TestTheDeviceBackend:
                 self._polarizations(90000.0, 1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
             )
 
+    @pytest.mark.requires_gwpy
     def test_a_day_long_segment_is_accepted(self):
         """The ceiling must not refuse spans the error budget says are fine.
 
@@ -664,6 +699,7 @@ class TestTheDeviceBackend:
 
         assert np.all(np.isfinite(result["H1"].value))
 
+    @pytest.mark.requires_gwpy
     def test_thirty_two_bit_jax_is_refused(self):
         """In 32-bit mode the device path returns plausible strain that is materially wrong.
 
@@ -680,6 +716,7 @@ class TestTheDeviceBackend:
                 self._polarizations(1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
             )
 
+    @pytest.mark.requires_gwpy
     def test_the_hazard_the_x64_guard_protects_against_is_real(self):
         """The guard is only worth having if 32-bit output is wrong, so measure it.
 
@@ -726,6 +763,7 @@ class TestTheDeviceBackend:
         )
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("earth_rotation", [True, False])
 def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool) -> None:
     """The package's own series and GWpy's project to identical strain, returned as the package's series."""

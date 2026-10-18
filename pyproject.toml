@@ -73,9 +73,10 @@ lock = "minimal"
 
 [dependency-groups]
 dev = [
-  # The tests compare results with GWpy and exercise HDF5; neither is a core dependency.
-  "gwpy>=4.1.0",
-  "h5py>=3.16.0",
+  # The tests compare results with GWpy and exercise HDF5 through h5py; neither is a core dependency,
+  # and neither publishes a wheel for Python 3.15 yet, where the tests that need them skip.
+  "gwpy>=4.1.0; python_version < '3.15'",
+  "h5py>=3.16.0; python_version < '3.15'",
   "ruff>=0.17.1",
   "prek>=0.5.5",
   "pytest-cov>=7.1.0",
@@ -122,6 +123,10 @@ markers = [
   "spark: marks tests which need Spark",
   "slow: marks tests as slow",
   "unit: fast offline tests",
+  # Skipped where the package is not installed: Python 3.15, where none publishes a wheel yet.
+  "requires_h5py: needs h5py (the hdf5 extra)",
+  "requires_gwpy: needs GWpy (the gwpy extra)",
+  "requires_lalsuite: needs lalsuite (LAL detectors and waveforms)",
 ]
 
 [tool.mutmut]

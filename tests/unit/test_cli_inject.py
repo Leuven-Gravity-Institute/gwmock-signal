@@ -49,6 +49,7 @@ def params_file(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_stdout_summary(params_file: Path) -> None:
     """Inject cbc without --output prints a per-detector summary."""
     result = runner.invoke(
@@ -75,6 +76,7 @@ def test_inject_cbc_stdout_summary(params_file: Path) -> None:
     assert f"duration={float(_DURATION):.1f}s" in result.output
 
 
+@pytest.mark.requires_gwpy
 def test_inject_cbc_hdf5_output(params_file: Path, tmp_path: Path) -> None:
     """Inject cbc with --output writes a readable HDF5 file."""
     from gwpy.timeseries import TimeSeries
@@ -156,6 +158,7 @@ def test_inject_cbc_unknown_network(params_file: Path) -> None:
     assert result.exit_code != 0
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_comma_separated_codes(params_file: Path) -> None:
     """--network accepts comma-separated PyCBC detector codes (no named preset needed)."""
     result = runner.invoke(
@@ -191,6 +194,7 @@ def test_inject_cbc_file_based_network_rejected(params_file: Path, tmp_path: Pat
     assert result.exit_code != 0
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_yaml_network_file_accepted(params_file: Path, tmp_path: Path) -> None:
     """Passing a valid YAML network file as --network succeeds and prints a summary."""
     import yaml
@@ -219,6 +223,7 @@ def test_inject_cbc_yaml_network_file_accepted(params_file: Path, tmp_path: Path
     assert "rms=" in result.output
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_seed_accepted(params_file: Path) -> None:
     """--seed is accepted and the command completes successfully."""
     result = runner.invoke(
@@ -243,6 +248,7 @@ def test_inject_cbc_seed_accepted(params_file: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_explicit_lal_backend_accepted(params_file: Path) -> None:
     """--backend lal is accepted explicitly and the command succeeds."""
     result = runner.invoke(
@@ -267,6 +273,7 @@ def test_inject_cbc_explicit_lal_backend_accepted(params_file: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.requires_lalsuite
 def test_inject_cbc_gwsignal_backend_accepted(params_file: Path) -> None:
     """--backend gwsignal is accepted and the command succeeds."""
     result = runner.invoke(

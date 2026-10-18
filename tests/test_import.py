@@ -57,7 +57,17 @@ assert hasattr(gwmock_signal, "__version__")
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("module_name", get_all_submodules(gwmock_signal))
+#: Submodules that import lalsuite at module level, so they can only be imported where it is installed.
+_NEEDS_LALSUITE = {"gwmock_signal.constants._lal"}
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        pytest.param(name, marks=pytest.mark.requires_lalsuite) if name in _NEEDS_LALSUITE else name
+        for name in get_all_submodules(gwmock_signal)
+    ],
+)
 def test_import_submodule(module_name):
     """Test that all submodules can be imported."""
     __import__(module_name)

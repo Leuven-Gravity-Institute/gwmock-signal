@@ -64,6 +64,7 @@ def test_load_et_triangle_returns_three_detectors() -> None:
     assert net.detector_names == ("E1", "E2", "E3")
 
 
+@pytest.mark.requires_gwpy
 def test_load_et_triangle_passes_through_project_polarizations() -> None:
     """Network.from_file result can be passed to project_polarizations_to_network."""
     import numpy as np

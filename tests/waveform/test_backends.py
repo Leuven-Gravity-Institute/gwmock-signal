@@ -11,7 +11,13 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend
@@ -19,12 +25,14 @@ from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.requires_lalsuite
 def test_lalsimulation_backend_available_approximants_includes_imrphenomd() -> None:
     """The default LAL backend exposes standard TD approximants."""
     models = LALSimulationBackend().available_approximants()
     assert "IMRPhenomD" in models
 
 
+@pytest.mark.requires_lalsuite
 def test_lalsimulation_backend_generates_timeseries_dict() -> None:
     """A minimal LAL waveform call returns GWpy time series."""
     result = LALSimulationBackend().generate_td_waveform(
@@ -65,6 +73,7 @@ def test_pycbc_backend_available_approximants_when_installed() -> None:
     assert "IMRPhenomD" in PyCBCBackend().available_approximants()
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_backend_accepts_tidal_params_for_nrtidal_approximant() -> None:
     """lambda_1/lambda_2 do not raise ValueError for NRTidal waveforms."""
     result = LALSimulationBackend().generate_td_waveform(
@@ -82,6 +91,7 @@ def test_lal_backend_accepts_tidal_params_for_nrtidal_approximant() -> None:
     assert isinstance(result["plus"], NativeTimeSeries)
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_backend_accepts_tidal_aliases() -> None:
     """tidal_1/tidal_2 are accepted as aliases for lambda_1/lambda_2."""
     result = LALSimulationBackend().generate_td_waveform(
@@ -98,6 +108,7 @@ def test_lal_backend_accepts_tidal_aliases() -> None:
     assert set(result) == {"plus", "cross"}
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_backend_nontidal_unaffected_by_default_lambdas() -> None:
     """Non-tidal waveforms work without tidal params (lambda=0 is safe)."""
     result = LALSimulationBackend().generate_td_waveform(
@@ -112,6 +123,7 @@ def test_lal_backend_nontidal_unaffected_by_default_lambdas() -> None:
     assert set(result) == {"plus", "cross"}
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("param", ["lambda_1", "lambda_2"])
 def test_lal_backend_negative_tidal_param_raises(param: str) -> None:
     """Negative tidal deformability raises ValueError before reaching LAL."""
@@ -128,6 +140,7 @@ def test_lal_backend_negative_tidal_param_raises(param: str) -> None:
         )
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_backend_tidal_alias_conflict_raises() -> None:
     """Passing lambda_1 and tidal_1 simultaneously raises ValueError."""
     with pytest.raises(ValueError, match="Do not mix aliases"):
@@ -158,6 +171,7 @@ def _fake_result() -> dict[str, TimeSeries]:
     return {"plus": ts, "cross": ts}
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_backend_translates_lambda_1_to_lambda1() -> None:
     """lambda_1/lambda_2 (underscore) are renamed to lambda1/lambda2 for pycbc."""
     pytest.importorskip("pycbc", reason="pycbc not installed")
@@ -181,6 +195,7 @@ def test_pycbc_backend_translates_lambda_1_to_lambda1() -> None:
     assert "lambda_2" not in kw
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_backend_tidal_aliases_accepted() -> None:
     """tidal_1/tidal_2 are accepted as aliases and mapped to lambda1/lambda2."""
     pytest.importorskip("pycbc", reason="pycbc not installed")
@@ -204,6 +219,7 @@ def test_pycbc_backend_tidal_aliases_accepted() -> None:
     assert "tidal_2" not in kw
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_backend_tidal_defaults_to_zero() -> None:
     """Omitting tidal params passes lambda1=0.0, lambda2=0.0 to pycbc."""
     pytest.importorskip("pycbc", reason="pycbc not installed")
@@ -293,6 +309,7 @@ _CONVENTION_SOURCE: dict[str, float] = {
 }
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_fd_td_roundtrip() -> None:
     """FFT of the conditioned TD waveform reproduces LAL's FD waveform to machine precision.
 
@@ -349,6 +366,7 @@ def test_lal_fd_td_roundtrip() -> None:
     assert 1.0 - overlap < 1e-6, f"FFT(TD) vs FD overlap {overlap:.8f}"
 
 
+@pytest.mark.requires_lalsuite
 def test_lal_coalescence_at_fd_phase_reference_not_amplitude_peak() -> None:
     """LAL places coalescence at the FD phase reference, so the |h| peak precedes tc.
 

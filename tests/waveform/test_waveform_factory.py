@@ -7,11 +7,18 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from astropy import units as u
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.waveform import LALSimulationBackend, WaveformBackend, WaveformFactory, pycbc_waveform_wrapper
 
 
+@pytest.mark.requires_lalsuite
 @patch.object(LALSimulationBackend, "available_approximants", return_value=["IMRPhenomD", "SEOBNRv4"])
 def test_list_models_returns_list(mock_available_approximants) -> None:
     """list_models() reflects the default backend's available approximants."""
@@ -22,6 +29,7 @@ def test_list_models_returns_list(mock_available_approximants) -> None:
     mock_available_approximants.assert_called_once()
 
 
+@pytest.mark.requires_lalsuite
 def test_register_model_non_callable_raises_type_error() -> None:
     """Registering a non-callable raises TypeError."""
     factory = WaveformFactory()
@@ -29,6 +37,7 @@ def test_register_model_non_callable_raises_type_error() -> None:
         factory.register_model("bad", 42)  # type: ignore[arg-type]
 
 
+@pytest.mark.requires_lalsuite
 def test_register_model_string_no_colon_no_dot_raises_value_error() -> None:
     """A bare string without ':' or '.' raises ValueError."""
     factory = WaveformFactory()
@@ -36,6 +45,7 @@ def test_register_model_string_no_colon_no_dot_raises_value_error() -> None:
         factory.register_model("bad", "nodots_and_no_colon")
 
 
+@pytest.mark.requires_lalsuite
 def test_generate_with_waveform_model_in_params_raises_value_error() -> None:
     """Passing 'waveform_model' inside parameters raises ValueError."""
     factory = WaveformFactory()
@@ -44,6 +54,7 @@ def test_generate_with_waveform_model_in_params_raises_value_error() -> None:
         factory.generate("toy", {"waveform_model": "toy"})
 
 
+@pytest.mark.requires_lalsuite
 def test_get_model_unknown_raises():
     """Unknown model names raise `ValueError`."""
     factory = WaveformFactory()
@@ -51,6 +62,7 @@ def test_get_model_unknown_raises():
         factory.get_model("definitely_not_a_real_approximant_name_xyz")
 
 
+@pytest.mark.requires_gwpy
 def test_register_and_generate_toy():
     """Custom model returns consistent plus/cross GWpy series."""
 
@@ -88,6 +100,7 @@ def test_register_and_generate_toy():
     assert len(out["plus"]) == len(out["cross"])
 
 
+@pytest.mark.requires_lalsuite
 def test_register_model_string_import():
     """String `register_model` path with ':' resolves to the same callable object."""
     factory = WaveformFactory()
@@ -95,6 +108,7 @@ def test_register_model_string_import():
     assert factory.get_model("pycbc_alias") is pycbc_waveform_wrapper
 
 
+@pytest.mark.requires_lalsuite
 def test_register_model_string_dotted_import() -> None:
     """Dotted string without ':' resolves the callable via rsplit on the last '.'."""
     factory = WaveformFactory()
@@ -102,6 +116,7 @@ def test_register_model_string_dotted_import() -> None:
     assert factory.get_model("pycbc_dotted") is pycbc_waveform_wrapper
 
 
+@pytest.mark.requires_gwpy
 def test_factory_generate_delegates_to_backend() -> None:
     """Built-in model dispatch uses the configured backend implementation."""
     backend = MagicMock(spec=WaveformBackend)

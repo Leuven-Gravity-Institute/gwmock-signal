@@ -28,6 +28,7 @@ def _tone(t0: float, n: int) -> TimeSeries:
     )
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("target_kind", ["native", "gwpy"])
 @pytest.mark.parametrize("injection_kind", ["native", "gwpy"])
 @pytest.mark.parametrize("offset_samples", [5.0, 5.37])
@@ -47,6 +48,7 @@ def test_either_kind_of_input_gives_the_same_samples(target_kind, injection_kind
     assert np.any(result.value != 0.0)
 
 
+@pytest.mark.requires_gwpy
 def test_sequential_accepts_native_series():
     """Each injection is added in turn, whatever its kind, and the target is not modified."""
     target = TimeSeries(np.zeros(16), t0=0.0, sample_rate=4.0)

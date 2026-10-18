@@ -38,6 +38,7 @@ _BBH = {
 _BNS = {**_BBH, "mass1": 1.4, "mass2": 1.35, "distance": 100.0}
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])
 @pytest.mark.parametrize("sampling_frequency", [1024.0, 2048.0])
 def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_frequency):
@@ -52,6 +53,7 @@ def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_fre
     assert predicted == pytest.approx(actual, abs=0.5 / sampling_frequency)
 
 
+@pytest.mark.requires_gwpy
 def test_a_custom_registered_model_answers_unknown():
     """A registered callable never reaches the backend, so the backend's sizing cannot describe it.
 
@@ -76,6 +78,7 @@ def test_a_custom_registered_model_answers_unknown():
     assert simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0) is None
 
 
+@pytest.mark.requires_gwpy
 def test_a_factory_registration_shadowing_an_approximant_answers_unknown():
     """The exclusion is by identity, not by name, so shadowing cannot slip through.
 
@@ -110,6 +113,7 @@ def test_a_factory_registration_shadowing_an_approximant_answers_unknown():
     assert factory.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **backend_params) is None
 
 
+@pytest.mark.requires_gwpy
 def test_the_simulator_refuses_to_shadow_an_existing_model():
     """Recorded because it is why the test above uses the factory, not the simulator."""
     import numpy as np
@@ -128,6 +132,7 @@ def test_the_simulator_refuses_to_shadow_an_existing_model():
         simulator.register_waveform_model("IMRPhenomD", _flat)
 
 
+@pytest.mark.requires_lalsuite
 def test_an_unknown_model_raises_like_generation_would():
     """Unknown and unanswerable are different: one is a caller error, the other a capability gap."""
     simulator = CBCSimulator(waveform_model="NotAnApproximant")
@@ -136,6 +141,7 @@ def test_an_unknown_model_raises_like_generation_would():
         simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_query_accepts_exactly_what_generation_accepts():
     """Neither path may require a mapping the other rejects.
 

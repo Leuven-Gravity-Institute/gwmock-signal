@@ -5,7 +5,12 @@ from __future__ import annotations
 import math
 from unittest.mock import patch
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import numpy as np
 import pytest
 
@@ -41,6 +46,7 @@ def _make_h1_custom(name: str = "H1_custom", prefix: str = "") -> CustomDetector
 class TestCustomDetectorH1Validation:
     """Verify CustomDetector with H1 coordinates reproduces LAL H1 patterns."""
 
+    @pytest.mark.requires_lalsuite
     def test_antenna_pattern_matches_h1_at_10_sky_positions(self) -> None:
         """H1 custom geometry must agree with the cached LAL H1 detector."""
         custom = _make_h1_custom()
@@ -64,12 +70,14 @@ class TestCustomDetectorH1Validation:
             assert err_p < 1e-5, f"F+ relative error {err_p:.2e} at sample {i} exceeds 1e-5"
             assert err_c < 1e-5, f"Fx relative error {err_c:.2e} at sample {i} exceeds 1e-5"
 
+    @pytest.mark.requires_lalsuite
     def test_to_lal_returns_lal_detector(self) -> None:
         """to_lal() must return a LAL Detector instance."""
         custom = _make_h1_custom(name="H1_lal_type_check", prefix="X9")
         det = custom.to_lal()
         assert isinstance(det, lal.Detector)
 
+    @pytest.mark.requires_lalsuite
     def test_to_lal_is_cached(self) -> None:
         """Repeated calls to to_lal() must return the same object."""
         custom = _make_h1_custom(name="H1_cache_check", prefix="Y9")
@@ -202,6 +210,7 @@ class TestCustomDetectorValidation:
                 yarm_tilt_rad=math.nan,
             )
 
+    @pytest.mark.requires_lalsuite
     def test_to_lal_raises_runtime_error_when_detector_is_none(self) -> None:
         """RuntimeError is raised if LAL detector construction returns None."""
         det = CustomDetector(
@@ -223,6 +232,7 @@ class TestCustomDetectorValidation:
 class TestMixedNetworkProjection:
     """Test project_polarizations_to_network with a mixed str/CustomDetector list."""
 
+    @pytest.mark.requires_gwpy
     def test_mixed_list_produces_output_for_each_detector(self) -> None:
         """project_polarizations_to_network must accept str + CustomDetector."""
         from gwpy.timeseries import TimeSeries as GWpyTimeSeries
@@ -264,6 +274,7 @@ class TestMixedNetworkProjection:
             assert ts.n_samples == n
 
 
+@pytest.mark.requires_lalsuite
 def test_construction_allocates_and_registers_nothing() -> None:
     """A prefix is allocated, and the detector registered, only when ``to_lal`` is called.
 
@@ -288,6 +299,7 @@ def test_construction_allocates_and_registers_nothing() -> None:
             lal.cached_detector_by_prefix.pop(prefix, None)
 
 
+@pytest.mark.requires_lalsuite
 def test_to_lal_reallocates_a_stale_auto_prefix() -> None:
     """An auto prefix left from a failed registration, since taken by another detector, is replaced."""
     prefixes = iter(["ZY"])
@@ -305,6 +317,7 @@ def test_to_lal_reallocates_a_stale_auto_prefix() -> None:
             lal.cached_detector_by_prefix.pop(prefix, None)
 
 
+@pytest.mark.requires_lalsuite
 def test_to_lal_explicit_prefix_collision_still_raises() -> None:
     """An explicitly chosen prefix that clashes remains a hard error."""
     detector = _make_h1_custom(name="explicit", prefix="H1")  # H1 is a built-in LAL prefix

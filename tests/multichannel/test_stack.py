@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.multichannel import DetectorStrainStack
 
@@ -13,6 +19,7 @@ def _ch(n: int = 8, fs: float = 128.0, t0: float = 0.0, fill: float = 1.0) -> Ti
     return TimeSeries(np.full(n, fill), t0=t0, sample_rate=fs)
 
 
+@pytest.mark.requires_gwpy
 def test_from_mapping_order_and_shape():
     """Rows follow ``detector_names``; ``data`` has shape (n_det, n_samples)."""
     h1 = _ch(fill=1.0)
@@ -25,6 +32,7 @@ def test_from_mapping_order_and_shape():
     assert np.allclose(stack.data[1], 1.0)
 
 
+@pytest.mark.requires_gwpy
 def test_getitem_name_is_same_as_index():
     """String and integer access return the identical GWpy object."""
     strains = {"H1": _ch(fill=3.0), "L1": _ch(fill=4.0)}
@@ -33,6 +41,7 @@ def test_getitem_name_is_same_as_index():
     assert stack["L1"] is stack[1]
 
 
+@pytest.mark.requires_gwpy
 def test_to_dict_keys():
     """``to_dict`` contains all detectors."""
     names = ["H1", "L1", "V1"]
@@ -42,12 +51,14 @@ def test_to_dict_keys():
     assert set(again) == set(names)
 
 
+@pytest.mark.requires_gwpy
 def test_missing_key_raises():
     """Missing detector in mapping raises ``KeyError``."""
     with pytest.raises(KeyError, match="Missing strain"):
         DetectorStrainStack.from_mapping(["H1", "X1"], {"H1": _ch()})
 
 
+@pytest.mark.requires_gwpy
 def test_mismatched_length_raises():
     """Different lengths raise ``ValueError``."""
     strains = {"H1": _ch(n=4), "L1": _ch(n=8)}
@@ -55,6 +66,7 @@ def test_mismatched_length_raises():
         DetectorStrainStack.from_mapping(["H1", "L1"], strains)
 
 
+@pytest.mark.requires_gwpy
 def test_mismatched_epoch_raises():
     """Same rate and length but a different ``t0`` is not an aligned stack.
 
@@ -66,6 +78,7 @@ def test_mismatched_epoch_raises():
         DetectorStrainStack.from_mapping(["H1", "L1"], strains)
 
 
+@pytest.mark.requires_gwpy
 def test_mismatched_sample_rate_names_the_channel():
     """A different sample rate is rejected, and the message says which channel and both rates."""
     strains = {"H1": _ch(fs=128.0), "L1": _ch(fs=256.0)}
@@ -74,6 +87,7 @@ def test_mismatched_sample_rate_names_the_channel():
     assert "sample rates 256.0 and 128.0 Hz" in str(raised.value)
 
 
+@pytest.mark.requires_gwpy
 def test_matching_channels_accepted_without_materialising_the_index():
     """Equal ``t0``, ``dx`` and length must be accepted, and the index left unbuilt.
 
@@ -86,6 +100,7 @@ def test_matching_channels_accepted_without_materialising_the_index():
     assert all(getattr(s, "_xindex", None) is None for s in strains.values())
 
 
+@pytest.mark.requires_gwpy
 def test_irregularly_sampled_channels_are_rejected_clearly():
     """Series built from an explicit ``times=`` array have no sample rate; a stack is uniformly sampled.
 
@@ -98,12 +113,14 @@ def test_irregularly_sampled_channels_are_rejected_clearly():
         DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": irregular, "L1": TimeSeries(np.ones(4), times=times)})
 
 
+@pytest.mark.requires_gwpy
 def test_empty_detector_names_raises():
     """Empty ``detector_names`` is rejected."""
     with pytest.raises(ValueError, match="non-empty"):
         DetectorStrainStack.from_mapping([], {"H1": _ch()})
 
 
+@pytest.mark.requires_gwpy
 def test_unknown_name_getitem():
     """Bad string key raises ``KeyError``."""
     stack = DetectorStrainStack.from_mapping(["H1"], {"H1": _ch()})

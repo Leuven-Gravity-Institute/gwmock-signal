@@ -35,6 +35,7 @@ def _ripple_backend():
     return RippleBackend()
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])
 @pytest.mark.parametrize("sampling_frequency", [1024.0, 2048.0])
 def test_the_lal_backend_predicts_where_its_own_waveform_starts(params, sampling_frequency):
@@ -64,6 +65,7 @@ def test_the_ripple_backend_predicts_where_its_own_waveform_starts(params):
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_two_backends_disagree_and_that_is_the_point():
     """A single shared computation would be wrong for one of them.
 
@@ -101,6 +103,7 @@ def test_a_backend_that_cannot_say_returns_none_rather_than_zero():
     assert Unanswering().pre_coalescence_duration("Whatever", 1024.0, 20.0, mass1=30.0, mass2=25.0) is None
 
 
+@pytest.mark.requires_lalsuite
 def test_a_longer_signal_starts_earlier():
     """Sanity on the direction, which no amount of agreement testing would catch if inverted."""
     backend = _lal_backend()
@@ -136,6 +139,7 @@ def test_the_gwsignal_backend_inherits_a_correct_answer():
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("segment_duration", [8.0, 64.0])
 def test_a_pinned_segment_duration_is_honoured(segment_duration):
     """A pinned duration bypasses the chirp-time estimate, and must reach both paths.
@@ -172,6 +176,7 @@ def test_a_non_default_ripple_ringdown_fraction_is_honoured(ringdown_fraction):
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("ringdown_fraction", [0.05, 0.25])
 def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
     """The backend's own fraction must reach the answer, not the module default.

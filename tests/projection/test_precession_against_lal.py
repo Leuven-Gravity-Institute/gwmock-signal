@@ -138,6 +138,7 @@ def lal_delays() -> dict[tuple, float]:
     return {point: _lal_erot(*point) for point in _GRID}
 
 
+@pytest.mark.requires_lalsuite
 def test_the_delay_agrees_with_lal_across_detectors_sky_and_epoch(lal_delays):
     """The whole point, over 192 combinations rather than one favourable position.
 
@@ -158,6 +159,7 @@ def test_the_delay_agrees_with_lal_across_detectors_sky_and_epoch(lal_delays):
     )
 
 
+@pytest.mark.requires_lalsuite
 def test_dropping_the_precession_is_two_orders_worse(lal_delays):
     """Pins the size of what the rotation buys, so a revert cannot pass quietly.
 
@@ -185,6 +187,7 @@ def test_dropping_the_precession_is_two_orders_worse(lal_delays):
     )
 
 
+@pytest.mark.requires_lalsuite
 def test_the_precession_angles_are_lals_own_polynomials():
     """Checked against LAL's computed values, not against the formulas they came from.
 
@@ -219,6 +222,7 @@ def test_precession_at_j2000_is_the_identity():
     assert declination == pytest.approx(0.3, abs=1e-12)
 
 
+@pytest.mark.requires_lalsuite
 def test_each_convention_reproduces_its_own_lal_function():
     """Anchor both settings against LAL exactly, at the level of the delay itself.
 
@@ -286,6 +290,8 @@ def test_each_convention_reproduces_its_own_lal_function():
     )
 
 
+@pytest.mark.requires_gwpy
+@pytest.mark.requires_lalsuite
 def test_the_flag_selects_between_lals_two_conventions():
     """``precess_source_direction`` must route to the convention it names, through the projection.
 
@@ -360,6 +366,7 @@ def test_the_projection_defaults_to_the_compact_binary_convention():
     )
 
 
+@pytest.mark.requires_gwpy
 def test_the_host_and_device_rotating_paths_agree_when_precessing():
     """The two ``earth_rotation=True`` implementations must agree with the rotation switched on.
 

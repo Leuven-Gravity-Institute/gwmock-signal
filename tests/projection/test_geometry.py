@@ -12,7 +12,12 @@ is real, so these tests pin the fix instead.
 
 from __future__ import annotations
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import numpy as np
 import pytest
 
@@ -33,6 +38,7 @@ def _detector(name: str, prefix: str, longitude: float) -> CustomDetector:
     )
 
 
+@pytest.mark.requires_lalsuite
 def test_reused_prefix_does_not_return_stale_geometry() -> None:
     """Re-registering a freed prefix elsewhere must not return the first geometry.
 
@@ -57,6 +63,7 @@ def test_reused_prefix_does_not_return_stale_geometry() -> None:
     )
 
 
+@pytest.mark.requires_lalsuite
 def test_identical_geometry_still_shares_one_cache_entry() -> None:
     """Two prefixes with identical geometry should hit the same cached reconstruction.
 
@@ -81,6 +88,7 @@ def test_unknown_prefix_is_rejected() -> None:
         reconstructed_geometry("ZZ")
 
 
+@pytest.mark.requires_lalsuite
 def test_duplicate_lookup_keys_are_rejected_by_the_resolver() -> None:
     """Two channels resolving to one LAL key would silently duplicate a geometry.
 

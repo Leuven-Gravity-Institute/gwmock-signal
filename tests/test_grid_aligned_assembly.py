@@ -536,6 +536,7 @@ def _background_case(n_segment: int, grid: SamplingGrid, **overrides: float) -> 
     return batch, [{"E1": background}], [float(grid.time_of(0))]
 
 
+@pytest.mark.requires_gwpy
 def test_a_correct_background_is_accepted_and_added() -> None:
     """The matching case must still work, and the background must actually be included."""
     from gwpy.timeseries import TimeSeries
@@ -557,6 +558,7 @@ def test_a_correct_background_is_accepted_and_added() -> None:
     assert np.allclose(data[64:], 7.0)
 
 
+@pytest.mark.requires_gwpy
 def test_background_of_the_wrong_length_is_rejected() -> None:
     """Measured: a half-length background was accepted and yielded a half-length segment."""
     n_segment = 128
@@ -566,6 +568,7 @@ def test_background_of_the_wrong_length_is_rejected() -> None:
         assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
 
 
+@pytest.mark.requires_gwpy
 def test_background_at_the_wrong_sample_rate_is_rejected() -> None:
     """Measured: the batch's rate silently replaced the background's."""
     n_segment = 128
@@ -575,6 +578,7 @@ def test_background_at_the_wrong_sample_rate_is_rejected() -> None:
         assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
 
 
+@pytest.mark.requires_gwpy
 def test_background_starting_elsewhere_is_rejected() -> None:
     """Measured: a background 100 s from the segment was accepted and silently relabelled.
 
@@ -590,6 +594,7 @@ def test_background_starting_elsewhere_is_rejected() -> None:
         assemble_segments(batch, segment_duration=n_segment / _FS, segment_start_times=starts, backgrounds=backgrounds)
 
 
+@pytest.mark.requires_gwpy
 def test_background_off_the_lattice_is_rejected() -> None:
     """A background starting between samples cannot be reconciled with integer placement."""
     n_segment = 128

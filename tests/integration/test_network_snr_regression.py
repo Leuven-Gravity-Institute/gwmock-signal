@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
@@ -74,6 +80,7 @@ def _aligo_psd_numpy(n_freq: int, delta_f: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_network_snr_h1l1_equals_quadrature_sum() -> None:
     """network_optimal_snr (no cross-PSDs) on H1L1 equals sqrt(rho_H1² + rho_L1²)."""

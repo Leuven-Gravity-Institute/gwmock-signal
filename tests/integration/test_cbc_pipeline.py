@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
-import lalsimulation
+try:
+    import lalsimulation
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lalsimulation":
+        raise
+    lalsimulation = None
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
-from scipy.signal import correlate
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
 from gwmock_signal.projection.network import _time_delay_from_earth_center_lal
 from gwmock_signal.waveform.backends import LALSimulationBackend
+
+# SciPy arrives with GWpy, which does not install on Python 3.15 yet; every test here also needs lalsuite.
+correlate = pytest.importorskip("scipy.signal").correlate
 
 # ---------------------------------------------------------------------------
 # GW150914-like injection parameters
@@ -86,6 +99,7 @@ def _matched_filter_sigma_lal(ts: TimeSeries) -> float:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_cbc_h1l1v1_returns_stack():
     """inject_cbc_signal on H1L1V1 returns a 3-channel stack with non-zero RMS."""
@@ -108,6 +122,7 @@ def test_cbc_h1l1v1_returns_stack():
         assert rms > 0.0, f"RMS of {name} channel is zero"
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_h1l1_time_delay_consistent():
     """Cross-correlation lag between H1 and L1 agrees with analytic time delay."""
@@ -157,6 +172,8 @@ def test_h1l1_time_delay_consistent():
     assert abs(peak_lag_seconds - expected_delay) <= 1.0 / FS
 
 
+@pytest.mark.requires_gwpy
+@pytest.mark.requires_lalsuite
 @pytest.mark.integration
 def test_snr_regression():
     """Matched-filter SNR on H1 channel matches the LAL-only regression reference."""
@@ -180,6 +197,7 @@ def test_snr_regression():
     assert abs(snr_computed - _REFERENCE_SNR) / _REFERENCE_SNR < 1e-6
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_cbc_et_triangle_returns_stack():
     """inject_cbc_signal on ET-triangle returns a 3-channel stack."""

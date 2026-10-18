@@ -16,8 +16,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import lal
-import lalsimulation
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
+try:
+    import lalsimulation
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lalsimulation":
+        raise
+    lalsimulation = None
 import numpy as np
 import pytest
 
@@ -102,6 +112,7 @@ def _source(mass1: float, mass2: float, chi: float) -> dict[str, float]:
     }
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("backend_class", [LALSimulationBackend, GWSignalBackend])
 @pytest.mark.parametrize(("mass1", "mass2", "chi", "f_min"), _WRAPPED_CASES)
 def test_the_buffer_starts_before_the_inspiral(
@@ -169,6 +180,7 @@ def test_the_margin_is_the_1pn_term_where_it_exceeds_the_floor(mass1: float, mas
     assert required > floor_only, f"{mass1}+{mass2} at {f_min} Hz is sized with the 10% floor, not its 1PN term"
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("backend_class", [LALSimulationBackend, GWSignalBackend])
 @pytest.mark.parametrize(("mass1", "mass2", "chi", "f_min"), _WRAPPED_CASES)
 def test_the_buffer_is_the_shortest_power_of_two_holding_the_requirement(
@@ -214,6 +226,7 @@ def _note_rows() -> list[dict[str, float]]:
     return [{key: float(value) for key, value in match.groupdict().items()} for match in _GEOMETRY_ROW.finditer(note)]
 
 
+@pytest.mark.requires_lalsuite
 def test_the_documented_geometry_change_matches_the_sizing() -> None:
     """The user guide's then/now table must be what the old rule and the current backend produce.
 
@@ -242,6 +255,7 @@ def test_the_documented_geometry_change_matches_the_sizing() -> None:
         assert row["buffer_then"] == pytest.approx(lead_then / (1.0 - conditioning.DEFAULT_RINGDOWN_FRACTION), abs=0.01)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_documented_ringdown_fraction_lead_matches_the_sizing() -> None:
     """The note's ``ringdown_fraction`` 0.2 figure must be what the backend reports."""
     text = _PLACEMENT_PAGE.read_text(encoding="utf-8")

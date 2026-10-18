@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.snr import _pycbc
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
@@ -53,6 +59,7 @@ def _sine_strain(freq: float = 50.0) -> TimeSeries:
 class TestOptimalSNR:
     """Tests for optimal_snr."""
 
+    @pytest.mark.requires_gwpy
     def test_returns_positive_float(self) -> None:
         """optimal_snr returns a positive float for a non-zero signal."""
         pytest.importorskip("pycbc")
@@ -64,6 +71,7 @@ class TestOptimalSNR:
         assert isinstance(result, float)
         assert result > 0.0
 
+    @pytest.mark.requires_gwpy
     def test_zero_signal_returns_zero(self) -> None:
         """optimal_snr returns 0 for a zero-valued strain."""
         pytest.importorskip("pycbc")
@@ -74,6 +82,7 @@ class TestOptimalSNR:
         result = optimal_snr(strain, psd, low_frequency_cutoff=_FMIN)
         assert result == pytest.approx(0.0, abs=1e-10)
 
+    @pytest.mark.requires_gwpy
     def test_larger_amplitude_gives_larger_snr(self) -> None:
         """Scaling strain by a factor k scales optimal_snr by k."""
         pytest.importorskip("pycbc")
@@ -86,6 +95,7 @@ class TestOptimalSNR:
         snr2 = optimal_snr(strain2, psd, low_frequency_cutoff=_FMIN)
         assert snr2 == pytest.approx(3.0 * snr1, rel=1e-6)
 
+    @pytest.mark.requires_gwpy
     def test_raises_importerror_without_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """ImportError with 'pycbc' in the message is raised when pycbc is absent."""
         monkeypatch.setitem(sys.modules, "pycbc.filter", None)
@@ -186,6 +196,7 @@ class TestOptimalSNR:
 class TestMatchedFilterSNR:
     """Tests for matched_filter_snr."""
 
+    @pytest.mark.requires_gwpy
     def test_returns_a_timeseries(self) -> None:
         """matched_filter_snr returns the package's TimeSeries."""
         pytest.importorskip("pycbc")
@@ -197,6 +208,7 @@ class TestMatchedFilterSNR:
         assert isinstance(result, NativeTimeSeries)
         assert result.n_samples == len(strain)
 
+    @pytest.mark.requires_gwpy
     def test_snr_is_non_negative(self) -> None:
         """All values of the returned SNR time series are non-negative."""
         pytest.importorskip("pycbc")
@@ -207,6 +219,7 @@ class TestMatchedFilterSNR:
         result = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=_FMIN)
         assert np.all(result.value >= 0.0)
 
+    @pytest.mark.requires_gwpy
     def test_peak_snr_consistent_with_optimal(self) -> None:
         """Peak matched-filter SNR (template == data) equals optimal SNR to <0.01%."""
         pytest.importorskip("pycbc")
@@ -218,6 +231,7 @@ class TestMatchedFilterSNR:
         opt = optimal_snr(strain, psd, low_frequency_cutoff=_FMIN)
         assert snr_ts.value.max() == pytest.approx(opt, rel=1e-4)
 
+    @pytest.mark.requires_gwpy
     def test_raises_importerror_without_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """ImportError with 'pycbc' in the message is raised when pycbc is absent."""
         monkeypatch.setitem(sys.modules, "pycbc.filter", None)
@@ -231,6 +245,7 @@ class TestMatchedFilterSNR:
 
         assert callable(gwmock_signal.matched_filter_snr)
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.usefixtures("_series_pass_through")
     def test_calls_matched_filter_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Success path runs and returns a TimeSeries even when pycbc is replaced by a mock."""
@@ -281,6 +296,7 @@ class TestMatchedFilterSNR:
         )
         mock_ts_class.from_pycbc.assert_called_once_with(mock_snr_trimmed)
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.usefixtures("_series_pass_through")
     def test_padding_branch_via_mocked_pycbc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Padding branch runs (natural_delta_f > target_delta_f) under mocked pycbc.
@@ -341,6 +357,7 @@ class TestMatchedFilterSNR:
 class TestOptimalSNRPadding:
     """Tests for the zero-padding and PSD-interpolation logic in optimal_snr."""
 
+    @pytest.mark.requires_gwpy
     def test_optimal_snr_psd_delta_f_independence(self) -> None:
         """SNR is independent of the caller's PSD delta_f (<0.05%)."""
         pytest.importorskip("pycbc")
@@ -356,6 +373,7 @@ class TestOptimalSNRPadding:
         snr_fine = optimal_snr(strain, psd_fine, low_frequency_cutoff=_FMIN)
         assert abs(snr_coarse / snr_fine - 1.0) < 5e-4
 
+    @pytest.mark.requires_gwpy
     def test_optimal_snr_no_padding_for_already_fine_grid(self) -> None:
         """Long signals with natural delta_f <= 1/128 Hz are not padded."""
         pytest.importorskip("pycbc")
@@ -376,6 +394,7 @@ class TestOptimalSNRPadding:
         snr_explicit = optimal_snr(strain, psd, low_frequency_cutoff=_FMIN, target_delta_f=natural_df)
         assert abs(snr_default / snr_explicit - 1.0) < 1e-4
 
+    @pytest.mark.requires_lalsuite
     @pytest.mark.integration
     def test_optimal_snr_high_mass_bbh_bias_corrected(self) -> None:
         """Auto-padded SNR for 50+50 Msun BBH agrees with fine-grid reference to <0.02%."""
@@ -416,6 +435,7 @@ class TestOptimalSNRPadding:
 class TestMatchedFilterSNRPadding:
     """Tests for the zero-padding and PSD-interpolation logic in matched_filter_snr."""
 
+    @pytest.mark.requires_gwpy
     def test_matched_filter_snr_psd_delta_f_independence(self) -> None:
         """Peak SNR is independent of the caller's PSD delta_f (<0.05%)."""
         pytest.importorskip("pycbc")
@@ -431,6 +451,7 @@ class TestMatchedFilterSNRPadding:
         snr_fine = matched_filter_snr(strain, strain, psd_fine, low_frequency_cutoff=_FMIN)
         assert abs(snr_coarse.value.max() / snr_fine.value.max() - 1.0) < 5e-4
 
+    @pytest.mark.requires_gwpy
     def test_matched_filter_snr_long_data_no_data_padding(self) -> None:
         """When data is already at least as long as n_padded, only template is extended."""
         pytest.importorskip("pycbc")
@@ -456,6 +477,7 @@ class TestMatchedFilterSNRPadding:
         assert isinstance(result, NativeTimeSeries)
         assert result.n_samples == len(data)
 
+    @pytest.mark.requires_gwpy
     def test_matched_filter_snr_no_padding_for_already_fine_grid(self) -> None:
         """Long signals with natural delta_f <= 1/128 Hz are not padded."""
         pytest.importorskip("pycbc")
@@ -476,6 +498,7 @@ class TestMatchedFilterSNRPadding:
         snr_explicit = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=_FMIN, target_delta_f=natural_df)
         assert abs(snr_default.value.max() / snr_explicit.value.max() - 1.0) < 1e-4
 
+    @pytest.mark.requires_lalsuite
     @pytest.mark.integration
     def test_matched_filter_snr_high_mass_bbh_bias_corrected(self) -> None:
         """Peak matched_filter_snr for 50+50 Msun BBH agrees with padded optimal_snr to <0.05%."""
@@ -511,6 +534,7 @@ class TestMatchedFilterSNRPadding:
 class TestNativeInput:
     """Both SNR functions take the package's own time series and give what GWpy input gives."""
 
+    @pytest.mark.requires_gwpy
     def test_optimal_snr(self) -> None:
         """Identical values for either kind of strain."""
         pytest.importorskip("pycbc")
@@ -525,6 +549,7 @@ class TestNativeInput:
             strain, psd, low_frequency_cutoff=_FMIN
         )
 
+    @pytest.mark.requires_gwpy
     def test_matched_filter_snr(self) -> None:
         """Identical series, returned as the package's TimeSeries, for either kind of data and template."""
         pytest.importorskip("pycbc")

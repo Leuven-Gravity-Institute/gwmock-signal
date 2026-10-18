@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import pytest
 
 from gwmock_signal.network import _NETWORK_PRESETS, Network
@@ -74,18 +79,21 @@ class TestNetworkListNames:
 class TestNetworkProjection:
     """Integration-style: ET-triangle codes are valid LAL detector codes."""
 
+    @pytest.mark.requires_lalsuite
     def test_et_triangle_resolves_in_lal_cache(self) -> None:
         """Test that the ET-triangle network resolves in the LAL detector cache."""
         net = Network.from_name("ET-triangle")
         for code in net.detector_names:
             assert code in lal.cached_detector_by_prefix
 
+    @pytest.mark.requires_lalsuite
     def test_et_l_resolves_in_lal_cache(self) -> None:
         """Test that the ET-L network resolves in the LAL detector cache."""
         net = Network.from_name("ET-L")
         for code in net.detector_names:
             assert code in lal.cached_detector_by_prefix
 
+    @pytest.mark.requires_gwpy
     def test_et_triangle_passes_through_project_polarizations_to_network(self) -> None:
         """ET-triangle codes produce valid strain output from the projection function."""
         import numpy as np
