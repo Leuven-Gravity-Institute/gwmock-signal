@@ -18,8 +18,9 @@ reads: ``x0`` (the GPS time of the first sample), ``dx`` (the sample spacing, in
 ``xunit`` (``"s"``), ``unit`` and, for a series that has one, ``name``. A file written here therefore loads with
 ``gwpy.timeseries.TimeSeriesDict.read(path, format="hdf5")``, and a file GWpy wrote loads here.
 
-Only ``h5py`` is needed, imported when a function is called; GWpy is not. The functions are
-``gwmock_data.io``'s, re-exported here.
+No optional package is needed: h5py is used when it is installed (and compresses), and
+gwmock-data's own HDF5 writer and the pure-Python pyfive reader otherwise; GWpy is not needed. The
+functions are ``gwmock_data.io``'s, re-exported here.
 """
 
 from __future__ import annotations

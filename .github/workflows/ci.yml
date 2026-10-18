@@ -54,7 +54,7 @@ jobs:
     test-core:
         # The newest Python, where lalsuite and h5py publish no wheel yet. The package installs
         # with its core dependencies only, and the paths that need none of the optional packages
-        # -- projection, injection, simulation with a registered model, the CLI, NumPy files --
+        # -- projection, injection, simulation with a registered model, the CLI, NumPy and HDF5 files --
         # work there without importing them. Only the package and pytest are installed, and the
         # tests run against the installed package rather than the source tree.
         runs-on: ubuntu-latest
@@ -75,7 +75,7 @@ jobs:
               run: >-
                   uv run --no-sync pytest -p no:cacheprovider -o addopts= -o
                   pythonpath= tests/test_core_install.py
-                  tests/test_data_reexports.py
+                  tests/test_data_reexports.py tests/io/test_hdf5.py
 
     test-jax:
         # Exercises the optional JAX/ripple waveform backend (the [jax] extra),

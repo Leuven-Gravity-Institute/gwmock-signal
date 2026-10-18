@@ -55,7 +55,7 @@ The wheel includes **runtime dependencies** declared in `pyproject.toml`:
 3.14 and earlier), and their transitive installs. **GWpy**, **h5py**, **PyCBC**
 and **ripple** are **not** core dependencies; install them with the optional
 extras **`gwmock-signal[gwpy]`** (conversion to and from GWpy series, frame
-output), **`gwmock-signal[hdf5]`** (HDF5 files), **`gwmock-signal[pycbc]`**
+output), **`gwmock-signal[hdf5]`** (faster HDF5), **`gwmock-signal[pycbc]`**
 (PyCBC waveform backend or the `pycbc_waveform_wrapper` helper) and
 **`gwmock-signal[jax]`** (the JAX/ripple waveform backend, which pulls in
 `rippleGW` and JAX).
@@ -159,8 +159,11 @@ Declared in `pyproject.toml` for the library:
 
 **Optional** (`pip install 'gwmock-signal[hdf5]'`):
 
-- **h5py** — HDF5 input and output: `DetectorStrainStack.write`/`read` in HDF5,
-  `gwmock_signal.io.write_hdf5`/`read_hdf5`, and the CLI's `--output`
+- **h5py** — faster HDF5 input and output, gzip-compressed. HDF5 files
+  (`DetectorStrainStack.write`/`read`,
+  `gwmock_signal.io.write_hdf5`/`read_hdf5`, the CLI's `--output`) also work
+  without it, through gwmock-data's own HDF5 writer and the pure-Python pyfive
+  reader.
 
 **Optional** (`pip install 'gwmock-signal[gwpy]'`):
 
@@ -176,9 +179,9 @@ the same package as the `gwmock-signal` extra of the same name.
 On Python 3.15, `lalsuite` and `h5py` publish no wheel yet, so a plain
 `pip install gwmock-signal` installs without them. What needs neither works: the
 time series, detector projection onto built-in and custom detectors, injection,
-simulation with a waveform model you register, the CLI, and NumPy and text
-files. The LAL waveform backends and HDF5 files need those packages, and report
-how to install them when used.
+simulation with a waveform model you register, the CLI, and NumPy, text and HDF5
+files. The LAL waveform backends need `lalsuite`, and report how to install it
+when used.
 
 From Python 3.15 the package also imports some of its heavier dependencies only
 when they are first used (PEP 810): `astropy.time`, needed only to compute

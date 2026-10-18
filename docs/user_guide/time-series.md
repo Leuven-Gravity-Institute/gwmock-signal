@@ -66,7 +66,8 @@ converted without copying its samples.
 
 `gwmock_signal.io.write_hdf5` and `read_hdf5` write and read a mapping of series
 as HDF5 in the layout GWpy's `TimeSeriesDict` uses, so either side can read what
-the other wrote. They need only `h5py` (the `[hdf5]` extra), not GWpy.
+the other wrote. They need no extra: `h5py` (the `[hdf5]` extra) is used when
+installed, and gwmock-data's own HDF5 support otherwise; GWpy is not needed.
 
 ```python
 from gwmock_signal.io import read_hdf5, write_hdf5

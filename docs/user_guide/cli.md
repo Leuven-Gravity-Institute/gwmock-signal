@@ -99,8 +99,8 @@ Bundled named presets include:
 
 - If **`--output` is set**: strains are written as HDF5 in GWpy's
   **`TimeSeriesDict`** layout (one dataset per detector), so
-  `TimeSeriesDict.read` and `gwmock_signal.io.read_hdf5` load them. Writing
-  needs `h5py` (the `[hdf5]` extra).
+  `TimeSeriesDict.read` and `gwmock_signal.io.read_hdf5` load them. No extra is
+  needed; with `h5py` installed (the `[hdf5]` extra) it is used and compresses.
 - If **omitted**: one line per detector is printed to stdout showing RMS strain
   and duration. Example output:
 

@@ -4,9 +4,13 @@ description: Stacked per-detector strains.
 icon: material/view-grid
 ---
 
+`gwmock_signal.DetectorStrainStack` (also importable from
+`gwmock_signal.multichannel`) is gwmock-data's, re-exported; it is documented
+here from `gwmock_data.multichannel`.
+
 <!-- prettier-ignore-start -->
 
-::: gwmock_signal.multichannel
+::: gwmock_data.multichannel
     options:
         show_root_heading: true
         heading_level: 2

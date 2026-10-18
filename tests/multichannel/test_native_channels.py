@@ -63,7 +63,7 @@ class TestStack:
 
     def test_anything_else_is_rejected_naming_the_detector(self):
         """A bare array has no timing."""
-        with pytest.raises(TypeError, match=r"strains\['L1'\] must be a gwmock_signal.TimeSeries"):
+        with pytest.raises(TypeError, match=r"strains\['L1'\] must be a gwmock_data.TimeSeries"):
             DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": np.zeros(32)})
 
     @pytest.mark.parametrize("rate", [_FS, 7.5, 3000.0])

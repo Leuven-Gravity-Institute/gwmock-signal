@@ -32,11 +32,11 @@ dependencies = [
   "lalsuite>=7.26; python_version < '3.15'",
   "pyyaml>=6.0",
   # The time series, its sampling grid and HDF5 I/O, shared by the gwmock packages.
-  "gwmock-data>=0.1.0",
+  "gwmock-data>=0.2.0",
 ]
 
 [project.optional-dependencies]
-# HDF5 input and output (DetectorStrainStack.write/read, gwmock_signal.io, the CLI's --output).
+# HDF5 through h5py rather than gwmock-data's built-in writer and pyfive: faster, and gzip-compressed.
 hdf5 = ["h5py>=3.12"]
 # Conversion to and from GWpy series, and frame (GWF) output.
 gwpy = ["gwpy>=4.0.0"]
