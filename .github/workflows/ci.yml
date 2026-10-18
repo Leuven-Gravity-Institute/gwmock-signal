@@ -51,6 +51,32 @@ jobs:
               with:
                   token: ${{ secrets.CODECOV_TOKEN }}
 
+    test-core:
+        # The newest Python, where lalsuite and h5py publish no wheel yet. The package installs
+        # with its core dependencies only, and the paths that need none of the optional packages
+        # -- projection, injection, simulation with a registered model, the CLI, NumPy files --
+        # work there without importing them. Only the package and pytest are installed, and the
+        # tests run against the installed package rather than the source tree.
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+              with:
+                  python-version: '3.15'
+
+            - name: Install the package and pytest only
+              run: |
+                  uv venv
+                  uv pip install . pytest
+
+            - name: Run the core-dependency tests
+              run: >-
+                  uv run --no-sync pytest -p no:cacheprovider -o addopts= -o
+                  pythonpath= tests/test_core_install.py
+                  tests/test_timeseries.py
+
     test-jax:
         # Exercises the optional JAX/ripple waveform backend (the [jax] extra),
         # which is not part of the default install. Same matrix as `test`.

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import lal
 import pytest
+
+try:
+    import lal
+except ModuleNotFoundError:  # Python 3.15 and later: lalsuite publishes no wheel yet
+    lal = None
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +25,9 @@ def _restore_lal_detector_registry():
     geometry itself, so prefix reuse cannot alias two detectors and no invalidation
     hook is needed. See ``gwmock_signal.projection.geometry``.
     """
+    if lal is None:
+        yield
+        return
     before = set(lal.cached_detector_by_prefix)
     yield
     for prefix in set(lal.cached_detector_by_prefix) - before:

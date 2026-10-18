@@ -16,12 +16,15 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
 ]
 requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [
   "typer>=0.16.0", # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
-  "gwpy>=4.0.0",
+  # numpy and astropy were installed through GWpy; GWpy is now an extra, so they are declared.
+  "numpy>=2.2",
+  "astropy>=7.0",
   # Floor 7.26: the built-in detector table (data/lal_detectors.json) must equal LAL's registry,
   # and earlier releases define E2 and E3 (and, before 7.25, I1) differently.
   # lalsuite ships no wheel and no source distribution for Python 3.15 yet, so requiring it there
@@ -66,6 +69,9 @@ lock = "minimal"
 
 [dependency-groups]
 dev = [
+  # The tests compare results with GWpy and exercise HDF5; neither is a core dependency.
+  "gwpy>=4.0.0",
+  "h5py>=3.12",
   "ruff>=0.17.0",
   "prek>=0.5.5",
   "pytest-cov>=7.1.0",
