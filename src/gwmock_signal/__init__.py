@@ -39,6 +39,7 @@ _PUBLIC_SYMBOLS = {
     "RippleBackend": ("gwmock_signal.waveform.backends", "RippleBackend"),
     "StochasticBackgroundSimulator": ("gwmock_signal.stochastic", "StochasticBackgroundSimulator"),
     "StochasticBackgroundSpectrum": ("gwmock_signal.stochastic", "StochasticBackgroundSpectrum"),
+    "TimeSeries": ("gwmock_signal.timeseries", "TimeSeries"),
     "TransientSimulator": ("gwmock_signal.simulator", "TransientSimulator"),
     "WaveformBackend": ("gwmock_signal.waveform.backends", "WaveformBackend"),
     "list_registered_source_types": ("gwmock_signal.registry", "list_registered_source_types"),

@@ -34,6 +34,7 @@ tree (`src/gwmock_signal/`).
 | **[Simulator](simulator/)**         | `GWSimulator`, `TransientSimulator`, `CBCSimulator`, stable `DetectorStrainStack` return contract      |
 | **[Registry](registry/)**           | `resolve_simulator_backend`, `register_simulator_backend`, `list_registered_source_types`              |
 | **[Constants](constants/)**         | `MSUN_SI`, `MTSUN_SI`, `PC_SI` (equal to LAL's), `MPC_SI` (`PC_SI * 1e6`)                              |
+| **[Time series](timeseries/)**      | `TimeSeries` (NumPy or JAX samples; conversions to GWpy and PyCBC)                                     |
 | **[Utility](utils/)**               | Logging and other helpers                                                                              |
 
 ## Main entry points (quick links)
@@ -89,6 +90,7 @@ root. See the [Continuous API](continuous/).
 | `DetectorStrainStack`           | Multichannel | [Multichannel API](multichannel/) |
 | `Network`                       | Network      | [Network API](network/)           |
 | `CustomDetector`                | Detector     | [Network API](network/)           |
+| `TimeSeries`                    | Time series  | [Time series API](timeseries/)    |
 | `WaveformBackend`               | Waveform     | [Waveform API](waveform/)         |
 | `LALSimulationBackend`          | Waveform     | [Waveform API](waveform/)         |
 | `RippleBackend`                 | Waveform     | [Waveform API](waveform/)         |
