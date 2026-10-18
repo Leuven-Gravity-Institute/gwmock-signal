@@ -51,12 +51,14 @@ uv pip install gwmock-signal
 ```
 
 The wheel includes **runtime dependencies** declared in `pyproject.toml`:
-**`typer`**, **`gwpy`**, **`lalsuite`** (on Python 3.14 and earlier),
-**`pyyaml`**, and their transitive installs. **PyCBC** and **ripple** are
-**not** core dependencies; install them with the optional extras
-**`gwmock-signal[pycbc]`** (PyCBC waveform backend or the
-`pycbc_waveform_wrapper` helper) and **`gwmock-signal[jax]`** (the JAX/ripple
-waveform backend, which pulls in `rippleGW` and JAX).
+**`numpy`**, **`astropy`**, **`typer`**, **`pyyaml`**, **`lalsuite`** (on Python
+3.14 and earlier), and their transitive installs. **GWpy**, **h5py**, **PyCBC**
+and **ripple** are **not** core dependencies; install them with the optional
+extras **`gwmock-signal[gwpy]`** (conversion to and from GWpy series, frame
+output), **`gwmock-signal[hdf5]`** (HDF5 files), **`gwmock-signal[pycbc]`**
+(PyCBC waveform backend or the `pycbc_waveform_wrapper` helper) and
+**`gwmock-signal[jax]`** (the JAX/ripple waveform backend, which pulls in
+`rippleGW` and JAX).
 
 There is **no** `gwmock-signal[dev]` extra on PyPI; contributor tooling lives in
 **uv dependency groups** in the repository (see **Install from source**).
@@ -133,12 +135,13 @@ python -c "import gwmock_signal; print(gwmock_signal.__version__)"
 
 Declared in `pyproject.toml` for the library:
 
+- **numpy** — arrays throughout
+- **astropy** — sidereal time for detector projection
 - **typer** — CLI (`gwmock-signal` entry point)
-- **gwpy** — `TimeSeries.to_gwpy()`/`from_gwpy()` and frame (GWF) output
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
   LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
-  publishes no wheel yet; there, the LAL-based waveform backends and detector
-  geometry are unavailable.
+  publishes no wheel yet; there, the LAL waveform backends are unavailable
+  (detector geometry does not need it).
 - **pyyaml** — configuration parsing where used
 
 **Optional** (`pip install 'gwmock-signal[pycbc]'`):
@@ -156,8 +159,18 @@ Declared in `pyproject.toml` for the library:
 - **h5py** — HDF5 input and output: `DetectorStrainStack.write`/`read` in HDF5,
   `gwmock_signal.io.write_hdf5`/`read_hdf5`, and the CLI's `--output`
 
-Numerical arrays (`numpy`, etc.) are pulled in transitively (for example by
-`gwpy` and `lalsuite`).
+**Optional** (`pip install 'gwmock-signal[gwpy]'`):
+
+- **gwpy** — `TimeSeries.to_gwpy()`/`from_gwpy()` and frame (GWF) output
+
+## Python 3.15
+
+On Python 3.15, `lalsuite` and `h5py` publish no wheel yet, so a plain
+`pip install gwmock-signal` installs without them. What needs neither works: the
+time series, detector projection onto built-in and custom detectors, injection,
+simulation with a waveform model you register, the CLI, and NumPy and text
+files. The LAL waveform backends and HDF5 files need those packages, and report
+how to install them when used.
 
 ## Getting help
 

@@ -301,6 +301,7 @@ class TestGWpy:
 
         assert np.shares_memory(TimeSeries.from_gwpy(original).data, original.value)
 
+    @pytest.mark.usefixtures("gwpy_timeseries")
     def test_to_gwpy_shares_numpy_samples(self):
         """As ``from_gwpy`` does in the other direction: one array, seen through both objects."""
         series = _series()

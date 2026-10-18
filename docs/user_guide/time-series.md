@@ -73,7 +73,7 @@ again = read_hdf5("strain.h5")  # {"H1": TimeSeries(...)}
 ```
 
 `DetectorStrainStack.write` and `read` cover a whole stack, in HDF5, NumPy or
-text; frame (GWF) output goes through GWpy.
+text; frame (GWF) output needs the `[gwpy]` extra.
 
 ## Moving from GWpy series
 
