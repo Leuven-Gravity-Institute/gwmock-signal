@@ -10,19 +10,27 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-"""Check the built-in constants against the oldest and newest supported ``lalsuite``.
+"""Check the built-in constants and detector table against the oldest and newest supported ``lalsuite``.
 
-``gwmock_signal.constants`` converts units with constants written out in the source, which must equal
-LAL's bit-for-bit: LALSimulation converts with its own constants internally, so a built-in value that
-differed in the last bit would put a one-ulp error into every waveform generated through it. The test
-suite checks this against whichever ``lalsuite`` the environment resolves. It cannot notice a *new*
-``lalsuite`` release that changes a constant, because nothing in this repository changes when one is
-published. This script checks that case, on a schedule.
+Two sets of values are written out in this repository and must equal LAL's bit-for-bit:
+
+- ``gwmock_signal.constants`` converts units with them. LALSimulation converts with its own constants
+  internally, so a built-in value that differed in the last bit would put a one-ulp error into every
+  waveform generated through it.
+- ``src/gwmock_signal/data/lal_detectors.json`` holds the seven defining fields of each of LAL's
+  built-in detectors, from which projection builds the detector geometry without ``lalsuite``. A field
+  that differed would move that detector.
+
+The test suite checks both against whichever ``lalsuite`` the environment resolves. It cannot notice a
+*new* ``lalsuite`` release that changes one, because nothing in this repository changes when one is
+published. This script checks that case, on a schedule. Each detector field is compared under the name
+``<code>.<field>``, such as ``H1.xarm_azimuth_rad``, alongside the constants, so one policy covers both.
 
 It reads the ``lalsuite`` floor from ``pyproject.toml`` and the newest final release from PyPI. It
 installs each into a throwaway environment, using a supported Python (from the trove classifiers) for
 which the release ships a wheel on this platform. It then reads the constants through
-``gwmock_signal/constants/_lal.py``, so the two providers are compared name by name. The policy it
+``gwmock_signal/constants/_lal.py``, so the two providers are compared name by name, and the detector
+registry through ``scripts/lal_detector_table.py``, the script that writes the table. The policy it
 enforces:
 
 - the built-in values must equal those of the newest release;
@@ -35,8 +43,9 @@ point is proposed, so every release the proposed floor admits has been read and 
 Bisection would not do: a constant could change and then change back, and a floor below the change-back
 would admit the releases in between.
 
-It proposes; it does not edit. Changing a constant changes every waveform, so a maintainer applies the
-values and the floor in a reviewed pull request. The report is markdown, written to ``--report`` and to
+It proposes; it does not edit. Changing a constant changes every waveform, and changing a detector
+changes every projection onto it, so a maintainer applies the values and the floor in a reviewed pull
+request. The report is markdown, written to ``--report`` and to
 stdout. The exit status is:
 
 - 0 when everything agrees;
@@ -73,15 +82,23 @@ from packaging.tags import Tag, compatible_tags, cpython_tags, platform_tags
 from packaging.utils import parse_wheel_filename
 from packaging.version import Version
 
+TITLE = "Built-in constants and detector table against lalsuite"
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONSTANTS_DIR = REPO_ROOT / "src" / "gwmock_signal" / "constants"
+DETECTOR_TABLE = REPO_ROOT / "src" / "gwmock_signal" / "data" / "lal_detectors.json"
+DETECTOR_TABLE_SCRIPT = REPO_ROOT / "scripts" / "lal_detector_table.py"
 PYPI_URL = "https://pypi.org/pypi/lalsuite/json"
 
-#: Prints the LAL provider's constants as JSON hex strings; run inside an environment with ``lalsuite``.
-_READ_LAL_PROVIDER = (
-    "import json, runpy, sys; "
+#: Prints the LAL provider's constants and LAL's detector registry, as JSON hex strings, under the names
+#: :func:`detector_values` gives them. Run inside an environment with ``lalsuite``.
+_READ_LAL = (
+    "import json, runpy, sys, lal; "
     "ns = runpy.run_path(sys.argv[1]); "
-    "print(json.dumps({k: v.hex() for k, v in ns.items() if k.isupper()}))"
+    "table = runpy.run_path(sys.argv[2])['registry_table'](lal.cached_detector_by_prefix); "
+    "values = {k: v.hex() for k, v in ns.items() if k.isupper()}; "
+    "values.update({f'{code}.{f}': v.hex() for code, entry in table.items() for f, v in entry.items() if f != 'name'}); "
+    "print(json.dumps(values))"
 )
 
 Constants = Mapping[str, float]
@@ -89,7 +106,7 @@ Constants = Mapping[str, float]
 
 @dataclass(frozen=True)
 class Mismatch:
-    """One constant whose value differs between two sources."""
+    """One compared value, a constant or a ``<code>.<field>`` detector field, that differs between two sources."""
 
     name: str
     expected: float | None
@@ -97,8 +114,12 @@ class Mismatch:
 
     @property
     def ulps(self) -> float | None:
-        """The difference in units of the expected value's last place, or ``None`` if either is missing."""
-        if self.expected is None or self.actual is None:
+        """The difference in units of the expected value's last place.
+
+        ``None`` if either is missing, or if the expected value is zero, whose last place is the smallest
+        subnormal and would make any difference look astronomically large.
+        """
+        if self.expected is None or self.actual is None or self.expected == 0:
             return None
         return (self.actual - self.expected) / math.ulp(self.expected)
 
@@ -220,12 +241,30 @@ def builtin_constants() -> dict[str, float]:
     return {name: value for name, value in namespace.items() if name.isupper()}
 
 
-def lal_constants(version: Version, python: str) -> dict[str, float] | None:
-    """Return the LAL provider's constants with ``lalsuite==version`` on ``python``, or ``None`` if it fails."""
+def detector_values(table: Mapping[str, Mapping[str, object]]) -> dict[str, float]:
+    """Return a detector table's numeric fields as ``<code>.<field>`` names, ready to compare.
+
+    The detector's descriptive ``name`` is left out: projection does not use it.
+    """
+    return {
+        f"{code}.{field}": float(value)
+        for code, entry in table.items()
+        for field, value in entry.items()
+        if field != "name"
+    }
+
+
+def builtin_values() -> dict[str, float]:
+    """Return the built-in constants and the shipped detector table, under the names compared."""
+    return builtin_constants() | detector_values(json.loads(DETECTOR_TABLE.read_text()))
+
+
+def lal_values(version: Version, python: str) -> dict[str, float] | None:
+    """Return LAL's constants and detectors with ``lalsuite==version`` on ``python``, or ``None`` if it fails."""
     command = [
         "uv", "run", "--no-project", "--isolated", "--quiet", "--python", python,
         "--with", f"lalsuite=={version}",
-        "python", "-c", _READ_LAL_PROVIDER, str(CONSTANTS_DIR / "_lal.py"),
+        "python", "-c", _READ_LAL, str(CONSTANTS_DIR / "_lal.py"), str(DETECTOR_TABLE_SCRIPT),
     ]  # fmt: skip
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
@@ -234,12 +273,12 @@ def lal_constants(version: Version, python: str) -> dict[str, float] | None:
         return {name: float.fromhex(value) for name, value in json.loads(result.stdout).items()}
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
         # Any failure to install or to read is reported as unreadable, which the policy fails closed on.
-        print(f"lalsuite {version} on Python {python}: could not read constants: {exc}", file=sys.stderr)
+        print(f"lalsuite {version} on Python {python}: could not read its values: {exc}", file=sys.stderr)
         return None
 
 
 def read_release(
-    version: Version, pythons: list[str], reader: Callable[[Version, str], Constants | None] = lal_constants
+    version: Version, pythons: list[str], reader: Callable[[Version, str], Constants | None] = lal_values
 ) -> Constants | None:
     """Read ``version`` on each of ``pythons`` in turn, returning the first success, or ``None``."""
     for python in pythons:
@@ -254,11 +293,24 @@ def _table(mismatches: list[Mismatch], expected_label: str, actual_label: str) -
     def cell(value: float | None) -> str:
         return "missing" if value is None else f"`{value!r}` (`{value.hex()}`)"
 
-    rows = [f"| Constant | {expected_label} | {actual_label} | Difference |", "|---|---|---|---|"]
+    rows = [f"| Value | {expected_label} | {actual_label} | Difference |", "|---|---|---|---|"]
     for mismatch in mismatches:
         ulps = "n/a" if mismatch.ulps is None else f"{mismatch.ulps:+.0f} ulp"
         rows.append(f"| `{mismatch.name}` | {cell(mismatch.expected)} | {cell(mismatch.actual)} | {ulps} |")
     return rows
+
+
+def _fixes(mismatches: list[Mismatch], newest: Version) -> list[str]:
+    """Return how to bring each kind of mismatched value in line with ``newest``."""
+    fixes = []
+    if any("." not in mismatch.name for mismatch in mismatches):
+        fixes.append("- Constants: update `src/gwmock_signal/constants/_builtin.py` to the newest release's values.")
+    if any("." in mismatch.name for mismatch in mismatches):
+        fixes.append(
+            "- Detectors: regenerate `src/gwmock_signal/data/lal_detectors.json` with "
+            f"`uv run --no-project --with lalsuite=={newest} python scripts/lal_detector_table.py`."
+        )
+    return fixes
 
 
 def _listed(versions: Iterable[Version]) -> str:
@@ -277,7 +329,7 @@ def check(
     Returns:
         ``(exit status, markdown report)``.
     """
-    lines = ["# Built-in constants against lalsuite", ""]
+    lines = [f"# {TITLE}", ""]
     newest = versions[-1] if versions else None
     if newest is None or newest < floor:
         lines.append(f"No lalsuite release at or above the floor {floor}.")
@@ -289,7 +341,7 @@ def check(
     floor_values = newest_values if lowest == newest else read(lowest)
     if newest_values is None or floor_values is None:
         unreadable = newest if newest_values is None else lowest
-        lines.append(f"Could not read the constants of lalsuite {unreadable}; see the log.")
+        lines.append(f"Could not read the values of lalsuite {unreadable}; see the log.")
         return 2, "\n".join(lines)
 
     lines.append(f"Floor: `lalsuite>={floor}`, lowest release admitted {lowest}. Newest: lalsuite {newest}.")
@@ -302,7 +354,7 @@ def check(
         lines += [
             f"## Built-in values differ from lalsuite {newest}",
             "",
-            "Update `src/gwmock_signal/constants/_builtin.py` to the newest release's values:",
+            *_fixes(builtin_vs_newest, newest),
             "",
             *_table(builtin_vs_newest, f"lalsuite {newest}", "built-in"),
         ]
@@ -337,15 +389,15 @@ def check(
     else:
         lines.append(
             f"Every release from **{proposed}** to {newest} was read and gives lalsuite {newest}'s values. "
-            f"Raise the floor to `lalsuite>={proposed}`, in the same pull request as any change to the "
-            "built-in values."
+            f"Raise the floor to `lalsuite>={proposed}`, in the same pull request as any update the built-in "
+            f"constants or detector table need to match lalsuite {newest}."
         )
     return status, "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the check against PyPI and write the report."""
-    parser = argparse.ArgumentParser(description="Check the built-in constants against lalsuite.")
+    parser = argparse.ArgumentParser(description="Check the built-in constants and detector table against lalsuite.")
     parser.add_argument("--report", type=Path, help="Also write the markdown report to this file.")
     args = parser.parse_args(argv)
 
@@ -356,9 +408,9 @@ def main(argv: list[str] | None = None) -> int:
         with urllib.request.urlopen(PYPI_URL, timeout=60) as response:
             release_files = json.load(response)["releases"]
         releases = release_pythons(release_files, wheel_tags(pythons, platform_tags()))
-        builtin = builtin_constants()
+        builtin = builtin_values()
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        status, report = 2, f"# Built-in constants against lalsuite\n\nThe check could not start: {exc!r}"
+        status, report = 2, f"# {TITLE}\n\nThe check could not start: {exc!r}"
     else:
         status, report = check(
             floor=floor,

@@ -1,14 +1,15 @@
 name: LAL constants
 
-# The built-in unit-conversion constants must equal LAL's bit-for-bit. The test
+# The built-in unit-conversion constants, and the built-in detector table that
+# projection uses without lalsuite, must equal LAL's bit-for-bit. The test
 # suite checks them against whichever lalsuite the CI environment resolves --
 # the floor in the lowest-direct job and the newest release elsewhere -- on
 # every pull request, including the automated support-floor updates. What it
-# cannot see is a new lalsuite release that changes a constant, since nothing
-# in this repository changes when one is published. This workflow checks the
-# floor and the newest release on a schedule, and when the floor disagrees it
-# reports the floor to move to. It never edits code: a maintainer applies the
-# values and the floor in a reviewed pull request.
+# cannot see is a new lalsuite release that changes a constant or a detector,
+# since nothing in this repository changes when one is published. This
+# workflow checks the floor and the newest release on a schedule, and when the
+# floor disagrees it reports the floor to move to. It never edits code: a
+# maintainer applies the values and the floor in a reviewed pull request.
 #
 # A failed scheduled or manual run must not depend on someone reading the
 # Actions tab, so the `track` job opens a tracking issue for it (or comments on
@@ -40,7 +41,7 @@ jobs:
         outputs:
             # The comparison's own outcome, separate from the job result: a
             # failure in a later step (publishing the report) says nothing
-            # about the constants.
+            # about the compared values.
             compared: ${{ steps.compare.outcome }}
             report: ${{ steps.publish.outputs.report }}
         steps:
@@ -74,11 +75,11 @@ jobs:
                   fi
                   # A here-string, not a pipe: grep -q stops reading at the first match, and under
                   # pipefail the writer's SIGPIPE would turn that match into a skip.
-                  if grep -qE '^(pyproject\.toml|scripts/lal_constants_consistency\.py|\.github/workflows/lal_constants\.yml)$|^src/gwmock_signal/constants/' <<< "$changed"; then
+                  if grep -qE '^(pyproject\.toml|scripts/lal_constants_consistency\.py|scripts/lal_detector_table\.py|src/gwmock_signal/data/lal_detectors\.json|\.github/workflows/lal_constants\.yml)$|^src/gwmock_signal/constants/' <<< "$changed"; then
                       echo "run=true" >> "$GITHUB_OUTPUT"
                   else
                       echo "run=false" >> "$GITHUB_OUTPUT"
-                      echo "No file that affects the LAL constants changed; comparison skipped." >> "$GITHUB_STEP_SUMMARY"
+                      echo "No file that affects the LAL constants or detector table changed; comparison skipped." >> "$GITHUB_STEP_SUMMARY"
                   fi
 
             # The oldest supported Python: the floor release is the one most
@@ -89,7 +90,7 @@ jobs:
               with:
                   python-version: '3.12'
 
-            - name: Compare the built-in constants with lalsuite
+            - name: Compare with lalsuite
               id: compare
               if: ${{ steps.scope.outputs.run == 'true' }}
               run: >-
@@ -163,9 +164,9 @@ jobs:
                   fi
 
                   if [ "$COMPARED" = failure ]; then
-                      summary="The check of the built-in constants against lalsuite failed: $run_url"
+                      summary="The check of the built-in constants and detector table against lalsuite failed: $run_url"
                   else
-                      summary="The check of the built-in constants against lalsuite did not run; the job stopped at an earlier step: $run_url"
+                      summary="The check of the built-in constants and detector table against lalsuite did not run; the job stopped at an earlier step: $run_url"
                   fi
                   {
                       echo "$summary"
