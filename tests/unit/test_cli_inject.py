@@ -72,6 +72,7 @@ def test_inject_cbc_stdout_summary(params_file: Path) -> None:
     assert "H1" in result.output
     assert "L1" in result.output
     assert "rms=" in result.output
+    assert f"duration={float(_DURATION):.1f}s" in result.output
 
 
 def test_inject_cbc_hdf5_output(params_file: Path, tmp_path: Path) -> None:

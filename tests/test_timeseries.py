@@ -98,6 +98,22 @@ class TestDerivedQuantities:
         assert series.end == series.crop(start=series.end).t0
         assert series.duration == 5 * series.dt
 
+    def test_numpy_reads_the_samples(self):
+        """``numpy.asarray(series)`` gives the samples, as it does for a GWpy series."""
+        series = _series()
+
+        assert np.shares_memory(np.asarray(series), series.data)
+        assert np.asarray(series, dtype=np.float32).dtype == np.float32
+        copied = np.array(series, copy=True)
+        assert not np.shares_memory(copied, series.data)
+        assert np.array_equal(copied, series.data)
+        assert np.shares_memory(np.array(series, copy=False), series.data)
+
+    def test_numpy_refuses_a_copy_it_was_told_not_to_make(self):
+        """``copy=False`` with a dtype change raises, as NumPy and GWpy do, rather than copying."""
+        with pytest.raises(ValueError, match="without a copy"):
+            np.array(_series(), dtype=np.float32, copy=False)
+
     def test_value_is_the_data(self):
         """``value`` is GWpy's name for the samples, kept so code written against GWpy reads on."""
         series = _series()

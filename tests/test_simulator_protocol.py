@@ -10,6 +10,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal import CBCSimulator, GWSimulator
 from gwmock_signal.multichannel.stack import DetectorStrainStack
+from gwmock_signal.timeseries import as_timeseries
 
 
 def _minimal_params() -> dict[str, float]:
@@ -52,13 +53,14 @@ class _ConstantBackgroundSimulator(GWSimulator):
                 for name in detector_names
             }
         else:
+            channels = {name: as_timeseries(background[name]) for name in detector_names}
             strains = {
                 name: TimeSeries(
-                    np.asarray(background[name].value, dtype=float) + amplitude,
-                    t0=float(background[name].t0.value),
+                    np.asarray(channel.data, dtype=float) + amplitude,
+                    t0=channel.t0,
                     sample_rate=sampling_frequency,
                 )
-                for name in detector_names
+                for name, channel in channels.items()
             }
 
         return DetectorStrainStack.from_mapping(detector_names, strains)
@@ -98,4 +100,4 @@ def test_transient_simulator_accepts_background_none() -> None:
 
     assert isinstance(result, DetectorStrainStack)
     assert result.detector_names == ("H1",)
-    assert len(result["H1"]) > 0
+    assert result["H1"].n_samples > 0

@@ -49,9 +49,9 @@ In that case:
 from collections.abc import Mapping, Sequence
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
-from gwmock_signal import DetectorStrainStack, GWSimulator
+from gwmock_signal import DetectorStrainStack, GWSimulator, TimeSeries
+from gwmock_signal.timeseries import as_timeseries
 
 
 class ConstantBurstSimulator(GWSimulator):
@@ -81,13 +81,11 @@ class ConstantBurstSimulator(GWSimulator):
                 for name in detector_names
             }
         else:
+            # A background may be given as this package's series or as a GWpy one.
+            channels = {name: as_timeseries(background[name]) for name in detector_names}
             strains = {
-                name: TimeSeries(
-                    np.asarray(background[name].value, dtype=float) + amplitude,
-                    t0=float(background[name].t0.value),
-                    sample_rate=float(background[name].sample_rate.value),
-                )
-                for name in detector_names
+                name: channel.with_data(np.asarray(channel.data, dtype=float) + amplitude)
+                for name, channel in channels.items()
             }
 
         return DetectorStrainStack.from_mapping(detector_names, strains)
@@ -113,19 +111,17 @@ waveform generators (e.g., numerical relativity hybrids, ROM surrogates, or
 analytic burst models) without touching internal `WaveformFactory` details:
 
 ```python
-from gwpy.timeseries import TimeSeries
-from gwmock_signal import CBCSimulator
+from gwmock_signal import CBCSimulator, TimeSeries
 
 
 def my_callback_burst(*, waveform_model, tc, sampling_frequency, **kw):
-    """Return (plus, cross) GWpy TimeSeries tuple."""
+    """Return a (plus, cross) tuple of time series (this package's or GWpy's)."""
     import numpy as np
 
-    dt = 1.0 / sampling_frequency
     n = int(kw.get("width", 0.1) * sampling_frequency)
-    t = np.arange(n) * dt + tc
-    hp = TimeSeries(np.sin(2 * np.pi * 150 * t), t0=tc, dt=dt)
-    hc = TimeSeries(np.cos(2 * np.pi * 150 * t), t0=tc, dt=dt)
+    t = np.arange(n) / sampling_frequency + tc
+    hp = TimeSeries(np.sin(2 * np.pi * 150 * t), t0=tc, sample_rate=sampling_frequency)
+    hc = TimeSeries(np.cos(2 * np.pi * 150 * t), t0=tc, sample_rate=sampling_frequency)
     return hp, hc
 
 

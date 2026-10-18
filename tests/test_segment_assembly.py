@@ -41,8 +41,8 @@ def test_assemble_segments_spanning_signal_split_across_segments() -> None:
     np.testing.assert_allclose(segments[0]["H1"].value, expected0)
     np.testing.assert_allclose(segments[1]["H1"].value, expected1)
     # Each segment carries the right start time and sample rate.
-    assert segments[0]["H1"].t0.value == 0.0
-    assert segments[1]["H1"].t0.value == 4.0
+    assert segments[0]["H1"].t0 == 0.0
+    assert segments[1]["H1"].t0 == 4.0
 
 
 def test_assemble_segments_zero_noise_when_no_overlap() -> None:

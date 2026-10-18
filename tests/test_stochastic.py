@@ -90,7 +90,7 @@ def test_stochastic_simulator_adds_background() -> None:
 
     np.testing.assert_allclose(injected["H1"].value, signal_only["H1"].value + 1.0)
     np.testing.assert_allclose(injected["L1"].value, signal_only["L1"].value + 2.0)
-    assert float(injected.t0.value) == 100.0
+    assert injected.t0 == 100.0
 
 
 def test_long_wavelength_overlap_reduction_has_pair_keys() -> None:

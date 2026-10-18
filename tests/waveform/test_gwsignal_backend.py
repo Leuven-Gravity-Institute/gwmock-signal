@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend
 from gwmock_signal.waveform.factory import WaveformFactory
 
@@ -34,8 +34,8 @@ def test_generates_timeseries_dict() -> None:
     """A minimal gwsignal waveform call returns GWpy time series."""
     result = GWSignalBackend().generate_td_waveform("IMRPhenomD", **CANONICAL_PARAMS)
     assert set(result) == {"plus", "cross"}
-    assert isinstance(result["plus"], TimeSeries)
-    assert isinstance(result["cross"], TimeSeries)
+    assert isinstance(result["plus"], NativeTimeSeries)
+    assert isinstance(result["cross"], NativeTimeSeries)
 
 
 @pytest.mark.parametrize("approximant", ["IMRPhenomD", "IMRPhenomXPHM"])

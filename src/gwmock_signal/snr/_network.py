@@ -53,7 +53,7 @@ def network_optimal_snr(
     """
     det_names = list(stack.detector_names)
     n_det = len(det_names)
-    channels = stack._native()
+    channels = stack.to_dict()
     ref_ts = channels[det_names[0]]
     n_samples = ref_ts.n_samples
     dt = ref_ts.dt

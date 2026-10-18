@@ -42,7 +42,7 @@ def _ripple_backend():
 def _end_relative_to_tc(generated, sampling_frequency: float) -> float:
     """Seconds from ``tc`` to one sample past the buffer's last sample."""
     plus = generated["plus"]
-    return float(plus.t0.value) + len(plus.value) / sampling_frequency - _TC
+    return plus.t0 + plus.n_samples / sampling_frequency - _TC
 
 
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])

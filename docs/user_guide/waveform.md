@@ -2,7 +2,7 @@
 title: Waveforms and backends
 description:
     Waveform backends (LAL, gwsignal, PyCBC, ripple), WaveformFactory registry,
-    supported approximant names, and GWpy time-domain examples.
+    supported approximant names, and time-domain examples.
 ---
 
 # Waveforms and backends
@@ -11,10 +11,9 @@ description:
 
 This page explains how **time-domain** gravitational-wave polarizations $h_{+}$
 and $h_{\times}$ are produced and how they surface as
-[GWpy](https://gwpy.github.io)
-[`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/)
-values (`dict` keys `"plus"` and `"cross"`). Typical uses include **injection
-studies**, **matched-filter sanity checks**, and **mock data challenges**.
+[`TimeSeries`](../api/timeseries/) values (`dict` keys `"plus"` and `"cross"`).
+Typical uses include **injection studies**, **matched-filter sanity checks**,
+and **mock data challenges**.
 
 The helpers are **stateless at call time** for a single generation: one call
 returns one waveform pair. [`WaveformFactory`](../api/waveform/) adds a
@@ -207,14 +206,13 @@ hp, hx = pol["plus"], pol["cross"]
 ### Example 4 — Register your own waveform model
 
 Use this when you have a custom generator (e.g. **numerical relativity** or a
-**ROM**) and want the same `{"plus", "cross"}` GWpy contract as the built-in
+**ROM**) and want the same `{"plus", "cross"}` contract as the built-in
 backends. The callable does **not** have to call PyCBC or LAL.
 
 ```python
 import numpy as np
-from astropy import units as u
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal import TimeSeries
 from gwmock_signal.waveform import WaveformFactory
 
 
@@ -236,8 +234,8 @@ def toy_gaussian_sine_burst(
     hp = env * np.cos(phase)
     hc = env * np.sin(phase)
     return {
-        "plus": TimeSeries(hp, t0=float(t[0]), dt=dt, unit=u.dimensionless_unscaled),
-        "cross": TimeSeries(hc, t0=float(t[0]), dt=dt, unit=u.dimensionless_unscaled),
+        "plus": TimeSeries(hp, t0=float(t[0]), sample_rate=sampling_frequency),
+        "cross": TimeSeries(hc, t0=float(t[0]), sample_rate=sampling_frequency),
     }
 
 
@@ -326,8 +324,9 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
 - Default **LAL** path follows `SimInspiralChooseTDWaveform` conventions; see
   LIGO Algorithm Library / LALSimulation documentation for parameter meanings.
 - **PyCBC** wrapper path follows PyCBC’s `get_td_waveform` keyword conventions.
-- GWpy `TimeSeries` outputs interoperate with typical **GWpy**, **frame**, and
-  **Bilby** workflows.
+- Outputs are this package's `TimeSeries`; `to_gwpy()` and `to_pycbc()` convert
+  them for **GWpy**, **frame**, **PyCBC** and **Bilby** workflows (see
+  [Time series](time-series.md)).
 
 ## See also
 

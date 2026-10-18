@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import RippleBackend
 
 _BBH_PARAMS: dict[str, float] = {
@@ -92,16 +93,16 @@ def test_ripple_backend_generates_timeseries_dict() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     result = _generate()
     assert set(result) == {"plus", "cross"}
-    assert isinstance(result["plus"], TimeSeries)
-    assert isinstance(result["cross"], TimeSeries)
-    assert result["plus"].dt.value == pytest.approx(1.0 / _FS)
+    assert isinstance(result["plus"], NativeTimeSeries)
+    assert isinstance(result["cross"], NativeTimeSeries)
+    assert result["plus"].dt == pytest.approx(1.0 / _FS)
 
 
 def test_ripple_backend_places_coalescence_at_tc() -> None:
     """The plus-polarization peak lands near the requested coalescence time."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     hp = _generate()["plus"]
-    peak_time = float(hp.times.value[int(np.argmax(np.abs(hp.value)))])
+    peak_time = float(hp.times[int(np.argmax(np.abs(hp.value)))])
     assert peak_time == pytest.approx(_TC, abs=0.1)
 
 
@@ -174,7 +175,7 @@ def test_ripple_backend_tidal_model_accepts_lambda() -> None:
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     result = _generate_tidal("IMRPhenomD_NRTidalv2", lambda_1=400.0, lambda_2=500.0)
     assert set(result) == {"plus", "cross"}
-    assert isinstance(result["plus"], TimeSeries)
+    assert isinstance(result["plus"], NativeTimeSeries)
 
 
 def test_ripple_backend_tidal_accepts_tidal_aliases() -> None:
@@ -640,7 +641,7 @@ def test_ripple_fd_td_roundtrip(approximant: str, extra: dict, f_min: float) -> 
     for polarization in ("plus", "cross"):
         template = np.asarray(getattr(fd, polarization))[in_band]
         series = td[polarization]
-        epoch = float(series.t0.value) - _TC
+        epoch = series.t0 - _TC
         # FFT the TD samples and undo the epoch shift; this must recover the FD waveform.
         recon = (np.exp(-2j * np.pi * freqs * epoch) * np.fft.rfft(series.value, n=fd.n_samples) / _FS)[in_band]
         overlap = np.real(np.sum(recon * np.conj(template))) / np.sqrt(
@@ -679,7 +680,7 @@ def test_ripple_coalescence_sits_at_fd_phase_reference_not_amplitude_peak() -> N
         inclination=0.4,
     )["plus"]
 
-    peak_offset = float(hp.times.value[int(np.argmax(np.abs(hp.value)))]) - _TC
+    peak_offset = float(hp.times[int(np.argmax(np.abs(hp.value)))]) - _TC
     # The peak sits well before tc; coalescence is the FD phase reference, not the peak.
     assert peak_offset < -2.0e-3, (
         f"ripple peak offset {peak_offset * 1e3:+.3f} ms should be well before tc; "

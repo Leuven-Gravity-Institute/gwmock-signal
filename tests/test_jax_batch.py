@@ -143,7 +143,7 @@ def test_simulate_cbc_catalogue_tiles_span_and_places_signals() -> None:
 
     assert len(segments) == 6  # ceil((160 - 64) / 16)
     for k, stack in enumerate(segments):
-        assert stack["H1"].t0.value == pytest.approx(start_time + k * segment_duration)
+        assert stack["H1"].t0 == pytest.approx(start_time + k * segment_duration)
 
     # Segments before/after every signal are zero; segments overlapping a coalescence are not.
     assert np.all(np.asarray(segments[0]["H1"].value) == 0.0)  # [64, 80): no signal
@@ -185,7 +185,7 @@ def test_simulate_cbc_catalogue_binning_agrees_with_single_grid() -> None:
 
     assert len(binned) == len(unbinned)
     for single, split in zip(unbinned, binned, strict=True):
-        assert single["H1"].t0.value == split["H1"].t0.value
+        assert single["H1"].t0 == split["H1"].t0
     for detector in _DETECTORS:
         a = np.concatenate([s[detector].value for s in unbinned])
         b = np.concatenate([s[detector].value for s in binned])

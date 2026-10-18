@@ -1,14 +1,13 @@
 """The stack, segment assembly and SNR take the package's own time series as well as GWpy's.
 
-Native and GWpy inputs give identical results, and what comes back is still a GWpy series: the one
-given, when it was GWpy, or a single conversion that is returned every time it is asked for.
+Native and GWpy inputs give identical results, and what comes back is the package's series. A GWpy
+series given is converted once, sharing its samples.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
 from gwmock_signal.jax_batch import BatchedDetectorStrain, assemble_segments
 from gwmock_signal.multichannel.stack import DetectorStrainStack
@@ -25,30 +24,28 @@ def _native(value: float, *, n: int = 32, t0: float = _T0, **kwargs: object) -> 
 
 
 class TestStack:
-    """Channels of either kind; read back as GWpy series."""
+    """Channels of either kind; read back as the package's series."""
 
-    def test_native_channels_are_read_back_as_one_gwpy_series_each(self):
-        """The same GWpy object every time, with the channel's samples and timing."""
-        stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": _native(2.0)})
+    def test_native_channels_are_returned_as_given(self):
+        """The same object every time, with the channel's samples and timing."""
+        given = _native(1.0)
+        stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": given, "L1": _native(2.0)})
 
-        first = stack["H1"]
-        assert isinstance(first, GWpyTimeSeries)
-        assert stack["H1"] is first
-        assert stack[0] is first
-        assert stack.to_dict()["H1"] is first
-        assert np.array_equal(first.value, np.full(32, 1.0))
-        assert first.t0.value == _T0
-        assert stack.t0.value == _T0
-        assert stack.sample_rate.value == _FS
+        assert stack["H1"] is given
+        assert stack[0] is given
+        assert stack.to_dict()["H1"] is given
+        assert stack.t0 == _T0
+        assert stack.sample_rate == _FS
         assert np.array_equal(stack.data, np.stack([np.full(32, 1.0), np.full(32, 2.0)]))
 
-    def test_a_gwpy_channel_comes_back_as_the_object_given(self):
-        """Mixed inputs: the GWpy one is returned as is, the native one converted."""
+    def test_a_gwpy_channel_is_returned_as_the_package_s_series_sharing_its_samples(self):
+        """Converted once at construction; the same object on every read, over GWpy's array."""
         given = _native(2.0).to_gwpy()
         stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": given})
 
-        assert stack["L1"] is given
-        assert isinstance(stack["H1"], GWpyTimeSeries)
+        assert isinstance(stack["L1"], TimeSeries)
+        assert stack["L1"] is stack["L1"]
+        assert np.shares_memory(stack["L1"].data, given.value)
 
     @pytest.mark.parametrize(
         ("other", "match"),
@@ -69,10 +66,14 @@ class TestStack:
         with pytest.raises(TypeError, match=r"strains\['L1'\] must be a gwmock_signal.TimeSeries"):
             DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": np.zeros(32)})
 
+    @pytest.mark.parametrize("rate", [_FS, 7.5, 3000.0])
     @pytest.mark.parametrize("fmt", ["hdf5", "npy"])
-    def test_a_native_stack_survives_a_file_round_trip(self, tmp_path, fmt):
-        """Samples, start time and rate come back exactly."""
-        stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": _native(2.0)})
+    def test_a_native_stack_survives_a_file_round_trip(self, tmp_path, fmt, rate):
+        """Samples, start time and rate come back exactly, at rates that are not whole or dyadic too."""
+        channels = {
+            name: TimeSeries(np.full(32, value), t0=_T0, sample_rate=rate) for name, value in (("H1", 1.0), ("L1", 2.0))
+        }
+        stack = DetectorStrainStack.from_mapping(["H1", "L1"], channels)
         path = tmp_path / f"stack.{fmt}"
 
         stack.write(path, format=fmt)
@@ -80,8 +81,8 @@ class TestStack:
 
         assert back.detector_names == ("H1", "L1")
         assert np.array_equal(back.data, stack.data)
-        assert back.t0.value == _T0
-        assert back.sample_rate.value == _FS
+        assert back.t0 == _T0
+        assert back.sample_rate == rate
 
 
 @pytest.mark.parametrize("aligned", [True, False])
@@ -104,7 +105,7 @@ def test_assembly_takes_native_backgrounds(aligned):
     from_native = assemble_segments(batch, backgrounds=native, **kwargs)[0]["H1"]
     from_gwpy = assemble_segments(batch, backgrounds=gwpy, **kwargs)[0]["H1"]
 
-    assert isinstance(from_native, GWpyTimeSeries)
+    assert isinstance(from_native, TimeSeries)
     assert np.array_equal(from_native.value, from_gwpy.value)
     assert np.any(from_native.value != 5.0)
     assert not np.any(native[0]["H1"].data != 5.0)
@@ -145,48 +146,45 @@ def test_assembly_keeps_the_background_unit_and_never_shares_its_samples(aligned
     )[0]["H1"]
     segment.value[0] = -1.0
 
-    assert segment.unit.to_string() == "strain"
+    assert segment.unit == "strain"
     assert background.data[0] == 5.0
 
 
 class TestOneSetOfSamples:
     """A stack's channel, its ``data`` and the caller's series stay one set of samples."""
 
-    def test_a_native_channel_and_its_gwpy_reading_share_samples(self):
-        """A write through either is seen by the other, and by ``data``."""
-        given = _native(1.0)
+    def test_a_gwpy_channel_and_the_stack_share_samples(self):
+        """A write through the GWpy series given is seen by the stack's channel and ``data``."""
+        given = _native(1.0).to_gwpy()
         stack = DetectorStrainStack.from_mapping(["H1"], {"H1": given})
 
-        stack["H1"].value[0] = 7.0
-        given.data[1] = 8.0
+        given.value[0] = 7.0
+        stack["H1"].data[1] = 8.0
 
         assert stack.data[0, :2].tolist() == [7.0, 8.0]
-        assert stack["H1"].value[:2].tolist() == [7.0, 8.0]
+        assert given.value[:2].tolist() == [7.0, 8.0]
 
-    def test_written_timing_is_the_timing_read_back(self, tmp_path):
-        """A file records the start time the stack reports, even after the GWpy series given is moved."""
+    def test_the_timing_is_taken_when_the_stack_is_built(self, tmp_path):
+        """Moving a GWpy series given afterwards changes neither the stack nor what it writes."""
         given = _native(1.0).to_gwpy()
         stack = DetectorStrainStack.from_mapping(["H1"], {"H1": given})
         given.t0 = _T0 + 5.0
 
         stack.write(tmp_path / "stack.npy", format="npy")
 
-        assert stack.t0.value == _T0 + 5.0
-        assert DetectorStrainStack.read(tmp_path / "stack.npy", format="npy").t0.value == _T0 + 5.0
+        assert stack.t0 == _T0
+        assert DetectorStrainStack.read(tmp_path / "stack.npy", format="npy").t0 == _T0
 
-    def test_frames_record_the_timing_read_back(self, monkeypatch, tmp_path):
-        """GWF output carries the start time the stack reports, as the other formats do."""
+    def test_frames_record_the_stack_s_timing_and_names(self, monkeypatch, tmp_path):
+        """GWF output carries the stack's start time, each channel named for its detector."""
         from gwpy.timeseries import TimeSeriesDict
 
         written = {}
         monkeypatch.setattr(TimeSeriesDict, "write", lambda self, *args, **kwargs: written.update(self))
-        given = _native(1.0).to_gwpy()
-        stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": given, "L1": _native(2.0)})
-        given.t0 = _T0 + 5.0
+        stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _native(1.0), "L1": _native(2.0)})
 
         stack.write(tmp_path / "stack.gwf", format="gwf")
 
-        assert [written[name].t0.value for name in ("H1", "L1")] == [stack["H1"].t0.value, stack["L1"].t0.value]
-        assert written["H1"].t0.value == _T0 + 5.0
+        assert [written[name].t0.value for name in ("H1", "L1")] == [_T0, _T0]
         assert [written[name].name for name in ("H1", "L1")] == ["H1", "L1"]
         assert np.array_equal(written["L1"].value, np.full(32, 2.0))

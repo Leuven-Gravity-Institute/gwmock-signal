@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from gwmock_signal.waveform.backends import LALSimulationBackend, WaveformBackend
 
 if TYPE_CHECKING:
-    from gwpy.timeseries import TimeSeries
+    from gwmock_signal.timeseries import TimeSeries
 
 logger = logging.getLogger("gwmock_signal.waveform")
 
@@ -89,7 +89,7 @@ class WaveformFactory:
             name: Key used with ``WaveformFactory.generate`` and ``WaveformFactory.get_model``.
             factory_func: Callable that accepts merged waveform kwargs (including
                 ``waveform_model``, ``tc``, ``sampling_frequency``, ``minimum_frequency``)
-                and returns a dict of GWpy ``plus``/``cross`` series, **or** an import
+                and returns a dict of ``plus``/``cross`` series (this package's or GWpy's), **or** an import
                 string: either ``module.path:callable`` (colon before the name) or
                 ``package.module.callable`` (split on the last ``.`` for attribute lookup).
 
@@ -224,7 +224,7 @@ class WaveformFactory:
 
         Returns:
             Dict whose keys are the strings ``plus`` and ``cross``, each mapping to a
-            GWpy [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/).
+            :class:`~gwmock_signal.timeseries.TimeSeries` (or, for a registered model, whatever kind of series it returns).
 
         Raises:
             ValueError: If ``waveform_model`` is not registered.

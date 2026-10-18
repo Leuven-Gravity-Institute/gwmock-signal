@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from gwmock_signal.detector import CustomDetector
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
 # Exact H1 geodetic parameters from LAL CachedDetectors
 # (lal.CachedDetectors, prefix == "H1").
@@ -259,8 +260,8 @@ class TestMixedNetworkProjection:
 
         assert set(result.keys()) == {"H1", "L1_custom"}
         for key, ts in result.items():
-            assert isinstance(ts, GWpyTimeSeries), f"{key}: expected GWpyTimeSeries"
-            assert len(ts) == n
+            assert isinstance(ts, NativeTimeSeries), f"{key}: expected TimeSeries"
+            assert ts.n_samples == n
 
 
 def test_construction_allocates_and_registers_nothing() -> None:

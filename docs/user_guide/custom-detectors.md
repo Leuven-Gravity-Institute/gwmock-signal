@@ -81,7 +81,6 @@ Custom detectors are valid arguments anywhere detector names are expected:
 ```python
 import math
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network

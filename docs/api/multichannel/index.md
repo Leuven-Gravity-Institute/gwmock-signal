@@ -1,6 +1,6 @@
 ---
 title: Multichannel
-description: Stacked per-detector GWpy strains.
+description: Stacked per-detector strains.
 icon: material/view-grid
 ---
 

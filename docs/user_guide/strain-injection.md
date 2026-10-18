@@ -1,8 +1,7 @@
 ---
 title: Strain injection examples
 description:
-    Example workflows for adding simulated strain into a target GWpy time
-    series.
+    Example workflows for adding simulated strain into a target time series.
 ---
 
 # Strain injection examples
@@ -32,8 +31,8 @@ for `inject_strain` / `inject_strains_sequential` are documented only under
 
 ```python
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal import TimeSeries
 from gwmock_signal.waveform import WaveformFactory
 from gwmock_signal.projection import project_polarizations_to_network
 from gwmock_signal.injection import inject_strain
@@ -80,7 +79,7 @@ assert out is not target  # immutability: new object (recommended contract)
 ```python
 from gwmock_signal.injection import inject_strains_sequential
 
-# target: long segment; inj1, inj2: non-overlapping or overlapping GWpy series
+# target: long segment; inj1, inj2: non-overlapping or overlapping time series
 out = inject_strains_sequential(target, [inj1, inj2], interpolate_if_offset=True)
 ```
 
@@ -105,7 +104,7 @@ waveform generation, projection, and injection in one call:
 
 ```python
 import numpy as np
-from gwpy.timeseries import TimeSeries
+from gwmock_signal import TimeSeries
 from gwmock_signal.pipeline import inject_cbc_signal
 
 fs = 4096.0
@@ -148,8 +147,7 @@ which runs the full pipeline and writes both the strain data and a JSON sidecar
 with the injection parameters:
 
 ```python
-from gwmock_signal import CBCSimulator
-from gwpy.timeseries import TimeSeries
+from gwmock_signal import CBCSimulator, TimeSeries
 import numpy as np
 
 sim = CBCSimulator("IMRPhenomD")
@@ -219,7 +217,7 @@ params = {
 
 # The CBC time series is dimensionless.
 # Relabels CBC background to `strain` units
-cbc_background = TimeSeries(data=out.value, t0=out.t0, dt=out.dt, unit="strain")
+cbc_background = TimeSeries(out.data, t0=out.t0, sample_rate=out.sample_rate, unit="strain")
 
 result = cw_sim.simulate(
     params=params,
@@ -247,8 +245,8 @@ result = cw_sim.simulate(
 
 ## Scientific notes
 
-- Conventions follow common **GWpy** / **LIGO** injection practice: coherent
-  addition of strain in the time domain on a fixed grid.
+- Conventions follow common **LIGO** injection practice: coherent addition of
+  strain in the time domain on a fixed grid.
 - For **colored noise** backgrounds, build `target` as noise first, then inject;
   stationary Gaussian noise can be added in a separate noise-focused package.
 

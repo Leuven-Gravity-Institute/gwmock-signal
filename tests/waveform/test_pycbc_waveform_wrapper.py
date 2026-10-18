@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.pycbc_wrapper import pycbc_waveform_wrapper
 
 pytest.importorskip("pycbc", reason="pycbc not installed")
@@ -73,8 +73,8 @@ class TestPyCBCWaveformWrapper:
         with patch("gwmock_signal.waveform.pycbc_wrapper.get_td_waveform") as mock_get_td:
             mock_get_td.return_value = mock_pycbc_waveform
             result = pycbc_waveform_wrapper(**default_params)
-            assert isinstance(result["plus"], TimeSeries)
-            assert isinstance(result["cross"], TimeSeries)
+            assert isinstance(result["plus"], NativeTimeSeries)
+            assert isinstance(result["cross"], NativeTimeSeries)
 
 
 def test_the_returned_series_do_not_share_pycbc_s_buffers(monkeypatch):

@@ -57,6 +57,7 @@ nav = [
     { "Custom detectors" = "user_guide/custom-detectors.md" },
     { "Batched GPU simulation" = "user_guide/gpu-batched-simulation.md" },
     { "Segment boundary losses" = "user_guide/segment-placement-losses.md" },
+    { "Time series" = "user_guide/time-series.md" },
     { "Examples" = [
       { "Waveforms" = "user_guide/waveform.md" },
       { "Detector projection" = "user_guide/detector-projection.md" },

@@ -264,6 +264,19 @@ class TimeSeries:
         exact = float(grid.index_of(gps_time))
         return math.ceil(exact - grid.lattice_tolerance_samples(gps_time))
 
+    def __array__(self, dtype: Any = None, copy: bool | None = None) -> np.ndarray:
+        """Return the samples as a NumPy array, so ``numpy.asarray(series)`` works as for GWpy.
+
+        Follows NumPy's protocol: ``copy=True`` always copies, ``None`` copies only when the dtype
+        or the array library requires it, and ``False`` raises ``ValueError`` when a copy would be
+        required -- a dtype change, or samples that are not a NumPy array.
+        """
+        needs_copy = not isinstance(self.data, np.ndarray) or (dtype is not None and np.dtype(dtype) != self.data.dtype)
+        if copy is False and needs_copy:
+            raise ValueError("these samples cannot be returned as a NumPy array without a copy.")
+        array = np.asarray(self.data, dtype=dtype)
+        return np.array(array, copy=True) if copy else array
+
     # ----------------------------------------------------------------------------------------
     # Moving data and converting
 
@@ -377,15 +390,6 @@ def as_timeseries(series: TimeSeries | gwpy.timeseries.TimeSeries) -> TimeSeries
     raise TypeError(
         f"expected a gwmock_signal.TimeSeries or a gwpy.timeseries.TimeSeries; got {type(series).__name__}."
     )
-
-
-def _public_output(series: TimeSeries) -> gwpy.timeseries.TimeSeries:
-    """Return ``series`` in the form the public API returns: a GWpy ``TimeSeries``, for now.
-
-    The single place where results leave the package as GWpy series. Making the public API return
-    :class:`TimeSeries` is a change here, not at every function.
-    """
-    return series.to_gwpy()
 
 
 _NO_FLOAT64 = (

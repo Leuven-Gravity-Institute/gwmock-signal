@@ -71,7 +71,7 @@ The same workflow in Python:
 ```python
 import json, numpy as np
 from pathlib import Path
-from gwpy.timeseries import TimeSeries
+from gwmock_signal import TimeSeries
 from gwmock_signal.pipeline import inject_cbc_signal
 from gwmock_signal.network import Network
 

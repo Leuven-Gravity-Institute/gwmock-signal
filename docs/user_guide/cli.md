@@ -22,8 +22,8 @@ handler on stderr). Subcommands inherit this after the callback runs.
 
 ## `inject cbc` — CBC into zero-noise segments
 
-End-to-end helper: load CBC parameters from JSON, build a zero-noise GWpy
-background centred on `coa_time`, run the same pipeline as
+End-to-end helper: load CBC parameters from JSON, build a zero-noise background
+centred on `coa_time`, run the same pipeline as
 [`inject_cbc_signal`](../api/pipeline/), then either write HDF5 or print a short
 per-detector RMS summary.
 
@@ -97,8 +97,9 @@ Bundled named presets include:
 
 ### Output (`--output`)
 
-- If **`--output` is set**: strains are written as GWpy **`TimeSeriesDict`**
-  HDF5 (one dataset per detector).
+- If **`--output` is set**: strains are written as HDF5 in GWpy's
+  **`TimeSeriesDict`** layout (one dataset per detector), so
+  `TimeSeriesDict.read` loads them.
 - If **omitted**: one line per detector is printed to stdout showing RMS strain
   and duration. Example output:
 
@@ -130,10 +131,10 @@ gwmock-signal inject cbc --params cbc.json --network H1L1V1 --output injected.h5
 ## Python vs CLI
 
 Use the **CLI** for quick checks and scripted runs from the shell. Use the
-**Python API** when you already have `TimeSeries` / `TimeSeriesDict` data,
-custom backgrounds, or need `inject_cbc_signal` / `CBCSimulator` options such as
-custom `earth_rotation` and `interpolate_if_offset` tuning beyond the boolean
-CLI flags (see **[Pipeline API](../api/pipeline/)** and
+**Python API** when you already have time series data, custom backgrounds, or
+need `inject_cbc_signal` / `CBCSimulator` options such as custom
+`earth_rotation` and `interpolate_if_offset` tuning beyond the boolean CLI flags
+(see **[Pipeline API](../api/pipeline/)** and
 **[Simulator API](../api/simulator/)**).
 
 ## See also
