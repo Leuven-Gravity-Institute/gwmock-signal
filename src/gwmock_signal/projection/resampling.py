@@ -21,11 +21,13 @@ approximation, and its error falls steeply with the number of taps. That makes t
 accuracy a tunable rather than a fixed property of the method — unlike a cubic, whose
 error is fixed at O(h^4) no matter how much compute is available.
 
-This module holds the kernel *specification* only — tap count, window shape and the
-weight formula — because the NumPy path (:mod:`gwmock_signal.projection.network`) and
-the device path (:mod:`gwmock_signal.projection.jax_projection`) must resample
-identically or the two implementations disagree by more than either one's own error.
-The array evaluation is written twice, once per backend; the definition lives here once.
+The kernel *specification* — tap count, window shape and the weight formula — is
+:mod:`gwmock_data.resampling`'s, shared by the gwmock packages and re-exported here,
+because the NumPy path (:mod:`gwmock_signal.projection.network`) and the device path
+(:mod:`gwmock_signal.projection.jax_projection`) must resample identically or the two
+implementations disagree by more than either one's own error. This module adds what
+projection needs on top: the edge padding sized for the largest geocenter delay, and
+the checks that keep a detector and a shift within it.
 
 !!! note "Choosing the tap count"
 
@@ -42,29 +44,15 @@ The array evaluation is written twice, once per backend; the definition lives he
 from __future__ import annotations
 
 import math
-from functools import lru_cache
 
 import numpy as np
-
-#: Fewest taps that still defines a symmetric kernel.
-_MINIMUM_TAPS = 3
-
-#: Default number of kernel taps. Odd, so the kernel is symmetric about the sample
-#: preceding the requested position.
-DEFAULT_SINC_TAPS = 127
-
-#: Default Kaiser window shape parameter. This, not the tap count, sets the error floor:
-#: at 127 taps, beta = 12 stalls near 1e-8 while beta = 32 reaches 1e-12. It cannot be
-#: raised freely, because a larger beta needs more taps to hold its transition band --
-#: see :data:`_TAPS_PER_BETA` and :func:`validate_kernel`.
-DEFAULT_KAISER_BETA = 32.0
-
-#: Taps required per unit of Kaiser beta. Measured, not derived: at beta = 32, 127 taps
-#: reach 2.2e-12 at 0.8 x Nyquist while 63 taps give only 1.7e-4, because the transition
-#: band no longer fits. The bound ``taps >= 4 * beta - 1`` reproduces where that
-#: transition happens across the beta values tested.
-_TAPS_PER_BETA = 4.0
-
+from gwmock_data.resampling import (
+    DEFAULT_KAISER_BETA,
+    DEFAULT_SINC_TAPS,
+    kaiser_window_chebyshev,
+    resample_uniform_sinc,
+    validate_kernel,
+)
 
 #: WGS84 equatorial radius: the largest geocentre distance a ground-based detector can have,
 #: used only to bound the geocenter delay when sizing edge padding.
@@ -177,245 +165,16 @@ def edge_padding(sampling_frequency: float, taps: int = DEFAULT_SINC_TAPS, beta:
     )
 
 
-def validate_kernel(taps: int, beta: float) -> tuple[int, float]:
-    """Validate a kernel specification and return it normalised.
-
-    Args:
-        taps: Number of kernel taps; must be an odd integer >= 3.
-        beta: Kaiser window shape parameter; must be finite, non-negative and small enough
-            that its transition band fits in ``taps``.
-
-    Returns:
-        ``(taps, beta)`` as an ``int`` and a ``float``.
-
-    Raises:
-        ValueError: If ``taps`` is not an odd integer >= 3, if ``beta`` is not finite or is
-            negative, or if ``beta`` is too large for ``taps``. The last case is rejected
-            rather than warned about because it fails *quietly*: the kernel still returns
-            plausible numbers, several orders of magnitude less accurate than the tap count
-            implies.
-    """
-    # Rejected rather than truncated: int(127.9) would silently accept a value the
-    # integer-only contract forbids, and the caller would never learn which kernel ran.
-    if isinstance(taps, float) and not taps.is_integer():
-        raise ValueError(f"taps must be an odd integer >= 3; got {taps}.")
-    taps = int(taps)
-    if taps < _MINIMUM_TAPS or taps % 2 == 0:
-        raise ValueError(f"taps must be an odd integer >= 3; got {taps}.")
-    beta = float(beta)
-    # NaN fails every comparison, so it would slip past a bare `beta < 0` check and then
-    # propagate silently through every interpolated sample.
-    if not np.isfinite(beta):
-        raise ValueError(f"Kaiser beta must be finite; got {beta}.")
-    if beta < 0.0:
-        raise ValueError(f"Kaiser beta must be non-negative; got {beta}.")
-    minimum_taps = _TAPS_PER_BETA * beta - 1.0
-    if taps < minimum_taps:
-        raise ValueError(
-            f"Kaiser beta={beta} needs at least {minimum_taps:.0f} taps to hold its transition "
-            f"band, but taps={taps}. Either raise taps or lower beta; a beta too large for the "
-            f"kernel silently loses several orders of magnitude of accuracy."
-        )
-    return taps, beta
-
-
-def resample_uniform_sinc(
-    samples: np.ndarray,
-    index: np.ndarray,
-    *,
-    taps: int = DEFAULT_SINC_TAPS,
-    beta: float = DEFAULT_KAISER_BETA,
-) -> np.ndarray:
-    """Resample a uniformly sampled series at fractional positions (NumPy).
-
-    Evaluates the Kaiser-windowed sinc series. Positions outside
-    ``[0, len(samples) - 1]`` return zero, matching the ``fill_value=0.0`` behaviour of
-    the interpolation this replaces.
-
-    Weights are normalised to sum to one, which enforces unit gain at DC and removes
-    the amplitude bias the window would otherwise introduce near the ends of the series.
-
-    Args:
-        samples: Uniformly sampled series, shape ``(n,)``.
-        index: Fractional sample positions to evaluate at, any shape.
-        taps: Number of kernel taps.
-        beta: Kaiser window shape parameter.
-
-    Returns:
-        Interpolated values, the shape of ``index``.
-    """
-    taps, beta = validate_kernel(taps, beta)
-    samples = np.asarray(samples, dtype=float)
-    index = np.asarray(index, dtype=float)
-    n = samples.shape[0]
-    half = (taps - 1) // 2
-
-    base = np.floor(index)
-    frac = index - base
-    base_int = base.astype(np.int64)
-
-    # One sine for the whole tap loop. Every tap argument is `x = frac - offset` for an integer
-    # offset, and `sin(pi*(frac - offset)) = (-1)**offset * sin(pi*frac)` is an identity in the
-    # reals, so `taps` transcendentals collapse to one and each tap keeps only a sign flip --
-    # which is exact in IEEE 754. Reduced to [-1/2, 1/2] rather than left in [0, 1): both cost
-    # one sine, but `frac` near 1 puts the argument next to pi, where rounding the product
-    # `fl(pi)*frac` costs the result its leading digits, and the reduced form never goes there.
-    # `nearest` is 0 or 1, so the subtraction is exact (Sterbenz above 1/2, trivially below).
-    #
-    # The `(-1)**nearest` factor is **not load-bearing**: it is one sign for the whole position,
-    # so it negates `total` and `weight_sum` alike and cancels exactly in their quotient --
-    # measured bit-identical with and without it. It is kept so that each `weight` below is the
-    # kernel weight itself rather than its negation, which is what the normalisation, the
-    # `weight_sum != 0` test and any future reader are entitled to assume. A reader who takes it
-    # for a correctness guard would be wrong; a reader who removes it makes the result depend on
-    # the normalisation staying.
-    nearest = np.round(frac)
-    hoisted_sine = np.where(nearest == 0.0, 1.0, -1.0) * np.sin(np.pi * (frac - nearest))
-
-    total = np.zeros(index.shape, dtype=float)
-    weight_sum = np.zeros(index.shape, dtype=float)
-    # Kaiser window evaluated on the kernel's own support, so the taper is a property
-    # of the kernel rather than of where in the series it happens to land.
-    denominator = half + 1.0
-    for offset in range(-half, half + 1):
-        x = frac - offset
-        window = np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - (x / denominator) ** 2))) / np.i0(beta)
-        # sinc(x) = sin(pi*x)/(pi*x), from the hoisted sine. `x == 0` happens only at `frac == 0`
-        # and `offset == 0`, where sinc is 1; the divisor is substituted there rather than the
-        # quotient patched afterwards, so the invalid division never happens at all.
-        numerator = hoisted_sine if offset % 2 == 0 else -hoisted_sine
-        at_zero = x == 0.0
-        weight = np.where(at_zero, 1.0, numerator / (np.pi * np.where(at_zero, 1.0, x))) * window
-        gathered = samples[np.clip(base_int + offset, 0, n - 1)]
-        total += weight * gathered
-        weight_sum += weight
-
-    interpolated = np.where(weight_sum != 0.0, total / weight_sum, 0.0)
-    in_range = (index >= 0.0) & (index <= n - 1)
-    return np.where(in_range, interpolated, 0.0)
-
-
-#: Absolute accuracy the polynomial window must reach against the exact Kaiser window. Chosen
-#: against what it protects rather than for roundness: the kernel's own error is 4.027e-12 of peak
-#: (127 taps, beta = 32, measured against an analytic sinusoid), so 1e-13 leaves a factor of 40
-#: between the approximation and the thing it must not disturb. It is also reachable -- float64
-#: evaluation of a Chebyshev series bottoms out near 2e-14 at this beta, so the target sits above
-#: the arithmetic's own floor rather than chasing it.
-_WINDOW_FIT_TOLERANCE = 1e-13
-
-#: Highest degree tried before giving up. A degree this large means the request is outside what a
-#: polynomial can do in float64, and falling back is better than shipping a silently worse window.
-_WINDOW_FIT_MAX_DEGREE = 64
-
-
-def kaiser_window_chebyshev(beta: float, tolerance: float = _WINDOW_FIT_TOLERANCE) -> tuple[float, ...] | None:
-    """Cache-normalising wrapper; see :func:`_kaiser_window_chebyshev` for the fit itself.
-
-    ``float()`` before the cache, on a reviewer's finding: ``32`` and ``32.0`` are distinct keys to
-    ``lru_cache`` but the same Kaiser window, so an int caller silently paid for a second fit and
-    filled a slot. numpy scalars have the same problem.
-    """
-    return _kaiser_window_chebyshev(float(beta), float(tolerance))
-
-
-@lru_cache(maxsize=32)
-def _kaiser_window_chebyshev(beta: float, tolerance: float) -> tuple[float, ...] | None:
-    """Return Chebyshev coefficients for the Kaiser window as a function of ``v = (x / denom) ** 2``.
-
-    The device kernel evaluates the window ``i0(beta * sqrt(1 - v)) / i0(beta)`` once per tap, 127
-    times per output sample, and that kernel is about 87% of the whole pipeline. Because ``i0`` is
-    even, ``i0(sqrt(w))`` is analytic in ``w``: the window is a smooth function of ``v`` alone, so a
-    polynomial in ``v`` replaces **both** the ``i0`` and the ``sqrt``. Measured on an RTX 3060 in
-    float64, that is **2.18x** on the full kernel, with the output error against an analytic sinusoid
-    unchanged at 4.027e-12 of peak and the two kernels differing by 2.2e-15.
-
-    Fitted here rather than hard-coded because ``beta`` is a caller's choice, and a table for one
-    beta would silently apply the wrong window to every other. ``beta`` is static at trace time, the fit is pure
-    NumPy on the host, and the result is cached, so a run pays for it once per distinct beta.
-
-    **Evaluated in the Chebyshev basis, never converted to monomials.** Converting a degree-24 fit to
-    the monomial basis and using Horner cost three orders of accuracy when measured -- 1.9e-14
-    against 1.8e-11 -- because that conversion is ill-conditioned. The recurrence costs roughly two
-    fused multiply-adds per degree instead of one, which is why the measured speedup is 2.18x rather
-    than the 3.66x a window-only comparison showed.
-
-    Args:
-        beta: Kaiser shape parameter the caller will use.
-        tolerance: Largest acceptable absolute deviation from the exact window.
-
-    **The bound is measured with a margin, not proved.** Acceptance samples an independent, denser
-    grid than the fit used and requires half the tolerance, so a small exceedance between sample
-    points cannot slip through as it once did. A minimax construction would give a genuine bound;
-    this does not claim one. Two independent sweeps across the whole reachable region -- beta up to
-    about 274, since ``validate_kernel`` caps beta at roughly ``(taps + 1) / 4`` and taps is unbounded
-    -- found **no accepted fit over the target**, worst 0.68x at beta around 263. The default beta of
-    32 measures 0.074x.
-
-    **``None`` is reachable in ordinary use, and the boundary is not monotone.** At the default
-    tolerance every beta below about 250 is served by a polynomial, but above that acceptance
-    alternates -- 260 accepted at degree 64, 262 not, 264 accepted, 266 through 270 not, 272
-    accepted -- because degree 64's error oscillates with beta rather than decreasing. A caller in
-    that band gets the ``i0`` path and **no speedup**, and bisecting for a clean threshold will
-    mislead, as it did during review. Such a configuration needs taps of roughly 1000 or more, so it
-    is far from the default, but it is legal and it is not an error.
-
-    Returns:
-        Coefficients in ascending Chebyshev order for the domain ``[0, 1]``, or ``None`` when no
-        degree up to :data:`_WINDOW_FIT_MAX_DEGREE` reaches half of ``tolerance`` on the independent
-        grid -- in which case the caller must keep evaluating ``i0`` rather than accept a worse
-        window.
-    """
-    if not np.isfinite(beta) or beta < 0.0:
-        raise ValueError(f"Kaiser beta must be finite and non-negative; got {beta}.")
-
-    def window(v: np.ndarray) -> np.ndarray:
-        return np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - v))) / np.i0(beta)
-
-    def sampling(uniform: int, decades: int, offset: float) -> np.ndarray:
-        """Uniform points plus logarithmic clusters at **both** ends of [0, 1].
-
-        Both ends, on a reviewer's counterexample. The first version clustered only at ``v -> 1``,
-        where the window is smallest -- but the polynomial's difficulty is at ``v -> 0``, and at
-        ``beta = 16.046`` an independent search found 1,243 points over target there, worst
-        1.03e-13, while the fitting grid saw 9.97e-14 and accepted.
-        """
-        return np.unique(
-            np.concatenate(
-                [
-                    np.linspace(0.0, 1.0, uniform),
-                    np.logspace(-14.0 + offset, -1.0, decades),
-                    1.0 - np.logspace(-14.0 + offset, -1.0, decades),
-                ]
-            ).clip(0.0, 1.0)
-        )
-
-    # Two grids, deliberately different points: fitting on one and accepting on the other is what
-    # makes the check independent rather than circular. Accepting a fit against the very points it
-    # minimised over is how the first version of this passed while exceeding its target between them.
-    fit_grid = sampling(4001, 600, 0.0)
-    check_grid = sampling(7919, 901, 0.37)  # coprime-ish counts and an offset, so the points differ
-    fit_exact = window(fit_grid)
-    check_exact = window(check_grid)
-
-    # Half the target on the independent grid. A margin, because sampling can only ever bound the
-    # error between its points: this is a measured bound with headroom, not a proof, and the
-    # docstring says so rather than calling 1e-13 guaranteed.
-    #
-    # The margin's size is measured, and by adversarial sweeps rather than by this file's author --
-    # who got it wrong twice. Worst inter-grid slippage found by an independent search: **1.54x**
-    # (check grid against a denser one, near beta = 260-280 at degree 64), so a fit accepted at
-    # 0.5 * tolerance can be up to ~0.77 * tolerance in truth: the 2x margin holds with about 1.3x
-    # residual headroom. My own earlier notes put that slippage at 3% and then 1.37x; both came from
-    # measuring only where my own sweep peaked.
-    #
-    # Why the margin is not sampling luck: `i0` is even, so the sqrt branch cancels and
-    # `i0(beta * sqrt(1 - v)) / i0(beta)` is analytic on [0, 1]. Every extremum of the error is
-    # therefore wider than the local grid spacing, and the peak near v -> 0 sits at beta * v ~ 0.6,
-    # which the check grid's logarithmic clustering resolves with ~1e4 points even at beta = 274.
-    acceptance = 0.5 * tolerance
-
-    for degree in range(8, _WINDOW_FIT_MAX_DEGREE + 1, 2):
-        fit = np.polynomial.chebyshev.Chebyshev.fit(fit_grid, fit_exact, degree, domain=[0.0, 1.0])
-        if float(np.max(np.abs(fit(check_grid) - check_exact))) <= acceptance:
-            return tuple(float(c) for c in fit.coef)
-    return None
+__all__ = [
+    "DEFAULT_KAISER_BETA",
+    "DEFAULT_SINC_TAPS",
+    "EARTH_RADIUS_M",
+    "MAXIMUM_ALIGNMENT_SHIFT_SAMPLES",
+    "SPEED_OF_LIGHT_M_S",
+    "edge_padding",
+    "kaiser_window_chebyshev",
+    "require_shift_within_padding",
+    "require_terrestrial_location",
+    "resample_uniform_sinc",
+    "validate_kernel",
+]

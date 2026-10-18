@@ -761,15 +761,16 @@ wheels = [
 
 [[package]]
 name = "gwmock-data"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "astropy" },
     { name = "numpy" },
     { name = "pyfive" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/0f/0b8727939c2da210b3ff9403b8c8e3f3bcea65196faa680d270a104f37a8/gwmock_data-0.2.0.tar.gz", hash = "sha256:705db728c9c77731cdef5dafb211ce3f6791cae621c2fd839d8afd596acc9c4b", size = 234288, upload-time = "2026-10-18T15:23:51.96Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/be/b2c9d25097decc13cb1c350b9842a7b0c9011c7e3efd3f80ef2a9cc015cd/gwmock_data-0.3.0.tar.gz", hash = "sha256:6f671161345bdf626573929aa71e50eae086c525f93ace0eaecfa1cac8564389", size = 279798, upload-time = "2026-10-18T17:01:42.513Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/2c/ef8ac77b4bbc1ff15791be76f5f39b0bc01ff0cdc4119b83511105da34aa/gwmock_data-0.2.0-py3-none-any.whl", hash = "sha256:14347cdbdf651a2cfd3883c0abfd86126eee9283c407539a35d01cbc91fecf11", size = 26971, upload-time = "2026-10-18T15:23:50.973Z" },
+    { url = "https://files.pythonhosted.org/packages/59/b7/c24919f7002700d36c0736b842ff5e10759ddef2c6ba5874f10934f3b496/gwmock_data-0.3.0-py3-none-any.whl", hash = "sha256:dc80725be93eda70af8f9af27bcd994033fc5dfd5ee5d405869f364549f9bca7", size = 48576, upload-time = "2026-10-18T17:01:41.317Z" },
 ]
 
 [[package]]
@@ -844,7 +845,7 @@ release = [
 [package.metadata]
 requires-dist = [
     { name = "astropy", specifier = ">=7.0" },
-    { name = "gwmock-data", specifier = ">=0.2.0" },
+    { name = "gwmock-data", specifier = ">=0.3.0" },
     { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.12" },
