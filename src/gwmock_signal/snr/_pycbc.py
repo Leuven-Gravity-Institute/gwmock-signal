@@ -16,16 +16,20 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
+
+from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
 
 _PYCBC_IMPORT_ERROR = "pycbc is not installed. Run: pip install 'gwmock-signal[pycbc]'"
 
 
 def optimal_snr(
-    strain: TimeSeries,
+    strain: TimeSeries | gwpy.timeseries.TimeSeries,
     psd: Any,
     low_frequency_cutoff: float = 20.0,
     target_delta_f: float | None = None,
@@ -42,7 +46,8 @@ def optimal_snr(
     interpolated onto the padded grid via pycbc.psd.interpolate.
 
     Args:
-        strain: Signal strain as a gwpy TimeSeries.
+        strain: Signal strain, a :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy
+            ``TimeSeries``.
         psd: Noise PSD as a pycbc FrequencySeries.
         low_frequency_cutoff: Lower frequency bound in Hz.
         target_delta_f: Target frequency resolution in Hz. Default: min of the
@@ -61,7 +66,7 @@ def optimal_snr(
     except ImportError as exc:
         raise ImportError(_PYCBC_IMPORT_ERROR) from exc
 
-    td = strain.to_pycbc()
+    td = as_timeseries(strain).to_pycbc()
     natural_delta_f = 1.0 / float(td.duration)
 
     if target_delta_f is None:
@@ -89,12 +94,12 @@ def optimal_snr(
 
 
 def matched_filter_snr(
-    data: TimeSeries,
-    template: TimeSeries,
+    data: TimeSeries | gwpy.timeseries.TimeSeries,
+    template: TimeSeries | gwpy.timeseries.TimeSeries,
     psd: Any,
     low_frequency_cutoff: float = 20.0,
     target_delta_f: float | None = None,
-) -> TimeSeries:
+) -> gwpy.timeseries.TimeSeries:
     """Return the matched-filter SNR time series.
 
     Computes the SNR magnitude ``|<template|data>_PSD| / sigma`` via
@@ -111,8 +116,8 @@ def matched_filter_snr(
     extension of already-long data segments.
 
     Args:
-        data: Data stream as a gwpy ``TimeSeries``.
-        template: Template waveform as a gwpy ``TimeSeries``.
+        data: Data stream, a :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy ``TimeSeries``.
+        template: Template waveform, of either kind.
         psd: Noise PSD as a ``pycbc.types.FrequencySeries``.
         low_frequency_cutoff: Lower frequency bound in Hz.
         target_delta_f: Target frequency resolution in Hz. Default: min of the
@@ -131,8 +136,8 @@ def matched_filter_snr(
     except ImportError as exc:
         raise ImportError(_PYCBC_IMPORT_ERROR) from exc
 
-    td_template = template.to_pycbc()
-    td_data = data.to_pycbc()
+    td_template = as_timeseries(template).to_pycbc()
+    td_data = as_timeseries(data).to_pycbc()
     n_data = len(td_data)
 
     natural_delta_f = 1.0 / float(td_template.duration)
@@ -176,4 +181,4 @@ def matched_filter_snr(
         delta_t=snr_pycbc.delta_t,
         epoch=snr_pycbc.start_time,
     )
-    return TimeSeries.from_pycbc(snr_trimmed)
+    return _public_output(TimeSeries.from_pycbc(snr_trimmed))

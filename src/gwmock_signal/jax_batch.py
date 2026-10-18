@@ -32,9 +32,8 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
-from gwmock_signal.injection import inject_strains_sequential
+from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.jax_projection import (
@@ -49,9 +48,11 @@ from gwmock_signal.projection.resampling import (
 )
 from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
 from gwmock_signal.sampling_grid import SamplingGrid
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
 
 if TYPE_CHECKING:
+    import gwpy.timeseries
     from jax import Array
 
 
@@ -716,7 +717,7 @@ def assemble_segments(
     *,
     segment_duration: float,
     segment_start_times: Sequence[float],
-    backgrounds: Sequence[Mapping[str, TimeSeries]] | None = None,
+    backgrounds: Sequence[Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries]] | None = None,
     interpolate_if_offset: bool = True,
 ) -> list[DetectorStrainStack]:
     """Scatter the batched signals into fixed-duration data segments (in memory).
@@ -730,8 +731,9 @@ def assemble_segments(
     output lattice and superposition is an exact integer-offset add. The segment starts are
     then required to lie on that same grid, and are rejected rather than rounded if they do
     not. Otherwise signals fall between samples and
-    :func:`~gwmock_signal.injection.inject_strains_sequential` resamples them, which is only
-    accurate for heavily oversampled strain.
+    each is resampled onto the segment's lattice, as
+    :func:`~gwmock_signal.injection.inject_strain` does, which is only accurate for heavily
+    oversampled strain.
 
     Args:
         batch: Batched per-event/detector strain from :func:`simulate_cbc_batch`.
@@ -740,10 +742,11 @@ def assemble_segments(
             contiguous tiling, e.g. ``start + k * segment_duration``).
         backgrounds: Optional per-segment backgrounds, aligned with
             ``segment_start_times``; each maps detector name to a background
-            ``TimeSeries`` to inject into. When ``None`` (default), zero-noise
+            time series to inject into, a :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy
+            ``TimeSeries``. When ``None`` (default), zero-noise
             segments are created.
-        interpolate_if_offset: Forwarded to ``inject_strains_sequential`` for
-            signals whose start is not on a segment-sample boundary. Unused when the batch
+        interpolate_if_offset: Whether to resample, as ``inject_strain`` does, a signal whose
+            start is not on a segment-sample boundary. Unused when the batch
             carries a sampling grid, because then nothing needs interpolating.
 
     Returns:
@@ -753,6 +756,8 @@ def assemble_segments(
     """
     if backgrounds is not None and len(backgrounds) != len(segment_start_times):
         raise ValueError("backgrounds must be aligned one-to-one with segment_start_times.")
+    if backgrounds is not None:
+        backgrounds = [{name: as_timeseries(segment[name]) for name in batch.detector_names} for segment in backgrounds]
 
     strain = np.asarray(batch.strain)
     _, _, n_samples = strain.shape
@@ -821,16 +826,54 @@ def assemble_segments(
                     sampling_frequency=sampling_frequency,
                 )
                 continue
-            if backgrounds is not None:
-                background = backgrounds[k][name]
-            else:
-                background = TimeSeries(np.zeros(n_segment_samples), t0=seg_start, sample_rate=sampling_frequency)
-            injections = [TimeSeries(strain[i, d], t0=float(signal_start[i]), dt=dt) for i in overlapping]
-            channels[name] = inject_strains_sequential(
-                background, injections, interpolate_if_offset=interpolate_if_offset
+            channels[name] = _unaligned_channel(
+                background=None if backgrounds is None else backgrounds[k][name],
+                strain=strain[:, d],
+                signal_start=signal_start,
+                overlapping=overlapping,
+                n_segment_samples=n_segment_samples,
+                segment_start=seg_start,
+                sampling_frequency=sampling_frequency,
+                interpolate_if_offset=interpolate_if_offset,
             )
         segments.append(DetectorStrainStack.from_mapping(detectors, channels))
     return segments
+
+
+def _unaligned_channel(  # noqa: PLR0913
+    *,
+    background: TimeSeries | None,
+    strain: np.ndarray,
+    signal_start: np.ndarray,
+    overlapping: np.ndarray,
+    n_segment_samples: int,
+    segment_start: float,
+    sampling_frequency: float,
+    interpolate_if_offset: bool,
+) -> TimeSeries:
+    """Add every overlapping signal into one segment and detector, resampling those off its lattice.
+
+    Args:
+        background: Segment to add into, or ``None`` for a zero background. Never mutated.
+        strain: Per-event strain for one detector, shape ``(n_events, n_samples)``.
+        signal_start: GPS time of each event's first sample.
+        overlapping: Indices of events that overlap this segment.
+        n_segment_samples: Samples in the segment.
+        segment_start: GPS time of the segment's first sample.
+        sampling_frequency: Sample rate in Hz.
+        interpolate_if_offset: Whether to resample a signal that is off the segment's lattice.
+
+    Returns:
+        The background plus every overlapping signal.
+    """
+    if background is None:
+        channel = TimeSeries(np.zeros(n_segment_samples), t0=segment_start, sample_rate=sampling_frequency)
+    else:
+        channel = background.copy()
+    for i in overlapping:
+        injection = TimeSeries(strain[i], t0=float(signal_start[i]), sample_rate=sampling_frequency)
+        channel = _inject(channel, injection, interpolate_if_offset=interpolate_if_offset)
+    return channel
 
 
 def _require_backgrounds_match_segments(  # noqa: PLR0913
@@ -904,13 +947,13 @@ def _require_background_matches_segment(  # noqa: PLR0913
     Raises:
         ValueError: If the background's length, sample rate or epoch does not match the segment.
     """
-    if len(background) != n_segment_samples:
+    if background.n_samples != n_segment_samples:
         raise ValueError(
-            f"background for {name} at segment index {segment_index} has {len(background)} "
+            f"background for {name} at segment index {segment_index} has {background.n_samples} "
             f"samples, but the segment is {n_segment_samples}. A shorter background silently "
             f"yields a shorter segment, so it is rejected."
         )
-    background_rate = float(background.sample_rate.value)
+    background_rate = background.sample_rate
     # Relative comparison: a rate that is not a power of two does not round-trip exactly through
     # gwpy's dt, so exact equality would reject a background the caller built correctly.
     if not np.isclose(background_rate, sampling_frequency, rtol=1e-12, atol=0.0):
@@ -918,7 +961,7 @@ def _require_background_matches_segment(  # noqa: PLR0913
             f"background for {name} at segment index {segment_index} is sampled at "
             f"{background_rate} Hz, but the batch is at {sampling_frequency} Hz."
         )
-    background_index = int(grid.require_on_lattice(float(background.t0.value), name=f"t0 of background for {name}"))
+    background_index = int(grid.require_on_lattice(background.t0, name=f"t0 of background for {name}"))
     if background_index != segment_index:
         raise ValueError(
             f"background for {name} starts at lattice index {background_index}, but the segment "
@@ -941,9 +984,8 @@ def _aligned_channel(  # noqa: PLR0913
 ) -> TimeSeries:
     """Superpose one segment and detector, wrapping the result exactly once.
 
-    The accumulator is a bare array that becomes a ``TimeSeries`` only at the end. Building the
-    accumulator *as* a ``TimeSeries`` cost two full copies of every segment -- one to obtain a
-    writable buffer, one from gwpy's copy-on-construct -- and the scatter runs at ~1.1x the
+    The accumulator is a bare array, copied once from the background and wrapped in a
+    ``TimeSeries`` only at the end, which does not copy it again. The scatter runs at ~1.1x the
     memory-bandwidth bound for the traffic it must do, so a redundant traversal of the segment is
     a first-order cost rather than bookkeeping.
 
@@ -963,11 +1005,10 @@ def _aligned_channel(  # noqa: PLR0913
         data = np.zeros(n_segment_samples, dtype=float)
         unit = None
     else:
-        data = np.array(background.value, dtype=float, copy=True)
+        data = np.array(background.data, dtype=float, copy=True)
         unit = background.unit
     _superpose_on_lattice(data, strain, offsets, overlapping)
-    # copy=False hands gwpy the buffer just built here, which nothing else holds a reference to.
-    return TimeSeries(data, t0=segment_start, sample_rate=sampling_frequency, unit=unit, copy=False)
+    return TimeSeries(data, t0=segment_start, sample_rate=sampling_frequency, unit=unit)
 
 
 def _superpose_on_lattice(

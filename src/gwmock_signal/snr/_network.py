@@ -53,15 +53,16 @@ def network_optimal_snr(
     """
     det_names = list(stack.detector_names)
     n_det = len(det_names)
-    ref_ts = stack[det_names[0]]
-    n_samples = len(ref_ts.value)
-    dt = float(ref_ts.dt.value)
+    channels = stack._native()
+    ref_ts = channels[det_names[0]]
+    n_samples = ref_ts.n_samples
+    dt = ref_ts.dt
     delta_f = 1.0 / (n_samples * dt)
     freqs = np.fft.rfftfreq(n_samples, d=dt)
     n_freq = len(freqs)
 
     # FFT each detector with dt normalisation (Whittle convention, Eq. 9)
-    s_tilde = np.array([np.fft.rfft(stack[d].value) * dt for d in det_names])  # (n_det, n_freq)
+    s_tilde = np.array([np.fft.rfft(np.asarray(channels[d].data)) * dt for d in det_names])  # (n_det, n_freq)
 
     # Build spectral noise matrix s_n[i, j, k] for each frequency bin k
     s_n = np.zeros((n_det, n_det, n_freq), dtype=complex)
