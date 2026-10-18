@@ -101,6 +101,21 @@ def inject_strains_sequential(
     return _public_output(result)
 
 
+def _add_strain(background: TimeSeries, signal: np.ndarray) -> TimeSeries:
+    """Return ``background`` plus ``signal``, a strain sampled on the background's own grid.
+
+    For signals generated on the background's samples, so nothing is aligned or resampled.
+
+    Raises:
+        ValueError: If the background is not strain, or the lengths differ.
+    """
+    if background.unit != "strain":
+        raise ValueError(f"the background must be strain to add a strain signal to; its unit is {background.unit!r}.")
+    if background.n_samples != len(signal):
+        raise ValueError(f"the signal has {len(signal)} samples but the background has {background.n_samples}.")
+    return background.with_data(np.asarray(background.data, dtype=float) + signal)
+
+
 def _inject(target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset: bool) -> TimeSeries:
     """Return ``target`` plus the part of ``injection`` that falls within it, as a new series."""
     for role, series in (("target", target), ("injection", injection)):

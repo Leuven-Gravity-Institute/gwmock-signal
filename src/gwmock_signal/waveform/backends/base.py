@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from gwpy.timeseries import TimeSeries
+if TYPE_CHECKING:
+    from gwpy.timeseries import TimeSeries
 
 _MISSING: Final[object] = object()
 

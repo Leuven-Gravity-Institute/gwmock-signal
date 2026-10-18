@@ -19,9 +19,12 @@ See `docs/user_guide/waveform.md` (examples) and `docs/api/waveform/index.md` (A
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from gwpy.timeseries import TimeSeries
+from gwmock_signal.timeseries import TimeSeries, _public_output
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
 
 
 def get_td_waveform(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
@@ -35,7 +38,7 @@ def pycbc_waveform_wrapper(
     minimum_frequency: float,
     waveform_model: str,
     **kwargs: Any,
-) -> dict[str, TimeSeries]:
+) -> dict[str, gwpy.timeseries.TimeSeries]:
     """Generate plus and cross polarizations with PyCBC and return GWpy time series.
 
     Calls [`pycbc.waveform.get_td_waveform`](https://pycbc.org/pycbc/latest/html/waveform.html)
@@ -73,6 +76,7 @@ def pycbc_waveform_wrapper(
     hp.start_time += tc
     hc.start_time += tc
     return {
-        "plus": TimeSeries.from_pycbc(hp, copy=True),
-        "cross": TimeSeries.from_pycbc(hc, copy=True),
+        # Copied, so the returned series do not share PyCBC's buffers.
+        "plus": _public_output(TimeSeries.from_pycbc(hp).copy()),
+        "cross": _public_output(TimeSeries.from_pycbc(hc).copy()),
     }

@@ -45,12 +45,13 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.timeseries import TimeSeries, _public_output
 from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 if TYPE_CHECKING:
+    import gwpy.timeseries
     from jax import Array
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
@@ -617,7 +618,7 @@ class RippleBackend(WaveformBackend):
         sampling_frequency: float,
         minimum_frequency: float,
         **params: object,
-    ) -> dict[str, TimeSeries]:
+    ) -> dict[str, gwpy.timeseries.TimeSeries]:
         """Generate plus/cross polarizations from ripple, conditioned to time domain."""
         fd = self.generate_fd_polarizations(
             approximant,
@@ -627,10 +628,9 @@ class RippleBackend(WaveformBackend):
         )
         hp_t, hc_t, epoch = self._to_time_domain(fd)
         t0 = epoch + tc
-        dt = 1.0 / sampling_frequency
         return {
-            "plus": TimeSeries(hp_t, t0=t0, dt=dt),
-            "cross": TimeSeries(hc_t, t0=t0, dt=dt),
+            "plus": _public_output(TimeSeries(hp_t, t0=t0, sample_rate=sampling_frequency)),
+            "cross": _public_output(TimeSeries(hc_t, t0=t0, sample_rate=sampling_frequency)),
         }
 
     def generate_fd_polarizations(

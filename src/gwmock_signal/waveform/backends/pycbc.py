@@ -16,11 +16,12 @@
 from __future__ import annotations
 
 import importlib
-from typing import Final
-
-from gwpy.timeseries import TimeSeries
+from typing import TYPE_CHECKING, Final
 
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
+
+if TYPE_CHECKING:
+    from gwpy.timeseries import TimeSeries
 
 _PYCBC_IMPORT_ERROR = "pycbc is not installed. Run: pip install 'gwmock-signal[pycbc]'"
 

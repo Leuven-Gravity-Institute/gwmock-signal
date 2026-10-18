@@ -75,3 +75,21 @@ class TestPyCBCWaveformWrapper:
             result = pycbc_waveform_wrapper(**default_params)
             assert isinstance(result["plus"], TimeSeries)
             assert isinstance(result["cross"], TimeSeries)
+
+
+def test_the_returned_series_do_not_share_pycbc_s_buffers(monkeypatch):
+    """Writing to a returned polarization leaves PyCBC's series alone, and the other way round."""
+    from pycbc.types import TimeSeries as PyCBCTimeSeries
+
+    hp = PyCBCTimeSeries(np.zeros(8), delta_t=1.0 / 4096, epoch=0.0)
+    hc = PyCBCTimeSeries(np.zeros(8), delta_t=1.0 / 4096, epoch=0.0)
+    monkeypatch.setattr("gwmock_signal.waveform.pycbc_wrapper.get_td_waveform", lambda **_: (hp, hc))
+
+    result = pycbc_waveform_wrapper(
+        tc=10.0, sampling_frequency=4096, waveform_model="IMRPhenomD", minimum_frequency=20.0
+    )
+    result["plus"].value[0] = 1.0
+    hc.numpy()[0] = 2.0
+
+    assert hp.numpy()[0] == 0.0
+    assert result["cross"].value[0] == 0.0

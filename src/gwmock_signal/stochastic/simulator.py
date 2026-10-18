@@ -16,11 +16,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.simulator import GWSimulator
 from gwmock_signal.stochastic.overlap import (
@@ -32,6 +32,10 @@ from gwmock_signal.stochastic.overlap import (
     detector_names as normalize_detector_names,
 )
 from gwmock_signal.stochastic.spectrum import H0_SI, StochasticBackgroundSpectrum
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
 
 
 class StochasticBackgroundSimulator(GWSimulator):
@@ -80,7 +84,7 @@ class StochasticBackgroundSimulator(GWSimulator):
         self,
         params: Mapping[str, Any],
         detector_names: Sequence[DetectorSpec],
-        background: Mapping[str, TimeSeries] | None = None,
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries] | None = None,
         *,
         sampling_frequency: float,
         minimum_frequency: float,
@@ -190,22 +194,20 @@ class StochasticBackgroundSimulator(GWSimulator):
         signal: Mapping[str, np.ndarray],
         names: Sequence[str],
         *,
-        background: Mapping[str, TimeSeries] | None,
+        background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries] | None,
         sampling_frequency: float,
     ) -> DetectorStrainStack:
         """Convert sampled arrays to a detector stack, adding background if supplied."""
-        t0 = 0.0 if background is None else float(next(iter(background.values())).t0.value)
+        t0 = 0.0 if background is None else as_timeseries(next(iter(background.values()))).t0
         if background is not None:
+            channels = {}
             for detector in names:
                 if detector not in background:
                     raise KeyError(f"Missing background for detector {detector!r}.")
-                if len(background[detector]) != len(signal[detector]):
+                channels[detector] = as_timeseries(background[detector])
+                if channels[detector].n_samples != len(signal[detector]):
                     raise ValueError("background channels must match the SGWB sample count.")
-            strains = {
-                detector: background[detector]
-                + TimeSeries(signal[detector], t0=t0, sample_rate=sampling_frequency, unit="strain")
-                for detector in names
-            }
+            strains = {detector: _add_strain(channels[detector], signal[detector]) for detector in names}
         else:
             strains = {
                 detector: TimeSeries(

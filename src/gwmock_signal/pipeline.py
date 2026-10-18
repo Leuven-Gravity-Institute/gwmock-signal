@@ -20,21 +20,24 @@ reference).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
-
-from gwpy.timeseries import TimeSeries
+from typing import TYPE_CHECKING, Any
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.simulator import CBCSimulator
 from gwmock_signal.waveform import WaveformBackend
 
+if TYPE_CHECKING:
+    import gwpy.timeseries
+
+    from gwmock_signal.timeseries import TimeSeries
+
 
 def inject_cbc_signal(  # noqa: PLR0913
     waveform_model: str,
     params: dict[str, Any],
     detector_names: Sequence[str | CustomDetector],
-    background: Mapping[str, TimeSeries],
+    background: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
     *,
     sampling_frequency: float,
     minimum_frequency: float,

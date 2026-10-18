@@ -16,7 +16,7 @@ from gwpy.timeseries import TimeSeries
 import gwmock_signal
 from gwmock_signal import GWSimulator, register_simulator_backend, resolve_simulator_backend
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.network import _project
 from gwmock_signal.simulator import CBCSimulator, TransientSimulator, _json_default
 from gwmock_signal.waveform import LALSimulationBackend
 
@@ -255,8 +255,8 @@ class TestCBCSimulatorMissingParam:
 class TestCBCSimulatorSimulate:
     """Mock the full pipeline to test CBCSimulator.simulate returns DetectorStrainStack."""
 
-    @patch("gwmock_signal.simulator.project_polarizations_to_network")
-    @patch("gwmock_signal.simulator.inject_strain")
+    @patch("gwmock_signal.simulator._project")
+    @patch("gwmock_signal.simulator._inject")
     @patch("gwmock_signal.simulator.WaveformFactory")
     def test_simulate_returns_detector_strain_stack(
         self,
@@ -293,8 +293,8 @@ class TestCBCSimulatorSimulate:
         assert isinstance(result, DetectorStrainStack)
         assert result.detector_names == tuple(detector_names)
 
-    @patch("gwmock_signal.simulator.project_polarizations_to_network")
-    @patch("gwmock_signal.simulator.inject_strain")
+    @patch("gwmock_signal.simulator._project")
+    @patch("gwmock_signal.simulator._inject")
     @patch("gwmock_signal.simulator.WaveformFactory")
     def test_simulate_calls_pipeline_steps_in_order(
         self,
@@ -365,14 +365,14 @@ class TestCBCSimulatorSimulate:
 
 
 class TestCBCSimulatorEndToEnd:
-    """Non-mocked assembly test: real project_polarizations_to_network and inject_strain."""
+    """Non-mocked assembly test: the real projection and injection."""
 
     @patch("gwmock_signal.waveform.pycbc_wrapper.get_td_waveform")
     def test_gw150914_like_params_on_two_detector_network(self, mock_get_td):
         """CBCSimulator.simulate returns a DetectorStrainStack for GW150914-like params.
 
         WaveformFactory/PyCBC waveform generation is mocked at the get_td_waveform
-        boundary; project_polarizations_to_network and inject_strain run unpatched,
+        boundary; the projection and the injection run unpatched,
         exercising the full assembled pipeline with real geometry and injection logic.
         The plus polarization is set to a unit-amplitude signal so that the antenna
         response at the GW150914 sky position produces a non-zero projected strain,
@@ -792,8 +792,8 @@ class TestTheProjectionBackend:
             minimum_frequency=20.0,
         )
         with patch(
-            "gwmock_signal.simulator.project_polarizations_to_network",
-            wraps=project_polarizations_to_network,
+            "gwmock_signal.simulator._project",
+            wraps=_project,
         ) as projection:
             device = self._simulator("jax").simulate(
                 _MINIMAL_PARAMS,
