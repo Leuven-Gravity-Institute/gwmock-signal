@@ -88,7 +88,7 @@ jobs:
               if: ${{ steps.scope.outputs.run == 'true' }}
               uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
               with:
-                  python-version: '3.12'
+                  python-version: '3.13'
 
             - name: Compare with lalsuite
               id: compare

@@ -35,7 +35,7 @@ submitting a pull request—this guide will help you get started.
 
     ```shell
     # Create a virtual environment (recommended with uv)
-    uv venv --python 3.12
+    uv venv --python 3.13
     source .venv/bin/activate  # On Windows: .venv\Scripts\activate
     uv sync --group dev
     ```

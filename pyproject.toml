@@ -13,12 +13,11 @@ classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dynamic = ["version"]
 dependencies = [
   "typer>=0.16.0", # click 8.2 compatibility; the SPEC 0 floor (0.13) predates it
@@ -32,6 +31,8 @@ dependencies = [
   # cp315 wheel is published; drop the marker then.
   "lalsuite>=7.26; python_version < '3.15'",
   "pyyaml>=6.0",
+  # The time series, its sampling grid and HDF5 I/O, shared by the gwmock packages.
+  "gwmock-data>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -63,7 +64,10 @@ jax = ["ripplegw>=0.3.1"]
 [tool.dependency-support-policy]
 policy = "spec0"
 groups = ["project", "optional"]
-exclude = ["gwmock-noise"]       # ecosystem sibling: Renovate keeps it at latest
+exclude = [
+  "gwmock-noise",
+  "gwmock-data",
+] # ecosystem siblings: Renovate keeps them at latest
 lock = "minimal"
 
 
@@ -161,7 +165,7 @@ pytest_add_cli_args = [
 
 [tool.ruff]
 line-length = 120 # Matches Black's default
-target-version = "py312" # Align with CI (3.12–3.14) and requires-python (>=3.12)
+target-version = "py313" # Align with CI (3.13–3.15) and requires-python (>=3.13)
 lint.extend-select = [
   "E",
   "F",

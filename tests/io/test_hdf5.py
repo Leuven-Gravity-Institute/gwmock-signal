@@ -1,18 +1,29 @@
-"""HDF5 in GWpy's ``TimeSeriesDict`` layout, written and read with h5py alone.
+#
+# Copyright (C) 2026 Leuven Gravity Institute
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+"""HDF5 for a whole detector stack, and the extra each format names when its package is missing.
 
-A file written here must load with GWpy exactly, and a file GWpy wrote must load here exactly: the
-point of the layout is that the two are interchangeable.
+The HDF5 layout itself, ``write_hdf5`` and ``read_hdf5``, are gwmock-data's and are tested there; this
+module covers what this package adds on top: ``DetectorStrainStack.write`` and ``read``.
 """
 
 from __future__ import annotations
 
 import importlib
 
-import h5py
 import numpy as np
 import pytest
 
-from gwmock_signal.io import read_hdf5, write_hdf5
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.timeseries import TimeSeries
 
@@ -23,118 +34,23 @@ def _series(rate: float = 4096.0, **kwargs: object) -> TimeSeries:
     return TimeSeries(np.arange(16.0), t0=_T0, sample_rate=rate, **kwargs)
 
 
-@pytest.mark.parametrize("rate", [4096.0, 3000.0, 7.5])
-def test_a_round_trip_keeps_samples_timing_name_and_unit(tmp_path, rate):
-    """Including rates that are not powers of two."""
-    written = {"H1": _series(rate, name="H1:STRAIN", unit="strain"), "L1": _series(rate)}
+def test_a_stack_round_trips_through_hdf5(tmp_path):
+    """The stack's samples and timing survive a write and a read."""
+    pytest.importorskip("h5py")
+    stack = DetectorStrainStack.from_mapping(["H1", "L1"], {"H1": _series(), "L1": _series()})
+    stack.write(tmp_path / "stack.h5")
 
-    write_hdf5(written, tmp_path / "out.h5")
-    back = read_hdf5(tmp_path / "out.h5")
+    back = DetectorStrainStack.read(tmp_path / "stack.h5", format="hdf5")
 
-    assert list(back) == ["H1", "L1"]
-    for key, series in written.items():
-        assert np.array_equal(back[key].data, series.data)
-        assert (back[key].t0, back[key].sample_rate) == (_T0, rate)
-    assert (back["H1"].name, back["H1"].unit) == ("H1:STRAIN", "strain")
-    assert (back["L1"].name, back["L1"].unit) == (None, None)
-
-
-def test_a_nameless_series_round_trips_with_gwpy_as_nameless(tmp_path):
-    """GWpy writes no name attribute for a nameless series, and reads one as nameless; so do these."""
-    timeseries = pytest.importorskip("gwpy.timeseries")
-    write_hdf5({"L1": _series()}, tmp_path / "ours.h5")
-    timeseries.TimeSeriesDict({"L1": timeseries.TimeSeries(np.zeros(4), t0=0.0, sample_rate=1.0)}).write(
-        tmp_path / "gwpy.h5", format="hdf5"
-    )
-
-    with h5py.File(tmp_path / "ours.h5") as ours, h5py.File(tmp_path / "gwpy.h5") as theirs:
-        assert set(ours["L1"].attrs) == set(theirs["L1"].attrs)
-    assert timeseries.TimeSeriesDict.read(tmp_path / "ours.h5", format="hdf5")["L1"].name is None
-    assert read_hdf5(tmp_path / "gwpy.h5")["L1"].name is None
-
-
-def test_gwpy_reads_what_is_written(tmp_path):
-    """The file is a GWpy ``TimeSeriesDict`` file."""
-    timeseries = pytest.importorskip("gwpy.timeseries")
-    write_hdf5({"H1": _series(3000.0, unit="strain")}, tmp_path / "out.h5")
-
-    back = timeseries.TimeSeriesDict.read(tmp_path / "out.h5", format="hdf5")
-
-    assert np.array_equal(back["H1"].value, np.arange(16.0))
-    assert back["H1"].t0.value == _T0
-    assert back["H1"].sample_rate.value == 3000.0
-    assert str(back["H1"].unit) == "strain"
-
-
-def test_what_gwpy_writes_is_read(tmp_path):
-    """And the other way round, at a rate that is not a power of two."""
-    timeseries = pytest.importorskip("gwpy.timeseries")
-    original = timeseries.TimeSeriesDict(
-        {"V1": timeseries.TimeSeries(np.arange(8.0), t0=_T0, sample_rate=3000.0, name="V1", unit="strain")}
-    )
-    original.write(tmp_path / "gwpy.h5", format="hdf5")
-
-    back = read_hdf5(tmp_path / "gwpy.h5")
-
-    assert np.array_equal(back["V1"].data, np.arange(8.0))
-    assert (back["V1"].t0, back["V1"].sample_rate, back["V1"].name, back["V1"].unit) == (_T0, 3000.0, "V1", "strain")
-
-
-def test_the_datasets_are_compressed(tmp_path):
-    """As GWpy writes them."""
-    write_hdf5({"H1": _series()}, tmp_path / "out.h5")
-
-    with h5py.File(tmp_path / "out.h5") as handle:
-        assert handle["H1"].compression == "gzip"
-        assert handle["H1"].attrs["xunit"] == "s"
-
-
-def test_a_multi_row_series_is_refused(tmp_path):
-    """A dataset is one channel."""
-    with pytest.raises(ValueError, match="must be one-dimensional"):
-        write_hdf5({"H1": TimeSeries(np.zeros((2, 4)), t0=0.0, sample_rate=1.0)}, tmp_path / "out.h5")
-
-
-def test_a_dataset_without_timing_is_refused(tmp_path):
-    """A bare array is not a time series."""
-    with h5py.File(tmp_path / "bare.h5", "w") as handle:
-        handle.create_dataset("H1", data=np.zeros(4))
-
-    with pytest.raises(ValueError, match="no x0 and dx attributes"):
-        read_hdf5(tmp_path / "bare.h5")
-
-
-def test_a_time_axis_in_other_units_is_refused(tmp_path):
-    """Only seconds are understood."""
-    with h5py.File(tmp_path / "ms.h5", "w") as handle:
-        dataset = handle.create_dataset("H1", data=np.zeros(4))
-        dataset.attrs.update({"x0": 0.0, "dx": 1.0, "xunit": "ms"})
-
-    with pytest.raises(ValueError, match="only seconds"):
-        read_hdf5(tmp_path / "ms.h5")
-
-
-def test_a_broken_installation_is_not_reported_as_missing(monkeypatch, tmp_path):
-    """A part of an installed package that fails to import is re-raised as it is."""
-    real_import = importlib.import_module
-
-    def broken(name, *args, **kwargs):
-        if name == "h5py":
-            raise ModuleNotFoundError("No module named 'h5py._internal'", name="h5py._internal")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(importlib, "import_module", broken)
-
-    with pytest.raises(ModuleNotFoundError, match=r"h5py\._internal") as raised:
-        write_hdf5({"H1": _series()}, tmp_path / "out.h5")
-    assert "gwmock-signal[" not in str(raised.value)
+    assert list(back.detector_names) == ["H1", "L1"]
+    assert back.t0 == _T0
+    assert back.sample_rate == 4096.0
+    np.testing.assert_array_equal(back.data, stack.data)
 
 
 @pytest.mark.parametrize(
     ("call", "package", "extra"),
     [
-        (lambda path: write_hdf5({"H1": _series()}, path), "h5py", "hdf5"),
-        (read_hdf5, "h5py", "hdf5"),
         (lambda path: DetectorStrainStack.from_mapping(["H1"], {"H1": _series()}).write(path), "h5py", "hdf5"),
         (lambda path: DetectorStrainStack.read(path, format="hdf5"), "h5py", "hdf5"),
         (

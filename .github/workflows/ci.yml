@@ -15,12 +15,12 @@ jobs:
                 # (lowest-direct) runs on ubuntu with the oldest supported
                 # Python, since floor versions predate newer interpreters'
                 # wheels.
-                python-version: ['3.12', '3.13', '3.14']
+                python-version: ['3.13', '3.14']
                 os: [ubuntu-latest, macos-latest]
                 resolution: [highest]
                 include:
                     - os: ubuntu-latest
-                      python-version: '3.12'
+                      python-version: '3.13'
                       resolution: lowest-direct
         runs-on: ${{ matrix.os }}
         steps:
@@ -75,14 +75,14 @@ jobs:
               run: >-
                   uv run --no-sync pytest -p no:cacheprovider -o addopts= -o
                   pythonpath= tests/test_core_install.py
-                  tests/test_timeseries.py
+                  tests/test_data_reexports.py
 
     test-jax:
         # Exercises the optional JAX/ripple waveform backend (the [jax] extra),
         # which is not part of the default install. Same matrix as `test`.
         strategy:
             matrix:
-                python-version: ['3.12', '3.13', '3.14']
+                python-version: ['3.13', '3.14']
                 os: [ubuntu-latest, macos-latest]
         runs-on: ${{ matrix.os }}
         # Pins ripple's ephemeris cache to one path on every runner. Its default location is

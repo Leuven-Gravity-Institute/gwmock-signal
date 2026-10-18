@@ -153,11 +153,11 @@ def test_hdf5_without_h5py_names_the_extra():
     try:
         import h5py  # noqa: F401
     except ModuleNotFoundError:
-        from gwmock_signal.io import write_hdf5
-        from gwmock_signal.timeseries import TimeSeries
+        from gwmock_signal import DetectorStrainStack, TimeSeries
 
+        stack = DetectorStrainStack.from_mapping(["H1"], {"H1": TimeSeries([0.0], t0=0.0, sample_rate=1.0)})
         with pytest.raises(ModuleNotFoundError, match=r"pip install 'gwmock-signal\[hdf5\]'"):
-            write_hdf5({"H1": TimeSeries([0.0], t0=0.0, sample_rate=1.0)}, "unused.h5")
+            stack.write("unused.h5")
     else:
         pytest.skip("h5py is installed; tests/io/test_hdf5.py covers this case")
 

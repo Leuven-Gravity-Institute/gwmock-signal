@@ -27,12 +27,12 @@ pages for more details:
 
 ### Requirements
 
-- Python 3.12-3.14 (We adopt the SPEC 0 policy for the Python support version)
+- Python 3.13-3.15 (We adopt the SPEC 0 policy for the Python support version)
 - Operating System: Linux, or macOS
 
-**Note:** The package is built and tested against **Python 3.12-3.14**
-(`requires-python` is `>=3.12`). When creating a virtual environment with `uv`,
-pin a supported interpreter, for example `uv venv --python 3.12`, so you do not
+**Note:** The package is built and tested against **Python 3.13-3.15**
+(`requires-python` is `>=3.13`). When creating a virtual environment with `uv`,
+pin a supported interpreter, for example `uv venv --python 3.13`, so you do not
 accidentally pick an unsupported version.
 
 ### Install from PyPI
@@ -41,7 +41,7 @@ The recommended way to install `gwmock-signal` is from PyPI:
 
 ```bash
 # Create a virtual environment (recommended with uv)
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install gwmock-signal
 ```
@@ -63,7 +63,7 @@ For the latest development version:
 git clone git@github.com:Leuven-Gravity-Institute/gwmock-signal.git
 cd gwmock-signal
 # Create a virtual environment (recommended with uv)
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
 ```
@@ -77,7 +77,7 @@ git clone git@github.com:Leuven-Gravity-Institute/gwmock-signal.git
 cd gwmock-signal
 
 # Create a virtual environment (recommended with uv)
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync --group dev
 

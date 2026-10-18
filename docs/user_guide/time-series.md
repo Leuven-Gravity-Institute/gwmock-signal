@@ -9,7 +9,10 @@ description:
 
 Every function in `gwmock-signal` that returns strain returns a
 [`gwmock_signal.TimeSeries`](../api/timeseries/): an array of samples placed in
-time by the GPS time of its first sample and its sample rate.
+time by the GPS time of its first sample and its sample rate. It is the time
+series of
+[gwmock-data](https://github.com/Leuven-Gravity-Institute/gwmock-data),
+re-exported here, so every gwmock package passes the same class around.
 
 ```python
 import numpy as np

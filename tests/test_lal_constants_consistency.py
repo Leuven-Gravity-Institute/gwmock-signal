@@ -33,6 +33,7 @@ import json
 import math
 import subprocess
 import sys
+import tomllib
 import urllib.request
 
 import lal_constants_consistency
@@ -132,7 +133,8 @@ class TestThePyprojectInputs:
         pyproject = (lal_constants_consistency.REPO_ROOT / "pyproject.toml").read_text()
 
         assert lalsuite_floor(pyproject) >= Version("7.24")
-        assert "3.12" in supported_pythons(pyproject)
+        floor = tomllib.loads(pyproject)["project"]["requires-python"].removeprefix(">=")
+        assert supported_pythons(pyproject)[0] == floor
 
 
 class TestWhichPythonReadsEachRelease:

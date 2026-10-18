@@ -24,8 +24,8 @@ pages for more details:
 
 ## Requirements
 
-- **Python:** 3.12, 3.13 or 3.14 (`requires-python` in `pyproject.toml` is
-  `>=3.12`).
+- **Python:** 3.13, 3.14 or 3.15 (`requires-python` in `pyproject.toml` is
+  `>=3.13`).
 - **Operating system:** Linux or macOS (same range as the published wheels and
   CI).
 
@@ -34,7 +34,7 @@ pages for more details:
 !!! note "Python version pin"
 
     When creating a virtual environment with `uv`, pass an explicit interpreter
-    (for example `uv venv --python 3.12`) so you do not pick an unsupported
+    (for example `uv venv --python 3.13`) so you do not pick an unsupported
     Python from your machine default.
 
 <!-- prettier-ignore-end -->
@@ -45,7 +45,7 @@ The recommended way to install the library for downstream use is from PyPI:
 
 ```bash
 # Create a virtual environment (recommended with uv)
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install gwmock-signal
 ```
@@ -78,7 +78,7 @@ For the latest `main` branch:
 ```bash
 git clone git@github.com:Leuven-Gravity-Institute/gwmock-signal.git
 cd gwmock-signal
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
 ```
@@ -111,7 +111,7 @@ Typical contributor workflow:
 git clone git@github.com:Leuven-Gravity-Institute/gwmock-signal.git
 cd gwmock-signal
 
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync --group dev
 
@@ -143,6 +143,9 @@ Declared in `pyproject.toml` for the library:
   publishes no wheel yet; there, the LAL waveform backends are unavailable
   (detector geometry does not need it).
 - **pyyaml** — configuration parsing where used
+- **gwmock-data** — the time series, its sampling grid and HDF5 input and
+  output, shared by the gwmock packages; `gwmock_signal.TimeSeries` is
+  `gwmock_data.TimeSeries`
 
 **Optional** (`pip install 'gwmock-signal[pycbc]'`):
 
@@ -162,6 +165,11 @@ Declared in `pyproject.toml` for the library:
 **Optional** (`pip install 'gwmock-signal[gwpy]'`):
 
 - **gwpy** — `TimeSeries.to_gwpy()`/`from_gwpy()` and frame (GWF) output
+
+The time series and `gwmock_signal.io.write_hdf5`/`read_hdf5` come from
+gwmock-data, so when one of them is missing an optional package the error names
+gwmock-data's extra, for example `pip install 'gwmock-data[gwpy]'`. It installs
+the same package as the `gwmock-signal` extra of the same name.
 
 ## Python 3.15
 

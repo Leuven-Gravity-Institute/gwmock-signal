@@ -21,10 +21,10 @@ tools live in **`dependency-groups`** in `pyproject.toml`.
 
 1. Work from the **repository root** (directory that contains `pyproject.toml`
    and `uv.lock`).
-2. Create or refresh a venv with a **supported Python** (3.12 or 3.13):
+2. Create or refresh a venv with a **supported Python** (3.13 or later):
 
     ```bash
-    uv venv --python 3.12
+    uv venv --python 3.13
     source .venv/bin/activate   # Windows: .venv\Scripts\activate
     ```
 
@@ -48,7 +48,7 @@ tools live in **`dependency-groups`** in `pyproject.toml`.
 
 ```bash
 rm -rf .venv
-uv venv --python 3.12
+uv venv --python 3.13
 source .venv/bin/activate
 uv sync --group dev --frozen
 ```
@@ -57,15 +57,15 @@ Use `--frozen` in CI-like debugging to reproduce the lockfile exactly.
 
 ### Python version
 
-**Supported:** 3.12 and 3.13 (`requires-python = ">=3.12,<3.14"` in
+**Supported:** 3.13, 3.14 and 3.15 (`requires-python = ">=3.13"` in
 `pyproject.toml`).
 
 **Symptoms:** resolver errors, missing wheels for `pycbc` / `gwpy`, or CI
 mismatch.
 
-- Pin the interpreter: `uv venv --python 3.12` or `uv venv --python 3.13`.
-- CI runs the same matrix as `.github/workflows/ci.yml` (Ubuntu and macOS ×
-  those two versions).
+- Pin the interpreter, for example `uv venv --python 3.13`.
+- CI runs the matrix in `.github/workflows/ci.yml`: Ubuntu and macOS on 3.13 and
+  3.14, and a core-dependency job on 3.15.
 
 ## Pre-commit
 
@@ -213,14 +213,14 @@ errors appear, ensure you are on a supported Python and that
 
 Wheels and install time vary by platform. If resolution or install fails:
 
-- Use **Python 3.12 or 3.13** only.
+- Use a supported Python (3.13 or later).
 - Try a **clean venv** and `uv sync --group dev --frozen`.
 - On unusual platforms, check upstream **PyCBC** / **GWpy** install notes; this
   project’s CI targets **Ubuntu** and **macOS** only.
 
 ## Dependency conflicts
 
-1. `python --version` → must be 3.12 or 3.13.
+1. `python --version` → must be 3.13 or later.
 2. Fresh venv + `uv sync --group dev` (add `--verbose` if needed).
 3. Conflicts are usually from **mixing pip and uv** in the same venv — pick one
    tool per environment.
