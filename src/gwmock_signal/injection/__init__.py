@@ -11,7 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""Time-domain strain injection into GWpy segments.
+"""Time-domain strain injection into segments.
 
 See ``docs/user_guide/strain-injection.md`` (examples) and ``docs/api/injection/index.md`` (API).
 """

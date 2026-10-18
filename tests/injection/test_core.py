@@ -59,10 +59,10 @@ def test_sequential_two():
 
 
 def test_incompatible_raises():
-    """Mismatched sample rates should fail GWpy compatibility."""
+    """Mismatched sample rates cannot be added sample by sample."""
     target = _segment(fs=128.0)
     inj = TimeSeries(np.ones(4), t0=target.t0.value, sample_rate=256.0)
-    with pytest.raises(ValueError, match="sample sizes"):
+    with pytest.raises(ValueError, match="not compatible"):
         inject_strain(target, inj)
 
 

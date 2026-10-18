@@ -724,3 +724,29 @@ class TestTheDeviceBackend:
             f"32-bit output differed from the 64-bit host path by only {worst:.3e} of peak, so the "
             f"guard is refusing something harmless and its message overstates the hazard"
         )
+
+
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool) -> None:
+    """The package's own series and GWpy's project to identical strain, returned as GWpy series."""
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+    rng = np.random.default_rng(3)
+    t0 = 1_400_000_000.0
+    plus = NativeTimeSeries(rng.standard_normal(4096), t0=t0, sample_rate=1024.0)
+    cross = NativeTimeSeries(rng.standard_normal(4096), t0=t0, sample_rate=1024.0)
+    kwargs = {
+        "right_ascension": 1.1,
+        "declination": -0.3,
+        "polarization_angle": 0.4,
+        "earth_rotation": earth_rotation,
+    }
+
+    native = project_polarizations_to_network({"plus": plus, "cross": cross}, ["H1", "V1"], **kwargs)
+    gwpy = project_polarizations_to_network({"plus": plus.to_gwpy(), "cross": cross.to_gwpy()}, ["H1", "V1"], **kwargs)
+
+    for name in ("H1", "V1"):
+        assert isinstance(native[name], TimeSeries)
+        assert np.array_equal(native[name].value, gwpy[name].value)
+        assert native[name].t0 == gwpy[name].t0
+        assert native[name].name == name

@@ -18,10 +18,9 @@ from __future__ import annotations
 import functools
 import logging
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import TYPE_CHECKING
 
 import numpy as np
-from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
 from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
 from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
@@ -33,6 +32,10 @@ from gwmock_signal.projection.resampling import (
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy, precessed_sky_anchor_and_rate
+from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+
+if TYPE_CHECKING:
+    import gwpy.timeseries
 
 logger = logging.getLogger("gwmock_signal")
 
@@ -64,23 +67,31 @@ _CONSTANT_PATTERN_WARN_SECONDS = 30.0
 _CONSTANT_PATTERN_SATURATION = 0.3
 
 
-def _validate_polarizations(polarizations: Mapping[str, GWpyTimeSeries]) -> tuple[GWpyTimeSeries, GWpyTimeSeries]:
-    """Validate ``plus``/``cross`` GWpy series share one time grid."""
+def _validate_polarizations(
+    polarizations: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
+) -> tuple[TimeSeries, TimeSeries]:
+    """Validate ``plus``/``cross`` share one time grid, returning them as :class:`TimeSeries`."""
     if not isinstance(polarizations, Mapping):
         raise TypeError("polarizations must be a mapping with 'plus' and 'cross' keys.")
     if "plus" not in polarizations or "cross" not in polarizations:
         raise ValueError("polarizations must contain both 'plus' and 'cross' keys.")
-    hp = polarizations["plus"]
-    hc = polarizations["cross"]
-    if not isinstance(hp, GWpyTimeSeries) or not isinstance(hc, GWpyTimeSeries):
-        raise TypeError("polarizations['plus'] and polarizations['cross'] must be gwpy.timeseries.TimeSeries.")
-    if len(hp) != len(hc):
-        raise ValueError(f"plus and cross must have the same number of samples; got {len(hp)} and {len(hc)}.")
+    try:
+        hp = as_timeseries(polarizations["plus"])
+        hc = as_timeseries(polarizations["cross"])
+    except TypeError as exc:
+        raise TypeError(
+            "polarizations['plus'] and polarizations['cross'] must be gwmock_signal.TimeSeries or "
+            "gwpy.timeseries.TimeSeries."
+        ) from exc
+    if len(hp.data.shape) != 1 or len(hc.data.shape) != 1:
+        raise ValueError("plus and cross must each be one-dimensional.")
+    if hp.n_samples != hc.n_samples:
+        raise ValueError(f"plus and cross must have the same number of samples; got {hp.n_samples} and {hc.n_samples}.")
     if hp.sample_rate != hc.sample_rate:
         raise ValueError("plus and cross must have the same sample rate.")
-    hp_times = np.asarray(hp.times.value, dtype=float)
-    hc_times = np.asarray(hc.times.value, dtype=float)
-    dt = float(hp.dt.value)
+    hp_times = np.asarray(hp.times, dtype=float)
+    hc_times = np.asarray(hc.times, dtype=float)
+    dt = hp.dt
     if not np.allclose(hp_times, hc_times, rtol=0.0, atol=max(np.finfo(float).eps, 0.5 * dt)):
         raise ValueError("plus and cross must share the same time samples (same t0, dt, and length).")
     return hp, hc
@@ -282,8 +293,8 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
 
 
 def _project_rotating_on_device(  # noqa: PLR0913
-    hp: GWpyTimeSeries,
-    hc: GWpyTimeSeries,
+    hp: TimeSeries,
+    hc: TimeSeries,
     detectors: Sequence[tuple[str, DetectorKey]],
     *,
     time_array: np.ndarray,
@@ -294,7 +305,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     polarization_angle: float,
     sinc_taps: int,
     kaiser_beta: float,
-) -> dict[str, GWpyTimeSeries]:
+) -> dict[str, TimeSeries]:
     """Run the rotating projection through the JAX primitive, one detector at a time.
 
     The device function is the same algorithm step for step -- per-sample delay, per-sample
@@ -333,9 +344,9 @@ def _project_rotating_on_device(  # noqa: PLR0913
             "result is wrong by of order a percent of peak while still looking like strain."
         )
 
-    hp_vals = np.asarray(hp.value, dtype=float)
-    hc_vals = np.asarray(hc.value, dtype=float)
-    sampling_frequency = float(hp.sample_rate.value)
+    hp_vals = np.asarray(hp.data, dtype=float)
+    hc_vals = np.asarray(hc.data, dtype=float)
+    sampling_frequency = hp.sample_rate
     n_samples = len(hp_vals)
     # The linear sidereal model is fitted per call, so a run of many consecutive segments never
     # accumulates error -- each gets a fresh Astropy anchor. What it cannot absorb is one
@@ -356,7 +367,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
 
     compiled = _compiled_rotating_projection(sampling_frequency, n_samples, sinc_taps, kaiser_beta)
 
-    strains: dict[str, GWpyTimeSeries] = {}
+    strains: dict[str, TimeSeries] = {}
     for name, prefix in detectors:
         response, location = reconstructed_geometry(prefix)
         # Same precondition the host path asserts, and for the same reason: the padding width
@@ -376,7 +387,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
             float(np.atleast_1d(anchors)[0]),
             float(rate),
         )
-        strains[name] = GWpyTimeSeries(
+        strains[name] = TimeSeries(
             np.asarray(projected, dtype=float),
             t0=float(time_array[0]),
             sample_rate=hp.sample_rate,
@@ -385,12 +396,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
     return strains
 
 
-# PLR0915: this function was already at the 50-statement limit before the one-line call to
-# `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
-# the two projection branches that the compact-binary path depends on, which is not worth
-# the risk for a diagnostic; the warning body itself already lives in its own function.
 def project_polarizations_to_network(  # noqa: PLR0913
-    polarizations: Mapping[str, GWpyTimeSeries],
+    polarizations: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
     detector_names: Sequence[DetectorSpec],
     *,
     right_ascension: float,
@@ -401,7 +408,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
-) -> dict[str, GWpyTimeSeries]:
+) -> dict[str, gwpy.timeseries.TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
     Built-in and custom detector codes are resolved through the LAL cached
@@ -414,8 +421,11 @@ def project_polarizations_to_network(  # noqa: PLR0913
     taps reaching past either end read zero rather than repeating the endpoint.
 
     Args:
-        polarizations: Mapping containing ``plus`` and ``cross`` GWpy time series
-            on a common grid.
+        polarizations: Mapping containing ``plus`` and ``cross`` time series, each a
+            :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy ``TimeSeries``, on a common
+            grid. Sample times are the lattice ``t0 + k * dt`` of the series' start time and
+            spacing, not a GWpy ``times`` array, which at GPS magnitudes and a rate that is not a
+            power of two drifts from it (by 0.22 samples within one second at 3000 Hz).
         detector_names: Sequence of IFO codes (e.g. ``H1``, ``L1``, ``V1``) or
             :class:`~gwmock_signal.detector.CustomDetector` instances, or a mix
             of both.
@@ -463,11 +473,44 @@ def project_polarizations_to_network(  # noqa: PLR0913
             series (same length and sample rate as the inputs).
 
     Raises:
-        TypeError: If ``polarizations`` is not a mapping of GWpy series as required.
+        TypeError: If ``polarizations`` is not a mapping of time series as required.
         ValueError: If keys are missing, time grids disagree, a detector name is not
             recognized, ``backend`` is unknown, or ``backend="jax"`` is combined with
             ``earth_rotation=False``.
     """
+    strains = _project(
+        polarizations,
+        detector_names,
+        right_ascension=right_ascension,
+        declination=declination,
+        polarization_angle=polarization_angle,
+        earth_rotation=earth_rotation,
+        precess_source_direction=precess_source_direction,
+        backend=backend,
+        sinc_taps=sinc_taps,
+        kaiser_beta=kaiser_beta,
+    )
+    return {name: _public_output(strain) for name, strain in strains.items()}
+
+
+# PLR0915: this function was already at the 50-statement limit before the one-line call to
+# `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
+# the two projection branches that the compact-binary path depends on, which is not worth
+# the risk for a diagnostic; the warning body itself already lives in its own function.
+def _project(  # noqa: PLR0913
+    polarizations: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
+    detector_names: Sequence[DetectorSpec],
+    *,
+    right_ascension: float,
+    declination: float,
+    polarization_angle: float,
+    earth_rotation: bool,
+    precess_source_direction: bool,
+    backend: str,
+    sinc_taps: int,
+    kaiser_beta: float,
+) -> dict[str, TimeSeries]:
+    """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`."""
     validate_projection_backend(backend)
     if backend == "jax" and not earth_rotation:
         # The constant-pattern branch is a frequency-domain phase shift, and no device
@@ -484,7 +527,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
         raise ValueError("detector_names must not contain duplicates.")
     detectors = _make_detectors(list(detector_names))
 
-    time_array = cast(np.ndarray, hp.times.to_value())
+    time_array = np.asarray(hp.times, dtype=float)
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
 
     _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
@@ -539,17 +582,17 @@ def project_polarizations_to_network(  # noqa: PLR0913
             kaiser_beta=kaiser_beta,
         )
 
-    hp_vals = hp.to_value()
-    hc_vals = hc.to_value()
+    hp_vals = np.asarray(hp.data, dtype=float)
+    hc_vals = np.asarray(hc.data, dtype=float)
 
     # Precomputed once for the exact FD phase-shift (earth_rotation=False path).
     n_samples = len(hp_vals)
-    dt = float(hp.dt.value)
+    dt = hp.dt
     rfft_hp = np.fft.rfft(hp_vals)
     rfft_hc = np.fft.rfft(hc_vals)
     freqs_fd = np.fft.rfftfreq(n_samples, d=dt)
 
-    strains: dict[str, GWpyTimeSeries] = {}
+    strains: dict[str, TimeSeries] = {}
 
     # Per sample, not per segment: see the anchor-and-rate comment above.
     precession_offsets = time_array - time_array[0]
@@ -579,7 +622,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
             # and with the same padding, or the two paths disagree at the edges by the
             # difference in padding alone.
             require_terrestrial_location(location, name=f"location of {prefix}")
-            pad = edge_padding(float(hp.sample_rate.value), sinc_taps, kaiser_beta)
+            pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
             index = pad + np.arange(len(time_array), dtype=float) - time_delays / dt
             hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
             hc_shifted = resample_uniform_sinc(np.pad(hc_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
@@ -605,7 +648,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
 
         response = fp_vals * hp_shifted + fc_vals * hc_shifted
 
-        strains[name] = GWpyTimeSeries(
+        strains[name] = TimeSeries(
             response,
             t0=float(time_array[0]),
             sample_rate=hp.sample_rate,

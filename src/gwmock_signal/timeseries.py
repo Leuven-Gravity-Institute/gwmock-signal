@@ -41,6 +41,7 @@ import dataclasses
 import functools
 import importlib
 import math
+import sys
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     import gwpy.timeseries
     import pycbc.types
 
-__all__ = ["TimeSeries", "register_pytree"]
+__all__ = ["TimeSeries", "as_timeseries", "register_pytree"]
 
 
 def _namespace(data: Any) -> ModuleType:
@@ -338,6 +339,34 @@ class TimeSeries:
             name=name,
             unit=unit,
         )
+
+
+def as_timeseries(series: TimeSeries | gwpy.timeseries.TimeSeries) -> TimeSeries:
+    """Return ``series`` as a :class:`TimeSeries`: itself, or converted from a GWpy ``TimeSeries``.
+
+    Functions that take a time series call this on their input, so they accept either kind.
+
+    Raises:
+        TypeError: If ``series`` is neither.
+    """
+    if isinstance(series, TimeSeries):
+        return series
+    # A GWpy series can only exist if GWpy is imported, so it is not imported here to find out.
+    gwpy_timeseries = sys.modules.get("gwpy.timeseries")
+    if gwpy_timeseries is not None and isinstance(series, gwpy_timeseries.TimeSeries):
+        return TimeSeries.from_gwpy(series)
+    raise TypeError(
+        f"expected a gwmock_signal.TimeSeries or a gwpy.timeseries.TimeSeries; got {type(series).__name__}."
+    )
+
+
+def _public_output(series: TimeSeries) -> gwpy.timeseries.TimeSeries:
+    """Return ``series`` in the form the public API returns: a GWpy ``TimeSeries``, for now.
+
+    The single place where results leave the package as GWpy series. Making the public API return
+    :class:`TimeSeries` is a change here, not at every function.
+    """
+    return series.to_gwpy()
 
 
 _NO_FLOAT64 = (
