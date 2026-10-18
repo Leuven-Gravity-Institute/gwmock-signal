@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import RippleBackend
@@ -88,6 +94,7 @@ def test_ripple_backend_rejects_unsupported_approximant() -> None:
         )
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_generates_timeseries_dict() -> None:
     """A minimal ripple waveform call returns GWpy time series with the right grid."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -98,6 +105,7 @@ def test_ripple_backend_generates_timeseries_dict() -> None:
     assert result["plus"].dt == pytest.approx(1.0 / _FS)
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_places_coalescence_at_tc() -> None:
     """The plus-polarization peak lands near the requested coalescence time."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -106,6 +114,7 @@ def test_ripple_backend_places_coalescence_at_tc() -> None:
     assert peak_time == pytest.approx(_TC, abs=0.1)
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_rejects_in_plane_spin() -> None:
     """IMRPhenomD is aligned-spin only; nonzero in-plane spin raises ValueError."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -136,6 +145,7 @@ def test_ripple_backend_precessing_accepts_in_plane_spin() -> None:
     assert np.all(np.isfinite(result["plus"].value))
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_rejects_tidal_params() -> None:
     """IMRPhenomD has no tidal sector; nonzero lambda raises ValueError."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -143,6 +153,7 @@ def test_ripple_backend_rejects_tidal_params() -> None:
         _generate(lambda_1=500.0)
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_rejects_unknown_param() -> None:
     """Unrecognized waveform parameters raise ValueError."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -170,6 +181,7 @@ def _generate_tidal(approximant: str, **overrides: object) -> dict[str, TimeSeri
     )
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_tidal_model_accepts_lambda() -> None:
     """An NRTidal model accepts lambda_1/lambda_2 and returns time series."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -178,6 +190,7 @@ def test_ripple_backend_tidal_model_accepts_lambda() -> None:
     assert isinstance(result["plus"], NativeTimeSeries)
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_backend_tidal_accepts_tidal_aliases() -> None:
     """tidal_1/tidal_2 are accepted as aliases for lambda_1/lambda_2."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -185,6 +198,7 @@ def test_ripple_backend_tidal_accepts_tidal_aliases() -> None:
     assert set(result) == {"plus", "cross"}
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("param", ["lambda_1", "lambda_2"])
 def test_ripple_backend_negative_tidal_raises(param: str) -> None:
     """Negative tidal deformability raises ValueError before reaching ripple."""
@@ -298,6 +312,7 @@ def _fd_match(spectrum_a: np.ndarray, spectrum_b: np.ndarray, in_band: np.ndarra
     return float(np.max(np.abs(correlation)) / norm)
 
 
+@pytest.mark.requires_gwpy
 def test_ripple_taylorf2_generates_finite_timeseries() -> None:
     """TaylorF2 conditions to a finite time series despite ripple's above-ISCO NaNs."""
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -307,6 +322,7 @@ def test_ripple_taylorf2_generates_finite_timeseries() -> None:
     assert np.all(np.isfinite(result["cross"].value))
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.integration
 def test_ripple_taylorf2_matches_lal_fd() -> None:
     """Ripple TaylorF2 agrees with LAL's frequency-domain TaylorF2 (match > 0.99).
@@ -453,6 +469,7 @@ def test_generate_fd_polarizations_conditions_to_td_waveform() -> None:
         np.testing.assert_allclose(reconstructed, td[key].value, rtol=0.0, atol=0.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.integration
 def test_generate_fd_polarizations_matches_lal_fd() -> None:
     """Ripple's frequency-domain IMRPhenomD agrees with LAL's FD IMRPhenomD (match > 0.99)."""

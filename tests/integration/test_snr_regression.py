@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
@@ -69,6 +75,7 @@ def _aligop1200087_psd(n_freq: int, delta_f: float) -> object:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_optimal_snr_h1_matches_reference() -> None:
     """optimal_snr on H1 matches the historical pycbc reference within 1e-4."""
@@ -97,6 +104,7 @@ def test_optimal_snr_h1_matches_reference() -> None:
     assert abs(snr - _PYCBC_REFERENCE_SNR) / _PYCBC_REFERENCE_SNR < 1e-4
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_matched_filter_snr_peak_consistent_with_optimal() -> None:
     """Peak matched-filter SNR (template == data) agrees with optimal_snr."""

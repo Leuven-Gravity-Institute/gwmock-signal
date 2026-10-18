@@ -38,6 +38,7 @@ class TestStack:
         assert stack.sample_rate == _FS
         assert np.array_equal(stack.data, np.stack([np.full(32, 1.0), np.full(32, 2.0)]))
 
+    @pytest.mark.requires_gwpy
     def test_a_gwpy_channel_is_returned_as_the_package_s_series_sharing_its_samples(self):
         """Converted once at construction; the same object on every read, over GWpy's array."""
         given = _native(2.0).to_gwpy()
@@ -85,6 +86,7 @@ class TestStack:
         assert back.sample_rate == rate
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("aligned", [True, False])
 def test_assembly_takes_native_backgrounds(aligned):
     """Native and GWpy backgrounds give identical segments, on and off the output lattice."""
@@ -111,6 +113,7 @@ def test_assembly_takes_native_backgrounds(aligned):
     assert not np.any(native[0]["H1"].data != 5.0)
 
 
+@pytest.mark.requires_gwpy
 def test_network_snr_is_the_same_for_native_and_gwpy_channels():
     """It reads the channels as held, so their kind does not matter."""
     rng = np.random.default_rng(1)
@@ -153,6 +156,7 @@ def test_assembly_keeps_the_background_unit_and_never_shares_its_samples(aligned
 class TestOneSetOfSamples:
     """A stack's channel, its ``data`` and the caller's series stay one set of samples."""
 
+    @pytest.mark.requires_gwpy
     def test_a_gwpy_channel_and_the_stack_share_samples(self):
         """A write through the GWpy series given is seen by the stack's channel and ``data``."""
         given = _native(1.0).to_gwpy()
@@ -164,6 +168,7 @@ class TestOneSetOfSamples:
         assert stack.data[0, :2].tolist() == [7.0, 8.0]
         assert given.value[:2].tolist() == [7.0, 8.0]
 
+    @pytest.mark.requires_gwpy
     def test_the_timing_is_taken_when_the_stack_is_built(self, tmp_path):
         """Moving a GWpy series given afterwards changes neither the stack nor what it writes."""
         given = _native(1.0).to_gwpy()
@@ -175,6 +180,7 @@ class TestOneSetOfSamples:
         assert stack.t0 == _T0
         assert DetectorStrainStack.read(tmp_path / "stack.npy", format="npy").t0 == _T0
 
+    @pytest.mark.requires_gwpy
     def test_frames_record_the_stack_s_timing_and_names(self, monkeypatch, tmp_path):
         """GWF output carries the stack's start time, each channel named for its detector."""
         from gwpy.timeseries import TimeSeriesDict

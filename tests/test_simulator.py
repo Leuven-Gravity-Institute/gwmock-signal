@@ -11,7 +11,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 import gwmock_signal
 from gwmock_signal import GWSimulator, register_simulator_backend, resolve_simulator_backend
@@ -145,28 +151,33 @@ class TestValidateParams:
 class TestCBCSimulatorRequiredParams:
     """Tests for CBCSimulator.required_params."""
 
+    @pytest.mark.requires_lalsuite
     def test_required_params_is_frozenset(self):
         """required_params returns a frozenset."""
         sim = CBCSimulator(waveform_model="IMRPhenomD")
         assert isinstance(sim.required_params, frozenset)
 
+    @pytest.mark.requires_lalsuite
     def test_required_params_includes_cbc_keys(self):
         """CBC waveform keys are in required_params."""
         sim = CBCSimulator(waveform_model="IMRPhenomD")
         for key in ("detector_frame_mass_1", "detector_frame_mass_2", "coa_time", "distance", "inclination"):
             assert key in sim.required_params, f"Expected '{key}' in required_params"
 
+    @pytest.mark.requires_lalsuite
     def test_required_params_includes_projection_keys(self):
         """Projection sky-position keys are in required_params."""
         sim = CBCSimulator(waveform_model="IMRPhenomD")
         for key in ("right_ascension", "declination", "polarization_angle"):
             assert key in sim.required_params, f"Expected '{key}' in required_params"
 
+    @pytest.mark.requires_lalsuite
     def test_waveform_model_property_returns_constructor_value(self):
         """waveform_model property exposes the model passed at construction."""
         sim = CBCSimulator(waveform_model="IMRPhenomD")
         assert sim.waveform_model == "IMRPhenomD"
 
+    @pytest.mark.requires_lalsuite
     @patch("gwmock_signal.simulator.WaveformFactory")
     def test_constructor_passes_waveform_backend_to_factory(self, mock_factory_cls):
         """An explicit waveform backend is forwarded into WaveformFactory."""
@@ -184,6 +195,7 @@ class TestRegisterWaveformModel:
         backend.available_approximants.return_value = []
         return CBCSimulator(waveform_model="toy_burst", waveform_backend=backend)
 
+    @pytest.mark.requires_gwpy
     def test_register_waveform_model_allows_custom_callable(self) -> None:
         """A registered callable waveform can be selected by ``waveform_model``."""
         sim = self._make_simulator()
@@ -203,6 +215,7 @@ class TestRegisterWaveformModel:
         assert np.allclose(hp.value, 1.0)
         assert np.allclose(hc.value, 0.0)
 
+    @pytest.mark.requires_gwpy
     def test_register_waveform_model_reregister_same_factory_is_noop(self) -> None:
         """Re-registering the same callable under the same name is harmless."""
         sim = self._make_simulator()
@@ -219,6 +232,7 @@ class TestRegisterWaveformModel:
         assert len(hp) == 8
         assert len(hc) == 8
 
+    @pytest.mark.requires_gwpy
     def test_register_waveform_model_conflicting_reregistration_raises(self) -> None:
         """Reusing a name for a different factory raises ``ValueError``."""
 
@@ -244,6 +258,7 @@ class TestRegisterWaveformModel:
 class TestCBCSimulatorMissingParam:
     """Tests that missing required params raise ValueError with the key named."""
 
+    @pytest.mark.requires_lalsuite
     def test_missing_mass1_raises_value_error_naming_key(self):
         """Missing detector_frame_mass_1 raises ValueError that names the key."""
         sim = CBCSimulator(waveform_model="IMRPhenomD")
@@ -255,6 +270,7 @@ class TestCBCSimulatorMissingParam:
 class TestCBCSimulatorSimulate:
     """Mock the full pipeline to test CBCSimulator.simulate returns DetectorStrainStack."""
 
+    @pytest.mark.requires_gwpy
     @patch("gwmock_signal.simulator._project")
     @patch("gwmock_signal.simulator._inject")
     @patch("gwmock_signal.simulator.WaveformFactory")
@@ -293,6 +309,7 @@ class TestCBCSimulatorSimulate:
         assert isinstance(result, DetectorStrainStack)
         assert result.detector_names == tuple(detector_names)
 
+    @pytest.mark.requires_gwpy
     @patch("gwmock_signal.simulator._project")
     @patch("gwmock_signal.simulator._inject")
     @patch("gwmock_signal.simulator.WaveformFactory")
@@ -343,6 +360,7 @@ class TestCBCSimulatorSimulate:
         mock_inject.assert_called_once()
         assert call_order == ["generate", "project", "inject"]
 
+    @pytest.mark.requires_gwpy
     @patch("gwmock_signal.simulator.WaveformFactory")
     def test_simulate_missing_param_raises_before_waveform(self, mock_factory_cls):
         """Missing required parameter raises ValueError before any waveform call."""
@@ -367,6 +385,7 @@ class TestCBCSimulatorSimulate:
 class TestCBCSimulatorEndToEnd:
     """Non-mocked assembly test: the real projection and injection."""
 
+    @pytest.mark.requires_gwpy
     @patch("gwmock_signal.waveform.pycbc_wrapper.get_td_waveform")
     def test_gw150914_like_params_on_two_detector_network(self, mock_get_td):
         """CBCSimulator.simulate returns a DetectorStrainStack for GW150914-like params.
@@ -415,6 +434,7 @@ class TestCBCSimulatorEndToEnd:
             "Expected non-zero strain in at least one detector after injection"
         )
 
+    @pytest.mark.requires_gwpy
     def test_lal_backend_simulate_runs_without_pycbc_for_builtin_detectors(self) -> None:
         """The CBC+LAL backend path works when PyCBC imports are blocked."""
         code = """
@@ -620,6 +640,7 @@ class TestJsonDefault:
 class TestTransientProjectionValidation:
     """Tests for projection-key validation in TransientSimulator.simulate."""
 
+    @pytest.mark.requires_gwpy
     def test_missing_projection_keys_raise_value_error(self):
         """Non-CBC transient subclasses still require sky-position projection keys."""
 
@@ -654,6 +675,7 @@ class TestTransientProjectionValidation:
 class TestCBCSimulatorWrite:
     """Tests for CBCSimulator.write side effects and return value."""
 
+    @pytest.mark.requires_gwpy
     def test_write_saves_stack_and_json_sidecar(self, tmp_path):
         """write() calls simulate, writes output, and stores params JSON."""
         fs = 256.0
@@ -737,6 +759,7 @@ class TestTheProjectionBackend:
             TimeSeries(envelope * np.sin(phase), t0=tc, sample_rate=sampling_frequency),
         )
 
+    @pytest.mark.requires_lalsuite
     def test_it_defaults_to_the_host_path(self):
         """Unchanged behaviour for every caller that does not ask: no JAX, no device path."""
         assert CBCSimulator(waveform_model="IMRPhenomD").projection_backend == "numpy"
@@ -773,6 +796,7 @@ class TestTheProjectionBackend:
                 projection_backend="cuda",
             )
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.usefixtures("_sixty_four_bit")
     def test_the_device_backend_reproduces_the_host_backend(self):
         """Same strain out of ``simulate``, so selecting it is a substitution and not a new answer.
@@ -813,6 +837,7 @@ class TestTheProjectionBackend:
             worst = float(np.max(np.abs(device_strain - host_strain))) / peak
             assert worst < 1e-10, f"{name} differs between backends by {worst:.3e} of peak"
 
+    @pytest.mark.requires_gwpy
     @pytest.mark.usefixtures("_sixty_four_bit")
     def test_the_device_backend_refuses_a_constant_pattern(self):
         """``earth_rotation=False`` has no device implementation, and must not be served silently."""

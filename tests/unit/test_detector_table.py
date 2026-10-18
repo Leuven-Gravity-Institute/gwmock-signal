@@ -22,6 +22,7 @@ from gwmock_signal.detector import CustomDetector
 from gwmock_signal.projection.geometry import _defining_fields, detector_fields, reconstructed_geometry
 
 
+@pytest.mark.requires_lalsuite
 def test_the_table_equals_lal_registry_field_by_field():
     """Every built-in code carries exactly LAL's values."""
     lal = pytest.importorskip("lal")
@@ -30,6 +31,7 @@ def test_the_table_equals_lal_registry_field_by_field():
         assert fields == _defining_fields(lal.cached_detector_by_prefix[code].frDetector), code
 
 
+@pytest.mark.requires_lalsuite
 def test_the_table_holds_every_code_lal_ships():
     """Read from a fresh interpreter, so run-time registrations by other tests are not counted."""
     pytest.importorskip("lal")
@@ -40,6 +42,7 @@ def test_the_table_holds_every_code_lal_ships():
     assert result.stdout.strip().split(",") == sorted(_detector_table.builtin_detectors())
 
 
+@pytest.mark.requires_lalsuite
 def test_the_shipped_file_is_what_the_script_writes():
     """The file on disk is byte-for-byte the script's output for the installed LAL, names included."""
     lal = pytest.importorskip("lal")
@@ -56,6 +59,7 @@ def test_the_table_fields_are_in_projection_order():
     assert tuple(FIELDS) == _detector_table.FIELDS
 
 
+@pytest.mark.requires_lalsuite
 def test_a_built_in_code_is_not_shadowed_by_a_changed_lal_registry():
     """LAL's registry is mutable; a built-in code keeps the table's geometry regardless."""
     pytest.importorskip("lal")
@@ -65,6 +69,7 @@ def test_a_built_in_code_is_not_shadowed_by_a_changed_lal_registry():
         assert detector_fields("H1") == expected
 
 
+@pytest.mark.requires_lalsuite
 def test_a_code_registered_at_run_time_still_resolves_through_lal():
     """A CustomDetector's prefix is not built in, and is read from LAL's registry.
 
@@ -96,6 +101,7 @@ def test_an_unknown_code_is_a_value_error():
             assert "or a CustomDetector for other geometries" in str(excinfo.value)
 
 
+@pytest.mark.requires_lalsuite
 def test_a_registration_removed_mid_lookup_is_an_unknown_code(monkeypatch):
     """The run-time registry is read once, so a concurrent removal is a ValueError, not a KeyError."""
     pytest.importorskip("lal")
@@ -160,6 +166,7 @@ except ValueError as exc:
 """
 
 
+@pytest.mark.requires_lalsuite
 def test_without_lalsuite_built_in_detectors_resolve_to_the_same_geometry():
     """The geometry of a built-in code is bit-identical with and without lalsuite installed."""
     pytest.importorskip("lal")

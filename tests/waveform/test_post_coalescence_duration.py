@@ -45,6 +45,7 @@ def _end_relative_to_tc(generated, sampling_frequency: float) -> float:
     return plus.t0 + plus.n_samples / sampling_frequency - _TC
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])
 @pytest.mark.parametrize("sampling_frequency", [1024.0, 2048.0])
 def test_the_lal_backend_predicts_where_its_own_waveform_ends(params, sampling_frequency):
@@ -72,6 +73,7 @@ def test_the_ripple_backend_predicts_where_its_own_waveform_ends(params):
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("params", [_BBH, _BNS], ids=["bbh", "bns"])
 def test_the_two_sides_account_for_the_whole_buffer(params):
     """``pre + post`` must be the buffer, or one of them is describing a different waveform.
@@ -93,6 +95,7 @@ def test_the_two_sides_account_for_the_whole_buffer(params):
     assert pre + post == pytest.approx(buffer_seconds, abs=1.0 / fs)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_tail_is_large_enough_that_no_caller_should_guess_it():
     """A constant would be wrong by orders of magnitude -- a magnitude pin, nothing more.
 
@@ -144,6 +147,7 @@ def test_pycbc_cannot_say_either() -> None:
     assert backend.post_coalescence_duration("IMRPhenomD", 2048.0, 20.0, **_BBH) is None
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("ringdown_fraction", [0.05, 0.2, 0.3])
 def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
     """This fraction *is* the post side, so it must reach the answer.
@@ -166,6 +170,7 @@ def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("segment_duration", [8.0, 64.0])
 def test_a_pinned_segment_duration_is_honoured(segment_duration):
     """A pinned duration bypasses the chirp-time estimate and must reach this path too."""
@@ -181,6 +186,7 @@ def test_a_pinned_segment_duration_is_honoured(segment_duration):
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_gwsignal_backend_inherits_a_correct_answer():
     """It subclasses the LAL backend and overrides only the frequency-domain evaluation."""
     gwsignal = pytest.importorskip("lalsimulation.gwsignal", reason="gwsignal is not available in this lalsuite build")
@@ -210,6 +216,7 @@ def test_ripple_carries_eta_into_the_answer():
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_simulator_and_factory_expose_the_query() -> None:
     """A caller holds a simulator, not a backend -- the same argument the pre side makes.
 
@@ -231,6 +238,7 @@ def test_the_simulator_and_factory_expose_the_query() -> None:
     assert post > 0.0
 
 
+@pytest.mark.requires_gwpy
 def test_a_custom_registered_model_answers_unknown() -> None:
     """A registered callable never reaches the backend, so the backend's sizing cannot describe it.
 
@@ -258,6 +266,7 @@ def test_a_custom_registered_model_answers_unknown() -> None:
     assert simulator.post_coalescence_duration({"coa_time": _TC, **_BBH}, 1024.0, 20.0) is None
 
 
+@pytest.mark.requires_lalsuite
 def test_an_unknown_model_raises_like_generation_would() -> None:
     """Unknown and unanswerable are different: one is a caller error, the other a capability gap.
 

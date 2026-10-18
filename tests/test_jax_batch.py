@@ -345,6 +345,7 @@ def _batched_strain(*, earth_rotation: bool):
     return np.asarray(batch.strain)
 
 
+@pytest.mark.requires_gwpy
 def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
     """The batched rotating path agrees with the per-event NumPy projection.
 
@@ -368,6 +369,7 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
         assert np.max(difference) < 1e-10 * scale
 
 
+@pytest.mark.requires_gwpy
 def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
     """The batched ``earth_rotation=False`` branch agrees with the per-event NumPy projection.
 

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.jax_batch import BatchedDetectorStrain, assemble_segments, simulate_cbc_catalogue
 
@@ -53,6 +59,7 @@ def test_assemble_segments_zero_noise_when_no_overlap() -> None:
     np.testing.assert_array_equal(segments[2]["H1"].value, np.zeros(_SEG_SAMPLES))  # [8, 12): no signal
 
 
+@pytest.mark.requires_gwpy
 def test_assemble_segments_adds_onto_provided_background() -> None:
     """A provided background is preserved and the signal is added on top."""
     signal = np.full((1, 1, 16), 2.0)
@@ -78,6 +85,7 @@ def test_assemble_segments_multiple_detectors_preserve_order() -> None:
     assert segments[0]["L1"].value[0] == 3.0
 
 
+@pytest.mark.requires_gwpy
 def test_assemble_segments_rejects_misaligned_backgrounds() -> None:
     """Backgrounds must be aligned one-to-one with segment_start_times."""
     batch = _batch(np.ones((1, 1, 16)), ("H1",), coa_time=np.array([0.0]), epoch=0.0)

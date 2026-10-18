@@ -176,6 +176,7 @@ def test_project_polarizations_fd_combines_and_delays() -> None:
     assert np.max(np.abs(delayed - np.roll(only_plus, shift))) < 1e-9 * np.max(np.abs(only_plus))
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.integration
 def test_device_projection_matches_host_pipeline() -> None:
     """The on-device FD projection reproduces the host (NumPy) earth_rotation=False path.
@@ -263,6 +264,7 @@ def _chirp_polarizations(n_samples: int, sampling_frequency: float) -> tuple[np.
     return envelope * np.cos(phase), envelope * np.sin(phase)
 
 
+@pytest.mark.requires_gwpy
 def test_rotating_projection_matches_numpy_path() -> None:
     """The device rotating projection reproduces the NumPy earth_rotation=True path."""
     from gwpy.timeseries import TimeSeries as GWpyTimeSeries
@@ -320,6 +322,7 @@ def test_rotating_projection_matches_numpy_path() -> None:
     assert np.max(np.abs(device - reference)) < 1e-10 * scale
 
 
+@pytest.mark.requires_gwpy
 def test_rotating_projection_differs_from_static_for_long_signals() -> None:
     """Earth rotation changes the answer over an hour-long segment.
 

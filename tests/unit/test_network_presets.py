@@ -4,10 +4,21 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
@@ -116,6 +127,7 @@ def test_preset_yaml_is_packaged_as_resource() -> None:
     assert resource.is_file()
 
 
+@pytest.mark.requires_gwpy
 def test_triangle_sardinia_projection_matches_reference_geometry() -> None:
     """The packaged Sardinia triangle preset matches the reference geometry."""
     n = 256
@@ -155,6 +167,7 @@ def _angle(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.arctan2(np.linalg.norm(np.cross(a, b)), np.dot(a, b)))
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("preset", ["ET-Triangle-Sardinia", "ET-Triangle-EMR"])
 def test_triangle_preset_arms_lie_along_tunnel_chords(preset: str) -> None:
     """Every triangle arm points along the tunnel to a neighbouring vertex.
@@ -185,6 +198,7 @@ def test_triangle_preset_arms_lie_along_tunnel_chords(preset: str) -> None:
         np.testing.assert_allclose(np.asarray(lal_det.response), expected_response, rtol=0.0, atol=1e-6)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize(("preset", "relative_angle"), [("ET-2L-Aligned", 0.0), ("ET-2L-Misaligned", np.pi / 4)])
 def test_two_l_preset_arms_follow_virgo_reference(preset: str, relative_angle: float) -> None:
     """Each 2L x-arm has the azimuth of Virgo's arm 1, the second site turned by the relative angle.

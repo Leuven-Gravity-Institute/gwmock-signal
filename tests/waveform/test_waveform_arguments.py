@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
 from gwmock_signal.waveform.backends.ripple import (
@@ -30,6 +36,7 @@ CANONICAL_PARAMS = {
 }
 
 
+@pytest.mark.requires_lalsuite
 def test_mode_array_restricts_higher_modes() -> None:
     """Restricting IMRPhenomXHM to (2,2) changes the waveform."""
     backend = LALSimulationBackend()
@@ -41,6 +48,7 @@ def test_mode_array_restricts_higher_modes() -> None:
     assert not np.array_equal(full["plus"].value, dominant["plus"].value)
 
 
+@pytest.mark.requires_lalsuite
 def test_scalar_argument_is_applied() -> None:
     """A scalar LAL-dictionary option (PhenomXHMMband threshold) is honoured."""
     backend = LALSimulationBackend()
@@ -51,6 +59,7 @@ def test_scalar_argument_is_applied() -> None:
     assert not np.array_equal(default["plus"].value, tweaked["plus"].value)
 
 
+@pytest.mark.requires_lalsuite
 def test_empty_arguments_are_a_no_op() -> None:
     """An empty mapping produces the same waveform as omitting it."""
     backend = LALSimulationBackend()
@@ -59,6 +68,7 @@ def test_empty_arguments_are_a_no_op() -> None:
     np.testing.assert_array_equal(without["plus"].value, with_empty["plus"].value)
 
 
+@pytest.mark.requires_lalsuite
 def test_unknown_argument_raises() -> None:
     """Keys without a matching LAL setter fail loudly."""
     with pytest.raises(ValueError, match="SimInspiralWaveformParamsInsertNotAThing"):
@@ -67,6 +77,7 @@ def test_unknown_argument_raises() -> None:
         )
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("reserved", ["TidalLambda1", "TidalLambda2"])
 def test_tidal_arguments_are_reserved(reserved: str) -> None:
     """Tidal deformabilities must go through the canonical lambda_1/lambda_2."""
@@ -76,6 +87,7 @@ def test_tidal_arguments_are_reserved(reserved: str) -> None:
         )
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("bad_value", ["not-a-list", [(2,)], [2, 2], None])
 def test_malformed_mode_array_raises(bad_value: object) -> None:
     """Malformed ModeArray values get a descriptive error, not a bare unpack failure."""
@@ -85,6 +97,7 @@ def test_malformed_mode_array_raises(bad_value: object) -> None:
         )
 
 
+@pytest.mark.requires_lalsuite
 def test_non_dict_arguments_raise() -> None:
     """waveform_arguments must be a mapping with string keys."""
     with pytest.raises(ValueError, match="dict with string keys"):
@@ -93,6 +106,7 @@ def test_non_dict_arguments_raise() -> None:
         )
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize(
     ("approximant", "arguments"),
     [
@@ -114,6 +128,7 @@ def test_gwsignal_backend_applies_arguments_via_lal_path(approximant: str, argum
     np.testing.assert_array_equal(gws["cross"].value, lal["cross"].value)
 
 
+@pytest.mark.requires_lalsuite
 def test_gwsignal_backend_arguments_change_the_waveform() -> None:
     """The options actually take effect through the gwsignal backend entry point."""
     pytest.importorskip("lalsimulation.gwsignal", reason="lalsimulation.gwsignal not available")
@@ -190,6 +205,7 @@ def test_pycbc_non_reserved_arguments_pass_validation() -> None:
     assert PyCBCBackend._resolve_waveform_arguments(args) == args
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_arguments_forwarded_to_get_td_waveform() -> None:
     """Extras are merged into the kwargs passed to the PyCBC wrapper."""
     mock_wrapper = MagicMock(return_value=_fake_result())
@@ -212,6 +228,7 @@ def test_pycbc_arguments_forwarded_to_get_td_waveform() -> None:
     assert "waveform_arguments" not in kw
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_empty_arguments_are_a_no_op() -> None:
     """An empty mapping forwards no extra kwargs."""
     mock_wrapper = MagicMock(return_value=_fake_result())
@@ -231,6 +248,7 @@ def test_pycbc_empty_arguments_are_a_no_op() -> None:
     assert "mode_array" not in kw
 
 
+@pytest.mark.requires_gwpy
 def test_pycbc_unsupported_top_level_parameter_raises() -> None:
     """Extras must go through waveform_arguments, not as flat top-level kwargs."""
     mock_wrapper = MagicMock(return_value=_fake_result())

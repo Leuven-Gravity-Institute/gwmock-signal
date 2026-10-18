@@ -18,7 +18,12 @@ from __future__ import annotations
 import threading
 import time
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import pytest
 
 from gwmock_signal.detector import CustomDetector, _generate_detector_prefix
@@ -92,6 +97,7 @@ def _register_concurrently(detectors: list[CustomDetector]) -> list[Exception | 
     return [outcome for outcome in outcomes if outcome is not None]
 
 
+@pytest.mark.requires_lalsuite
 def test_concurrent_registration_gives_every_detector_its_own_prefix(
     slow_registration: None, crowded_prefix_space: None
 ) -> None:
@@ -108,6 +114,7 @@ def test_concurrent_registration_gives_every_detector_its_own_prefix(
     assert len(set(prefixes)) == _THREADS, f"prefixes collided under contention: {prefixes}"
 
 
+@pytest.mark.requires_lalsuite
 def test_concurrently_registered_detectors_keep_distinct_geometry(
     slow_registration: None, crowded_prefix_space: None
 ) -> None:
@@ -126,6 +133,7 @@ def test_concurrently_registered_detectors_keep_distinct_geometry(
     assert len(set(locations)) == len(detectors), "two concurrently registered detectors share a location"
 
 
+@pytest.mark.requires_lalsuite
 def test_an_explicit_prefix_clash_still_raises_under_contention(slow_registration: None) -> None:
     """With one prefix named explicitly by several detectors, exactly one may win.
 

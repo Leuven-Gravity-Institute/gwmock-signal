@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
+import pytest
 
-from gwmock_signal import CBCSimulator, GWSimulator
+from gwmock_signal import CBCSimulator, GWSimulator, TimeSeries
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.timeseries import as_timeseries
 
@@ -86,6 +86,7 @@ def test_non_transient_simulator_returns_detector_strain_stack() -> None:
     assert np.allclose(result["L1"].value, 2.5)
 
 
+@pytest.mark.requires_lalsuite
 def test_transient_simulator_accepts_background_none() -> None:
     """CBC simulators can return projected strain directly when no background is given."""
     simulator = CBCSimulator("IMRPhenomD")

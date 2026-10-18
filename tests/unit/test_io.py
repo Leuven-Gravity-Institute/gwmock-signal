@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
-import h5py
+try:
+    import h5py
+except ModuleNotFoundError as exc:  # Python 3.15: h5py does not install yet; its tests are skipped
+    if exc.name != "h5py":
+        raise
+    h5py = None
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 
@@ -35,6 +46,7 @@ def _make_stack() -> DetectorStrainStack:
 class TestHDF5RoundTrip:
     """Test that the HDF5 format round-trips correctly."""
 
+    @pytest.mark.requires_gwpy
     def test_arrays_preserved_to_machine_precision(self, tmp_path):
         """Test that the arrays are preserved to machine precision."""
         stack = _make_stack()
@@ -49,6 +61,7 @@ class TestHDF5RoundTrip:
                 np.asarray(restored[name].value),
             )
 
+    @pytest.mark.requires_gwpy
     def test_t0_preserved(self, tmp_path):
         """Test that the t0 is preserved."""
         stack = _make_stack()
@@ -59,6 +72,7 @@ class TestHDF5RoundTrip:
 
         assert restored.t0 == pytest.approx(_T0)
 
+    @pytest.mark.requires_gwpy
     def test_dt_preserved(self, tmp_path):
         """Test that the dt is preserved."""
         stack = _make_stack()
@@ -69,6 +83,7 @@ class TestHDF5RoundTrip:
 
         assert float(restored["H1"].dt) == pytest.approx(_DT)
 
+    @pytest.mark.requires_gwpy
     def test_channel_names_preserved(self, tmp_path):
         """Test that the channel names are preserved."""
         stack = _make_stack()
@@ -79,6 +94,7 @@ class TestHDF5RoundTrip:
 
         assert restored.detector_names == ("H1", "L1")
 
+    @pytest.mark.requires_gwpy
     def test_file_is_created(self, tmp_path):
         """Test that the file is created."""
         stack = _make_stack()
@@ -89,6 +105,7 @@ class TestHDF5RoundTrip:
         assert path.exists()
         assert path.stat().st_size > 0
 
+    @pytest.mark.requires_h5py
     def test_hdf5_order_attribute_is_used(self, tmp_path):
         """If the top-level order attribute disagrees with file key order, reconstruction follows the attribute."""
         path = tmp_path / "order_test.h5"
@@ -118,6 +135,7 @@ class TestHDF5RoundTrip:
         np.testing.assert_array_equal(restored["A"].value, a)
         np.testing.assert_array_equal(restored["B"].value, b)
 
+    @pytest.mark.requires_h5py
     def test_hdf5_missing_order_attribute_falls_back_to_keys(self, tmp_path):
         """Files written by older versions without the order attribute should still be readable."""
         path = tmp_path / "order_missing_attr.h5"
@@ -151,6 +169,7 @@ class TestHDF5RoundTrip:
 class TestNpyRoundTrip:
     """Test that the npy format round-trips correctly."""
 
+    @pytest.mark.requires_gwpy
     def test_arrays_preserved_to_machine_precision(self, tmp_path):
         """Test that the arrays are preserved to machine precision."""
         stack = _make_stack()
@@ -165,6 +184,7 @@ class TestNpyRoundTrip:
                 np.asarray(restored[name].value),
             )
 
+    @pytest.mark.requires_gwpy
     def test_t0_preserved(self, tmp_path):
         """Test that the t0 is preserved."""
         stack = _make_stack()
@@ -175,6 +195,7 @@ class TestNpyRoundTrip:
 
         assert restored.t0 == pytest.approx(_T0)
 
+    @pytest.mark.requires_gwpy
     def test_dt_preserved(self, tmp_path):
         """Test that the dt is preserved."""
         stack = _make_stack()
@@ -185,6 +206,7 @@ class TestNpyRoundTrip:
 
         assert float(restored["H1"].dt) == pytest.approx(_DT)
 
+    @pytest.mark.requires_gwpy
     def test_channel_names_preserved(self, tmp_path):
         """Test that the channel names are preserved."""
         stack = _make_stack()
@@ -195,6 +217,7 @@ class TestNpyRoundTrip:
 
         assert list(restored.detector_names) == ["H1", "L1"]
 
+    @pytest.mark.requires_gwpy
     def test_json_sidecar_is_created(self, tmp_path):
         """Test that a JSON sidecar is created."""
         stack = _make_stack()
@@ -214,6 +237,7 @@ class TestNpyRoundTrip:
 class TestGWFWrite:
     """Test that writing a GWF file works."""
 
+    @pytest.mark.requires_gwpy
     def test_file_exists_and_nonempty(self, tmp_path):
         """Test that the file exists and is non-empty."""
         pytest.importorskip("gwpy.io.gwf")
@@ -225,6 +249,7 @@ class TestGWFWrite:
         assert path.exists()
         assert path.stat().st_size > 0
 
+    @pytest.mark.requires_gwpy
     def test_readable_by_gwpy(self, tmp_path):
         """Test that the file is readable by gwpy."""
         pytest.importorskip("gwpy.io.gwf")
@@ -245,6 +270,7 @@ class TestGWFWrite:
 class TestTxtWrite:
     """Test that writing a TXT file works."""
 
+    @pytest.mark.requires_gwpy
     def test_file_exists_and_nonempty(self, tmp_path):
         """Test that the file exists and is non-empty."""
         stack = _make_stack()
@@ -255,6 +281,7 @@ class TestTxtWrite:
         assert path.exists()
         assert path.stat().st_size > 0
 
+    @pytest.mark.requires_gwpy
     def test_header_starts_with_t0(self, tmp_path):
         """Test that the header starts with t0."""
         stack = _make_stack()
@@ -285,6 +312,7 @@ class TestReadErrors:
         with pytest.raises(NotImplementedError):
             DetectorStrainStack.read(tmp_path / "x.txt", format="txt")  # type: ignore[arg-type]
 
+    @pytest.mark.requires_gwpy
     def test_write_unknown_format_raises(self, tmp_path):
         """Writing an unknown format raises ValueError."""
         stack = _make_stack()

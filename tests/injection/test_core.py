@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal.injection import inject_strain, inject_strains_sequential
 
@@ -13,6 +19,7 @@ def _segment(n: int = 32, fs: float = 128.0, t0: float = 100.0) -> TimeSeries:
     return TimeSeries(np.zeros(n), t0=t0, sample_rate=fs)
 
 
+@pytest.mark.requires_gwpy
 def test_inject_returns_new_object():
     """Result is never the same instance as target (contract)."""
     target = _segment()
@@ -21,6 +28,7 @@ def test_inject_returns_new_object():
     assert out is not target
 
 
+@pytest.mark.requires_gwpy
 def test_inject_aligned_adds_in_window():
     """Aligned injection adds samples where grids overlap."""
     target = _segment(n=16, fs=4.0, t0=0.0)
@@ -31,6 +39,7 @@ def test_inject_aligned_adds_in_window():
     assert np.allclose(out.value[8:], 0.0)
 
 
+@pytest.mark.requires_gwpy
 def test_no_overlap_returns_copy():
     """Injection entirely after target returns unchanged values on a new object."""
     target = _segment(n=8, fs=4.0, t0=0.0)
@@ -40,6 +49,7 @@ def test_no_overlap_returns_copy():
     assert np.allclose(out.value, target.value)
 
 
+@pytest.mark.requires_gwpy
 def test_sequential_empty_is_copy():
     """Empty injection list yields a copy of target."""
     target = _segment()
@@ -48,6 +58,7 @@ def test_sequential_empty_is_copy():
     assert np.array_equal(out.value, target.value)
 
 
+@pytest.mark.requires_gwpy
 def test_sequential_two():
     """Two aligned injections accumulate on the segment."""
     target = _segment(n=16, fs=4.0, t0=0.0)
@@ -58,6 +69,7 @@ def test_sequential_two():
     assert out.value[2] == pytest.approx(2.0)
 
 
+@pytest.mark.requires_gwpy
 def test_incompatible_raises():
     """Mismatched sample rates cannot be added sample by sample."""
     target = _segment(fs=128.0)
@@ -71,6 +83,7 @@ def _gaussian_tone(times: np.ndarray, centre: float, sigma: float, frequency: fl
     return np.exp(-0.5 * ((times - centre) / sigma) ** 2) * np.cos(2.0 * np.pi * frequency * (times - centre))
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("start_offset_seconds", [2.0, 100.0])
 @pytest.mark.parametrize("nyquist_fraction", [0.2, 0.5])
 def test_off_lattice_injection_matches_analytic_signal(start_offset_seconds: float, nyquist_fraction: float):
@@ -99,6 +112,7 @@ def test_off_lattice_injection_matches_analytic_signal(start_offset_seconds: flo
     assert np.max(np.abs(out.value - expected)) <= 1e-6
 
 
+@pytest.mark.requires_gwpy
 def test_off_lattice_far_into_segment_is_skipped_without_interpolation():
     """With interpolation disabled, a fractional offset is skipped rather than snapped."""
     fs = 1024.0
@@ -110,6 +124,7 @@ def test_off_lattice_far_into_segment_is_skipped_without_interpolation():
     assert np.array_equal(out.value, target.value)
 
 
+@pytest.mark.requires_gwpy
 def test_on_lattice_at_gps_epoch_is_exact_add():
     """An injection on the lattice at a realistic GPS epoch is added sample-for-sample."""
     fs = 4096.0

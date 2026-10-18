@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    TimeSeries = None
 
 from gwmock_signal import resolve_simulator_backend
 from gwmock_signal.multichannel.stack import DetectorStrainStack
@@ -65,6 +71,7 @@ def test_stochastic_simulator_is_reproducible_with_seed() -> None:
     np.testing.assert_allclose(stack_a.data, stack_b.data)
 
 
+@pytest.mark.requires_gwpy
 def test_stochastic_simulator_adds_background() -> None:
     """SGWB signal can be added to an existing aligned background."""
     overlap_reduction = {("H1", "L1"): np.zeros(65)}

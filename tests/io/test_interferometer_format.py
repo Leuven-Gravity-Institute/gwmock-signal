@@ -7,7 +7,12 @@ import warnings
 from ast import literal_eval
 from pathlib import Path
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import pytest
 
 from gwmock_signal.detector import CustomDetector
@@ -57,6 +62,7 @@ def test_interferometer_config_to_custom_detector_matches_golden_fixture(fixture
     assert detector.yarm_tilt_rad == pytest.approx(float(expected["yarm_tilt"]))
 
 
+@pytest.mark.requires_lalsuite
 def test_interferometer_x_arm_matches_virgo_reference() -> None:
     """The 2L Sardinia x-arm has the azimuth of LAL's V1 x-arm, as its fixture states."""
     fixture_path = _FIXTURE_DIR / "E1_2L_Aligned_Sardinia.interferometer"

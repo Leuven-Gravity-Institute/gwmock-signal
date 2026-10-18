@@ -436,6 +436,7 @@ class TestTheDetectorTable:
 
         assert builtin_values() == expected
 
+    @pytest.mark.requires_lalsuite
     def test_the_reader_gives_the_installed_lalsuite_the_built_in_names_and_values(self):
         """The snippet run in each throwaway environment, run here against the installed ``lalsuite``.
 

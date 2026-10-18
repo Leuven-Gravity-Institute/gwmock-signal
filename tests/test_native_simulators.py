@@ -10,7 +10,13 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+
+try:
+    from gwpy.timeseries import TimeSeries as GWpyTimeSeries
+except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; its tests are skipped
+    if exc.name != "gwpy":
+        raise
+    GWpyTimeSeries = None
 
 from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.simulator import CBCSimulator
@@ -55,6 +61,7 @@ def _gwpy_toy(**kwargs: object) -> tuple[GWpyTimeSeries, GWpyTimeSeries]:
     return plus.to_gwpy(), cross.to_gwpy()
 
 
+@pytest.mark.requires_gwpy
 @pytest.mark.parametrize("model", [_native_toy, _gwpy_toy], ids=["native-model", "gwpy-model"])
 def test_a_cbc_background_of_either_kind_gives_the_same_strain(model):
     """Native and GWpy backgrounds, with a model returning either kind, inject identically."""
