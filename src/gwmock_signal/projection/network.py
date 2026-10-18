@@ -32,7 +32,7 @@ from gwmock_signal.projection.resampling import (
     resample_uniform_sinc,
 )
 from gwmock_signal.projection.sidereal import gmst_rad_astropy, precessed_sky_anchor_and_rate
-from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
     import gwpy.timeseries
@@ -408,7 +408,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
-) -> dict[str, gwpy.timeseries.TimeSeries]:
+) -> dict[str, TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
     Built-in and custom detector codes are resolved through the LAL cached
@@ -469,8 +469,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
         kaiser_beta: Kaiser window shape parameter for that kernel.
 
     Returns:
-            Mapping from each detector name to the projected strain as a GWpy time
-            series (same length and sample rate as the inputs).
+            Mapping from each detector name to the projected strain as a
+            :class:`~gwmock_signal.timeseries.TimeSeries` (same length and sample rate as the inputs).
 
     Raises:
         TypeError: If ``polarizations`` is not a mapping of time series as required.
@@ -478,7 +478,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
             recognized, ``backend`` is unknown, or ``backend="jax"`` is combined with
             ``earth_rotation=False``.
     """
-    strains = _project(
+    return _project(
         polarizations,
         detector_names,
         right_ascension=right_ascension,
@@ -490,7 +490,6 @@ def project_polarizations_to_network(  # noqa: PLR0913
         sinc_taps=sinc_taps,
         kaiser_beta=kaiser_beta,
     )
-    return {name: _public_output(strain) for name, strain in strains.items()}
 
 
 # PLR0915: this function was already at the 50-statement limit before the one-line call to

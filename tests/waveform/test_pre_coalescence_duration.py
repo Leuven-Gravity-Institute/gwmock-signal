@@ -43,7 +43,7 @@ def test_the_lal_backend_predicts_where_its_own_waveform_starts(params, sampling
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", sampling_frequency, 20.0, **params)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, sampling_frequency, 20.0, **params)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted is not None
     # Exact: both come from the same sizing helpers, so any difference is a real divergence
@@ -58,7 +58,7 @@ def test_the_ripple_backend_predicts_where_its_own_waveform_starts(params):
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **params)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **params)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted is not None
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
@@ -130,7 +130,7 @@ def test_the_gwsignal_backend_inherits_a_correct_answer():
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted is not None
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
@@ -150,7 +150,7 @@ def test_a_pinned_segment_duration_is_honoured(segment_duration):
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
     # The pin must actually bind, or this test would pass against an implementation ignoring it.
@@ -167,7 +167,7 @@ def test_a_non_default_ripple_ringdown_fraction_is_honoured(ringdown_fraction):
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
@@ -189,7 +189,7 @@ def test_a_non_default_ringdown_fraction_is_honoured(ringdown_fraction):
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **_BBH)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **_BBH)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 
@@ -215,7 +215,7 @@ def test_ripple_honours_the_mass_ratio(params):
 
     predicted = backend.pre_coalescence_duration("IMRPhenomD", 1024.0, 20.0, **params)
     generated = backend.generate_td_waveform("IMRPhenomD", _TC, 1024.0, 20.0, **params)
-    actual = _TC - float(generated["plus"].t0.value)
+    actual = _TC - generated["plus"].t0
 
     assert predicted == pytest.approx(actual, abs=0.5 / 1024.0)
 

@@ -15,7 +15,7 @@
 
 [ripple](https://github.com/GW-JAX-Team/ripple) generates *frequency-domain*
 polarizations as JAX arrays. This backend conditions them into the time-domain
-GWpy ``plus``/``cross`` series required by :class:`WaveformBackend`, so ripple can
+``plus``/``cross`` time series required by :class:`WaveformBackend`, so ripple can
 be used wherever the LAL/PyCBC backends are. The conversion runs on host (NumPy);
 an on-device JAX pipeline is a separate, later effort (see ``PLAN.md``).
 
@@ -46,12 +46,11 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
-from gwmock_signal.timeseries import TimeSeries, _public_output
+from gwmock_signal.timeseries import TimeSeries
 from gwmock_signal.waveform.backends import conditioning
 from gwmock_signal.waveform.backends.base import WaveformBackend, _pop_alias
 
 if TYPE_CHECKING:
-    import gwpy.timeseries
     from jax import Array
 
 _RIPPLE_IMPORT_ERROR = "ripple (rippleGW) is not installed. Run: pip install 'gwmock-signal[jax]'"
@@ -372,7 +371,7 @@ class FrequencyDomainPolarizations:
     are JAX arrays (on-device). ``n_samples`` and ``sampling_frequency`` describe the
     real time series an inverse real FFT would produce (``len(frequencies) ==
     n_samples // 2 + 1``). This is the on-device hand-off for the projection kernel;
-    the time-domain backend conditions it into GWpy series.
+    the time-domain backend conditions it into time series.
     """
 
     frequencies: Array
@@ -618,7 +617,7 @@ class RippleBackend(WaveformBackend):
         sampling_frequency: float,
         minimum_frequency: float,
         **params: object,
-    ) -> dict[str, gwpy.timeseries.TimeSeries]:
+    ) -> dict[str, TimeSeries]:
         """Generate plus/cross polarizations from ripple, conditioned to time domain."""
         fd = self.generate_fd_polarizations(
             approximant,
@@ -629,8 +628,8 @@ class RippleBackend(WaveformBackend):
         hp_t, hc_t, epoch = self._to_time_domain(fd)
         t0 = epoch + tc
         return {
-            "plus": _public_output(TimeSeries(hp_t, t0=t0, sample_rate=sampling_frequency)),
-            "cross": _public_output(TimeSeries(hc_t, t0=t0, sample_rate=sampling_frequency)),
+            "plus": TimeSeries(hp_t, t0=t0, sample_rate=sampling_frequency),
+            "cross": TimeSeries(hc_t, t0=t0, sample_rate=sampling_frequency),
         }
 
     def generate_fd_polarizations(

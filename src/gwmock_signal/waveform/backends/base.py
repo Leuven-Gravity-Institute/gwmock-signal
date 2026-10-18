@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from gwpy.timeseries import TimeSeries
+    from gwmock_signal.timeseries import TimeSeries
 
 _MISSING: Final[object] = object()
 
@@ -58,7 +58,7 @@ class WaveformBackend(ABC):
         minimum_frequency: float,
         **params: object,
     ) -> dict[str, TimeSeries]:
-        """Generate ``plus`` and ``cross`` GWpy time series."""
+        """Generate ``plus`` and ``cross`` time series."""
 
     def pre_coalescence_duration(
         self,

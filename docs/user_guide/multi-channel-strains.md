@@ -1,18 +1,17 @@
 ---
 title: Multichannel strain examples
 description:
-    Examples for stacking per-detector GWpy strains into one aligned
-    multi-channel segment.
+    Examples for stacking per-detector strains into one aligned multi-channel
+    segment.
 ---
 
 # Multichannel strain examples
 
 [`project_polarizations_to_network`](../api/projection/) returns a **mapping**
-from detector name to one GWpy
-[`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/)
-each. Many workflows (frame writers, array-oriented numerics, neural nets, or
-legacy code that expects an \((N*\mathrm{det}, N*\mathrm{samples})\) array) need
-the **same data in a fixed channel order** as a single object.
+from detector name to one [`TimeSeries`](../api/timeseries/) each. Many
+workflows (frame writers, array-oriented numerics, neural nets, or legacy code
+that expects an \((N*\mathrm{det}, N*\mathrm{samples})\) array) need the **same
+data in a fixed channel order** as a single object.
 
 This page is **examples only**. **`DetectorStrainStack` fields, validation
 rules, and method contracts** are documented only under
@@ -64,12 +63,12 @@ strains = project_polarizations_to_network(
 
 stack = DetectorStrainStack.from_mapping(names, strains)
 arr = stack.data
-assert arr.shape == (len(names), len(strains["H1"]))
+assert arr.shape == (len(names), strains["H1"].n_samples)
 print(np.max(np.abs(arr)))
 
 # Inspect stack properties
-print(stack.t0)  # GPS start time (same for all channels)
-print(stack.sample_rate)  # Sample rate as GWpy Quantity
+print(stack.t0)  # GPS start time in seconds (same for all channels)
+print(stack.sample_rate)  # Sample rate in Hz
 print(stack.detector_names)  # ('H1', 'L1', 'V1')
 ```
 
@@ -115,12 +114,12 @@ reloaded = DetectorStrainStack.read("my_injection.npy", format="npy")
 
 ## Pitfalls
 
-- **Aligned grid:** Every channel must share one compatible GWpy time grid; see
-  the API page for what is validated and which errors are raised.
+- **Aligned grid:** Every channel must share one time grid; see the API page for
+  what is validated and which errors are raised.
 - **Order:** Do not assume iteration order of Python dicts; always pass an
   explicit `detector_names` sequence when stacking.
 - **Copy vs. view:** `data` may be a **copy** for contiguity; do not rely on
-  mutating `data` to change internal GWpy series unless documented.
+  mutating `data` to change the channels; write to a channel's own `data`.
 - **Units:** All channels should use compatible strain units (typically
   dimensionless).
 

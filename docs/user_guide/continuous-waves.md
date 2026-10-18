@@ -146,8 +146,8 @@ whole run alongside them.
 
 ```python
 import numpy as np
-from gwpy.timeseries import TimeSeries
 
+from gwmock_signal import TimeSeries
 from gwmock_signal.continuous import ContinuousWaveSimulator
 
 fs = 64.0
@@ -235,7 +235,7 @@ multisegment = np.concatenate(strains)
 | `sampling_frequency` differs from the background's            | `ValueError`. Otherwise the signal is generated on one time grid and added to another, stretching it by the ratio.                                                                                                                                                    |
 | `detector_names` is empty                                     | `ValueError`.                                                                                                                                                                                                                                                         |
 | A detector in `detector_names` has no `background` channel    | `KeyError`.                                                                                                                                                                                                                                                           |
-| A `background` value is not a GWpy `TimeSeries`               | `TypeError`.                                                                                                                                                                                                                                                          |
+| A `background` value is not a time series                     | `TypeError`.                                                                                                                                                                                                                                                          |
 | Background channels disagree on epoch, length, or sample rate | `ValueError`. Background channels for all detectors must share these parameters.                                                                                                                                                                                      |
 | The JAX backend is given a padded span over 86400 s           | `ValueError` naming the span; project in shorter segments or pass `projection_backend="numpy"`.                                                                                                                                                                       |
 | Polarizations come back non-finite                            | `RuntimeError`. Usually an old `rippleGW` (<0.3.1 returns `NaN` at the geocentre for every sample), or an extreme spindown/reference-epoch combination overflowing the phase. The spindown term grows as the square of the time from `reference_time_ssb`.            |

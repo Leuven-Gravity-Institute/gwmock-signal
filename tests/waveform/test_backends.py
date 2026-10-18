@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from gwpy.timeseries import TimeSeries
 
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import LALSimulationBackend, PyCBCBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,8 +39,8 @@ def test_lalsimulation_backend_generates_timeseries_dict() -> None:
         coa_phase=0.0,
     )
     assert set(result) == {"plus", "cross"}
-    assert isinstance(result["plus"], TimeSeries)
-    assert isinstance(result["cross"], TimeSeries)
+    assert isinstance(result["plus"], NativeTimeSeries)
+    assert isinstance(result["cross"], NativeTimeSeries)
 
 
 def test_pycbc_backend_raises_helpful_import_error_when_pycbc_missing() -> None:
@@ -78,7 +79,7 @@ def test_lal_backend_accepts_tidal_params_for_nrtidal_approximant() -> None:
         lambda_2=300.0,
     )
     assert set(result) == {"plus", "cross"}
-    assert isinstance(result["plus"], TimeSeries)
+    assert isinstance(result["plus"], NativeTimeSeries)
 
 
 def test_lal_backend_accepts_tidal_aliases() -> None:
@@ -340,7 +341,7 @@ def test_lal_fd_td_roundtrip() -> None:
     freqs = np.arange(len(template)) * delta_f
     in_band = freqs >= _F_MIN
 
-    epoch = float(td.t0.value) - _TC
+    epoch = td.t0 - _TC
     # FFT the TD samples and undo the epoch shift; this must recover the FD template.
     recon = np.exp(-2j * np.pi * freqs * epoch) * np.fft.rfft(td.value, n=n_samples) / _FS
     a, b = recon[in_band], template[in_band]
@@ -357,7 +358,7 @@ def test_lal_coalescence_at_fd_phase_reference_not_amplitude_peak() -> None:
     hp = LALSimulationBackend().generate_td_waveform(
         "IMRPhenomD", tc=_TC, sampling_frequency=_FS, minimum_frequency=_F_MIN, **_CONVENTION_SOURCE
     )["plus"]
-    peak_offset = float(hp.times.value[int(np.argmax(np.abs(hp.value)))]) - _TC
+    peak_offset = float(hp.times[int(np.argmax(np.abs(hp.value)))]) - _TC
     assert peak_offset < -2.0e-3, (
         f"LAL peak offset {peak_offset * 1e3:+.3f} ms should be well before tc; "
         "coalescence must sit at the FD phase reference, not the amplitude peak"
@@ -381,8 +382,8 @@ def test_lal_and_ripple_agree_on_coalescence() -> None:
 
     # Same auto-sized grid (MTSUN and segment sizing are shared).
     assert lal_hp.value.size == rip_hp.value.size
-    lal_peak = float(lal_hp.times.value[int(np.argmax(np.abs(lal_hp.value)))])
-    rip_peak = float(rip_hp.times.value[int(np.argmax(np.abs(rip_hp.value)))])
+    lal_peak = float(lal_hp.times[int(np.argmax(np.abs(lal_hp.value)))])
+    rip_peak = float(rip_hp.times[int(np.argmax(np.abs(rip_hp.value)))])
     assert abs(lal_peak - rip_peak) < 1.5 / _FS, (
         f"LAL and ripple coalescence disagree by {(lal_peak - rip_peak) * 1e3:.3f} ms "
         "(> 1 sample); the two backends must share the FD-phase-reference convention"

@@ -11,6 +11,7 @@ from gwpy.timeseries import TimeSeries
 
 from gwmock_signal.snr import _pycbc
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,11 +33,10 @@ def _flat_psd(n_freq: int, delta_f: float) -> object:
 def _series_pass_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let a mock stand in for a time series, for the tests that check calls into a mocked pycbc.
 
-    Those tests pass mocks whose ``to_pycbc`` returns a mock, so the input coercion and the
-    conversion of the result, which need a real series, are made to pass their argument through.
+    Those tests pass mocks whose ``to_pycbc`` returns a mock, so the input coercion, which needs a
+    real series, is made to pass its argument through.
     """
     monkeypatch.setattr(_pycbc, "as_timeseries", lambda series: series)
-    monkeypatch.setattr(_pycbc, "_public_output", lambda series: series)
 
 
 def _sine_strain(freq: float = 50.0) -> TimeSeries:
@@ -186,16 +186,16 @@ class TestOptimalSNR:
 class TestMatchedFilterSNR:
     """Tests for matched_filter_snr."""
 
-    def test_returns_gwpy_timeseries(self) -> None:
-        """matched_filter_snr returns a gwpy TimeSeries."""
+    def test_returns_a_timeseries(self) -> None:
+        """matched_filter_snr returns the package's TimeSeries."""
         pytest.importorskip("pycbc")
         strain = _sine_strain()
         pycbc_ts = strain.to_pycbc()
         delta_f = pycbc_ts.to_frequencyseries().delta_f
         psd = _flat_psd(len(pycbc_ts.to_frequencyseries()), delta_f)
         result = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=_FMIN)
-        assert isinstance(result, TimeSeries)
-        assert len(result) == len(strain)
+        assert isinstance(result, NativeTimeSeries)
+        assert result.n_samples == len(strain)
 
     def test_snr_is_non_negative(self) -> None:
         """All values of the returned SNR time series are non-negative."""
@@ -397,9 +397,9 @@ class TestOptimalSNRPadding:
             coa_phase=0.0,
         )
         strain = hpc["plus"]
-        delta_f_natural = 1.0 / float(strain.duration.value)
+        delta_f_natural = 1.0 / strain.duration
         psd = aLIGODesignSensitivityP1200087(
-            length=int(len(strain) / 2) + 1,
+            length=int(strain.n_samples / 2) + 1,
             delta_f=delta_f_natural,
             low_freq_cutoff=20.0,
         )
@@ -453,8 +453,8 @@ class TestMatchedFilterSNRPadding:
         # Flat PSD at 0.5 Hz (513 bins); htilde is at 0.25 Hz (1025 bins) — same Nyquist.
         psd = FrequencySeries(np.ones(513), delta_f=0.5)
         result = matched_filter_snr(data, template, psd, low_frequency_cutoff=_FMIN, target_delta_f=0.5)
-        assert isinstance(result, TimeSeries)
-        assert len(result) == len(data)
+        assert isinstance(result, NativeTimeSeries)
+        assert result.n_samples == len(data)
 
     def test_matched_filter_snr_no_padding_for_already_fine_grid(self) -> None:
         """Long signals with natural delta_f <= 1/128 Hz are not padded."""
@@ -497,9 +497,9 @@ class TestMatchedFilterSNRPadding:
             coa_phase=0.0,
         )
         strain = hpc["plus"]
-        delta_f_natural = 1.0 / float(strain.duration.value)
+        delta_f_natural = 1.0 / strain.duration
         psd = aLIGODesignSensitivityP1200087(
-            length=int(len(strain) / 2) + 1,
+            length=int(strain.n_samples / 2) + 1,
             delta_f=delta_f_natural,
             low_freq_cutoff=20.0,
         )
@@ -526,7 +526,7 @@ class TestNativeInput:
         )
 
     def test_matched_filter_snr(self) -> None:
-        """Identical series, returned as GWpy, for either kind of data and template."""
+        """Identical series, returned as the package's TimeSeries, for either kind of data and template."""
         pytest.importorskip("pycbc")
         from pycbc.types import FrequencySeries
 
@@ -539,6 +539,6 @@ class TestNativeInput:
         result = matched_filter_snr(native, native, psd, low_frequency_cutoff=_FMIN)
         reference = matched_filter_snr(strain, strain, psd, low_frequency_cutoff=_FMIN)
 
-        assert isinstance(result, TimeSeries)
+        assert isinstance(result, NativeTimeSeries)
         assert np.array_equal(result.value, reference.value)
         assert result.t0 == reference.t0

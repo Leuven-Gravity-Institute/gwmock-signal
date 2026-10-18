@@ -16,6 +16,7 @@ from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.simulator import CBCSimulator
 from gwmock_signal.stochastic import StochasticBackgroundSimulator
 from gwmock_signal.timeseries import TimeSeries
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import LALSimulationBackend
 
 _TC = 1_126_259_462.4
@@ -66,7 +67,7 @@ def test_a_cbc_background_of_either_kind_gives_the_same_strain(model):
 
     assert np.array_equal(native.data, gwpy.data)
     assert np.any(native.data != 0.0)
-    assert isinstance(native["H1"], GWpyTimeSeries)
+    assert isinstance(native["H1"], NativeTimeSeries)
 
 
 def test_a_registered_model_returning_anything_else_is_refused():
@@ -104,7 +105,7 @@ def test_a_stochastic_background_of_either_kind_gives_the_same_strain():
         )
 
     assert np.array_equal(results[0].data, results[1].data)
-    assert results[0].t0.value == 100.0
+    assert results[0].t0 == 100.0
 
 
 class TestAddStrain:

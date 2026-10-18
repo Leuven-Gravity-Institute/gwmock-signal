@@ -57,7 +57,7 @@ class TestHDF5RoundTrip:
         stack.write(path, format="hdf5")
         restored = DetectorStrainStack.read(path, format="hdf5")
 
-        assert float(restored.t0.value) == pytest.approx(_T0)
+        assert restored.t0 == pytest.approx(_T0)
 
     def test_dt_preserved(self, tmp_path):
         """Test that the dt is preserved."""
@@ -67,7 +67,7 @@ class TestHDF5RoundTrip:
         stack.write(path, format="hdf5")
         restored = DetectorStrainStack.read(path, format="hdf5")
 
-        assert float(restored["H1"].dt.value) == pytest.approx(_DT)
+        assert float(restored["H1"].dt) == pytest.approx(_DT)
 
     def test_channel_names_preserved(self, tmp_path):
         """Test that the channel names are preserved."""
@@ -173,7 +173,7 @@ class TestNpyRoundTrip:
         stack.write(path, format="npy")
         restored = DetectorStrainStack.read(path, format="npy")
 
-        assert float(restored.t0.value) == pytest.approx(_T0)
+        assert restored.t0 == pytest.approx(_T0)
 
     def test_dt_preserved(self, tmp_path):
         """Test that the dt is preserved."""
@@ -183,7 +183,7 @@ class TestNpyRoundTrip:
         stack.write(path, format="npy")
         restored = DetectorStrainStack.read(path, format="npy")
 
-        assert float(restored["H1"].dt.value) == pytest.approx(_DT)
+        assert float(restored["H1"].dt) == pytest.approx(_DT)
 
     def test_channel_names_preserved(self, tmp_path):
         """Test that the channel names are preserved."""

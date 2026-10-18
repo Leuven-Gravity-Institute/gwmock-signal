@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
 from gwmock_signal.injection import inject_strain, inject_strains_sequential
 from gwmock_signal.timeseries import TimeSeries
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
 _FS = 256.0
 _T0 = 1_400_000_000.0
@@ -40,10 +40,10 @@ def test_either_kind_of_input_gives_the_same_samples(target_kind, injection_kind
     result = inject_strain(convert[target_kind](target), convert[injection_kind](injection))
     reference = inject_strain(target, injection)
 
-    assert isinstance(result, GWpyTimeSeries)
+    assert isinstance(result, NativeTimeSeries)
     assert np.array_equal(result.value, reference.value)
-    assert result.t0.value == _T0
-    assert result.sample_rate.value == _FS
+    assert result.t0 == _T0
+    assert result.sample_rate == _FS
     assert np.any(result.value != 0.0)
 
 
@@ -65,7 +65,7 @@ def test_the_target_keeps_its_name_and_unit():
 
     result = inject_strain(target, TimeSeries(np.ones(2), t0=0.0, sample_rate=4.0, unit="strain"))
 
-    assert (result.name, result.unit.to_string()) == ("H1", "strain")
+    assert (result.name, result.unit) == ("H1", "strain")
 
 
 def test_a_different_unit_is_not_compatible():

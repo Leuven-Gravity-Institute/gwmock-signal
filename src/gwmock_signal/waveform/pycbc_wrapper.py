@@ -11,7 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-"""PyCBC time-domain waveforms as GWpy `TimeSeries` polarizations.
+"""PyCBC time-domain waveforms as `TimeSeries` polarizations.
 
 See `docs/user_guide/waveform.md` (examples) and `docs/api/waveform/index.md` (API reference).
 """
@@ -19,12 +19,9 @@ See `docs/user_guide/waveform.md` (examples) and `docs/api/waveform/index.md` (A
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from gwmock_signal.timeseries import TimeSeries, _public_output
-
-if TYPE_CHECKING:
-    import gwpy.timeseries
+from gwmock_signal.timeseries import TimeSeries
 
 
 def get_td_waveform(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
@@ -38,13 +35,13 @@ def pycbc_waveform_wrapper(
     minimum_frequency: float,
     waveform_model: str,
     **kwargs: Any,
-) -> dict[str, gwpy.timeseries.TimeSeries]:
-    """Generate plus and cross polarizations with PyCBC and return GWpy time series.
+) -> dict[str, TimeSeries]:
+    """Generate plus and cross polarizations with PyCBC and return them as time series.
 
     Calls [`pycbc.waveform.get_td_waveform`](https://pycbc.org/pycbc/latest/html/waveform.html)
     with ``delta_t = 1/sampling_frequency``,
     ``f_lower = minimum_frequency``, and ``approximant=waveform_model``, then shifts both
-    polarizations by ``tc`` in GPS seconds and converts them to GWpy.
+    polarizations by ``tc`` in GPS seconds and returns copies of them as time series.
 
     Args:
         tc: GPS time of coalescence (seconds); added to each series' ``start_time``.
@@ -56,7 +53,7 @@ def pycbc_waveform_wrapper(
 
     Returns:
         Mapping whose keys are the strings ``plus`` and ``cross``; each value is a
-        GWpy [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/).
+        :class:`~gwmock_signal.timeseries.TimeSeries`.
 
     Raises:
         ValueError: sampling_frequency must be > 0.
@@ -77,6 +74,6 @@ def pycbc_waveform_wrapper(
     hc.start_time += tc
     return {
         # Copied, so the returned series do not share PyCBC's buffers.
-        "plus": _public_output(TimeSeries.from_pycbc(hp).copy()),
-        "cross": _public_output(TimeSeries.from_pycbc(hc).copy()),
+        "plus": TimeSeries.from_pycbc(hp).copy(),
+        "cross": TimeSeries.from_pycbc(hc).copy(),
     }

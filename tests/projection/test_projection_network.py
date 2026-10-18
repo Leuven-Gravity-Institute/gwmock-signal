@@ -540,8 +540,8 @@ class TestTheDeviceBackend:
             "H1"
         ]
 
-        assert float(device.t0.value) == 1.4e9
-        assert float(device.sample_rate.value) == 512.0
+        assert device.t0 == 1.4e9
+        assert device.sample_rate == 512.0
         assert len(device.value) == len(polarizations["plus"].value)
 
     def test_the_device_kernel_is_what_runs(self):
@@ -728,7 +728,7 @@ class TestTheDeviceBackend:
 
 @pytest.mark.parametrize("earth_rotation", [True, False])
 def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool) -> None:
-    """The package's own series and GWpy's project to identical strain, returned as GWpy series."""
+    """The package's own series and GWpy's project to identical strain, returned as the package's series."""
     from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
     rng = np.random.default_rng(3)
@@ -746,7 +746,7 @@ def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool)
     gwpy = project_polarizations_to_network({"plus": plus.to_gwpy(), "cross": cross.to_gwpy()}, ["H1", "V1"], **kwargs)
 
     for name in ("H1", "V1"):
-        assert isinstance(native[name], TimeSeries)
+        assert isinstance(native[name], NativeTimeSeries)
         assert np.array_equal(native[name].value, gwpy[name].value)
         assert native[name].t0 == gwpy[name].t0
         assert native[name].name == name

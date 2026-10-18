@@ -94,7 +94,7 @@ def test_network_snr_h1l1_equals_quadrature_sum() -> None:
 
     ref_ts = stack[detectors[0]]
     n_samples = len(ref_ts.value)
-    dt = float(ref_ts.dt.value)
+    dt = ref_ts.dt
     delta_f = 1.0 / (n_samples * dt)
     freqs = np.fft.rfftfreq(n_samples, d=dt)
     n_freq = len(freqs)

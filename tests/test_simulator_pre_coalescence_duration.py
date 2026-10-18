@@ -46,7 +46,7 @@ def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_fre
 
     predicted = simulator.pre_coalescence_duration(params, sampling_frequency, 20.0)
     hp, _ = simulator.generate_polarizations(params, sampling_frequency, 20.0)
-    actual = _TC - float(hp.t0.value)
+    actual = _TC - hp.t0
 
     assert predicted is not None
     assert predicted == pytest.approx(actual, abs=0.5 / sampling_frequency)
@@ -153,6 +153,6 @@ def test_the_query_accepts_exactly_what_generation_accepts():
     predicted = simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0)
     hp, _ = simulator.generate_polarizations(_BBH, 1024.0, 20.0)
 
-    assert predicted == pytest.approx(_TC - float(hp.t0.value), abs=0.5 / 1024.0)
+    assert predicted == pytest.approx(_TC - hp.t0, abs=0.5 / 1024.0)
     # And the mapping really does carry the keys that used to break it, or this proves nothing.
     assert {"coa_time", "right_ascension", "declination", "polarization_angle"} <= set(_BBH)

@@ -220,10 +220,10 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     )
 
     if output is not None:
-        tsd = TimeSeriesDict(result.to_dict())
+        tsd = TimeSeriesDict({name: series.to_gwpy() for name, series in result.to_dict().items()})
         tsd.write(str(output), format="hdf5")
     else:
         for name in det_str_names:
             ts = result[name]
-            rms = float(np.sqrt(np.mean(ts.value**2)))
-            typer.echo(f"{name}  rms={rms:.4e}  duration={ts.duration.value:.1f}s")
+            rms = float(np.sqrt(np.mean(np.asarray(ts.data) ** 2)))
+            typer.echo(f"{name}  rms={rms:.4e}  duration={ts.duration:.1f}s")

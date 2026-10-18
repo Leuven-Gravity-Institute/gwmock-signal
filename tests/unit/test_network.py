@@ -109,7 +109,7 @@ class TestNetworkProjection:
         )
         assert set(result.keys()) == set(net.detector_names)
         for code in net.detector_names:
-            assert len(result[code]) == n
+            assert result[code].n_samples == n
 
 
 class TestNetworkFromDetectors:

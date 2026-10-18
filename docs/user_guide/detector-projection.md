@@ -102,11 +102,11 @@ reproduces it.
 
 ## Parameter and units checklist
 
-| Quantity                                               | Unit       | Notes                                                   |
-| ------------------------------------------------------ | ---------- | ------------------------------------------------------- |
-| `right_ascension`, `declination`, `polarization_angle` | radians    | Same convention as PyCBC `Detector.antenna_pattern`.    |
-| GW polarizations                                       | strain     | Dimensionless \(h\); output strains are dimensionless.  |
-| Time bases                                             | GPS / GWpy | Input `plus`/`cross` must share a compatible time axis. |
+| Quantity                                               | Unit        | Notes                                                   |
+| ------------------------------------------------------ | ----------- | ------------------------------------------------------- |
+| `right_ascension`, `declination`, `polarization_angle` | radians     | Same convention as PyCBC `Detector.antenna_pattern`.    |
+| GW polarizations                                       | strain      | Dimensionless \(h\); output strains are dimensionless.  |
+| Time bases                                             | GPS seconds | Input `plus`/`cross` must share a compatible time axis. |
 
 ## Edge cases and pitfalls
 

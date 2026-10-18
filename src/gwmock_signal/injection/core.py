@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from gwmock_signal.projection.resampling import resample_uniform_sinc
-from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
     import gwpy.timeseries
@@ -36,7 +36,7 @@ def inject_strain(
     injection: TimeSeries | gwpy.timeseries.TimeSeries,
     *,
     interpolate_if_offset: bool = True,
-) -> gwpy.timeseries.TimeSeries:
+) -> TimeSeries:
     """Return a new series equal to ``target`` plus ``injection`` on overlapping samples.
 
     The two must share a sample rate and a unit. Only the samples of ``injection`` that fall
@@ -66,15 +66,12 @@ def inject_strain(
             target sample boundary, return a copy of ``target`` without resampling.
 
     Returns:
-        New [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/)
-        with injected strain.
+        New :class:`~gwmock_signal.timeseries.TimeSeries` with injected strain.
 
     Raises:
         ValueError: If either series is not one-dimensional, or the sample rates or units differ.
     """
-    return _public_output(
-        _inject(as_timeseries(target), as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
-    )
+    return _inject(as_timeseries(target), as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
 
 
 def inject_strains_sequential(
@@ -82,7 +79,7 @@ def inject_strains_sequential(
     injections: Sequence[TimeSeries | gwpy.timeseries.TimeSeries],
     *,
     interpolate_if_offset: bool = True,
-) -> gwpy.timeseries.TimeSeries:
+) -> TimeSeries:
     """Apply ``inject_strain`` to each series in order.
 
     Args:
@@ -92,13 +89,13 @@ def inject_strains_sequential(
         interpolate_if_offset: Forwarded to each ``inject_strain`` call.
 
     Returns:
-        Final [`TimeSeries`](https://gwpy.github.io/docs/latest/api/gwpy.timeseries.TimeSeries/).
+        Final :class:`~gwmock_signal.timeseries.TimeSeries`.
         If ``injections`` is empty, returns a copy of ``target``.
     """
     result = as_timeseries(target).copy()
     for injection in injections:
         result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
-    return _public_output(result)
+    return result
 
 
 def _add_strain(background: TimeSeries, signal: np.ndarray) -> TimeSeries:

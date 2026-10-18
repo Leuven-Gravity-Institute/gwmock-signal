@@ -570,8 +570,8 @@ class CBCSimulator(TransientSimulator):
             minimum_frequency: Low-frequency cutoff in Hz.
 
         Returns:
-            Tuple of ``(hp, hc)`` as the waveform model returns them: GWpy ``TimeSeries`` from
-            a backend, or either kind from a registered model.
+            Tuple of ``(hp, hc)`` as the waveform model returns them: the package's
+            ``TimeSeries`` from a backend, or either kind from a registered model.
         """
         waveform_params = _waveform_parameters(params)
 

@@ -1,6 +1,6 @@
 ---
 title: Injection
-description: Strain injection into GWpy time series.
+description: Strain injection into time series.
 icon: material/plus-box
 ---
 

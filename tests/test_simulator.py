@@ -408,7 +408,7 @@ class TestCBCSimulatorEndToEnd:
         assert len(result) == len(detector_names)
         # Each channel should be a TimeSeries with the same length as the background.
         for name in detector_names:
-            assert len(result[name]) == n
+            assert result[name].n_samples == n
         # The projected plus polarization at the GW150914 sky position is non-zero for
         # at least one detector; verify the injection path modified the background.
         assert any(np.any(result[name].value != 0.0) for name in detector_names), (
@@ -454,7 +454,7 @@ result = CBCSimulator("IMRPhenomD", waveform_backend=LALSimulationBackend()).sim
     sampling_frequency=4096.0,
     minimum_frequency=20.0,
 )
-assert len(result["H1"]) == 8192
+assert result["H1"].n_samples == 8192
 """
         env = os.environ.copy()
         env["PYTHONPATH"] = str(REPO_ROOT / "src")

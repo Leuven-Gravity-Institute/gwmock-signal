@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
     import gwpy.timeseries
@@ -99,7 +99,7 @@ def matched_filter_snr(
     psd: Any,
     low_frequency_cutoff: float = 20.0,
     target_delta_f: float | None = None,
-) -> gwpy.timeseries.TimeSeries:
+) -> TimeSeries:
     """Return the matched-filter SNR time series.
 
     Computes the SNR magnitude ``|<template|data>_PSD| / sigma`` via
@@ -124,7 +124,7 @@ def matched_filter_snr(
             template's natural grid spacing and 1/128 Hz (never coarsens).
 
     Returns:
-        SNR magnitude as a gwpy ``TimeSeries`` with len(data) samples.
+        SNR magnitude as a :class:`~gwmock_signal.timeseries.TimeSeries` with len(data) samples.
 
     Raises:
         ImportError: If pycbc is not installed.
@@ -181,4 +181,4 @@ def matched_filter_snr(
         delta_t=snr_pycbc.delta_t,
         epoch=snr_pycbc.start_time,
     )
-    return _public_output(TimeSeries.from_pycbc(snr_trimmed))
+    return TimeSeries.from_pycbc(snr_trimmed)

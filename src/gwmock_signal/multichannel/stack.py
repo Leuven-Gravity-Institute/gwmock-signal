@@ -15,20 +15,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Mapping, Sequence
-from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import h5py
 import numpy as np
 
-from gwmock_signal.timeseries import TimeSeries, _public_output, as_timeseries
+from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
     import gwpy.timeseries
-    from astropy.units.quantity import Quantity
 
 # Top-level HDF5 attribute storing the detector/channel name order.
 #
@@ -70,8 +69,8 @@ class DetectorStrainStack:
     """Aligned strains for a fixed list of detectors (one series per row).
 
     Channels may be given as :class:`~gwmock_signal.timeseries.TimeSeries` or GWpy ``TimeSeries``;
-    they are held as the former. Reading a channel back returns a GWpy series: the one given, if it
-    was GWpy, so the same object comes back, or one conversion of it, made once.
+    they are held, and returned, as the former. A GWpy channel is converted without copying, so the
+    returned series shares its samples.
 
     See ``docs/user_guide/multi-channel-strains.md`` (examples) and
     ``docs/api/multichannel/index.md`` (API reference).
@@ -114,7 +113,6 @@ class DetectorStrainStack:
         _validate_aligned_channels(native)
         self._names = detector_names
         self._channels = tuple(native)
-        self._given = tuple(channels)
 
     @classmethod
     def from_mapping(
@@ -160,30 +158,14 @@ class DetectorStrainStack:
         return self._names
 
     @property
-    def t0(self) -> Quantity:
-        """GPS start of the first sample (same for every channel), as a GWpy quantity."""
-        return self._public_channels[0].t0
+    def t0(self) -> float:
+        """GPS time of the first sample, in seconds (the same for every channel)."""
+        return self._channels[0].t0
 
     @property
-    def sample_rate(self) -> Quantity:
-        """Sample rate (GWpy quantity), identical for every channel.
-
-        Returns:
-            Sample rate of the first channel.
-        """
-        return self._public_channels[0].sample_rate
-
-    @cached_property
-    def _public_channels(self) -> tuple[Any, ...]:
-        """The channels as GWpy series: each one given as GWpy, else its one conversion."""
-        return tuple(
-            given if not isinstance(given, TimeSeries) else _public_output(channel)
-            for given, channel in zip(self._given, self._channels, strict=True)
-        )
-
-    def _native(self) -> dict[str, TimeSeries]:
-        """Map detector name to the channel as held, a :class:`~gwmock_signal.timeseries.TimeSeries`."""
-        return dict(zip(self._names, self._channels, strict=True))
+    def sample_rate(self) -> float:
+        """Sample rate in Hz, identical for every channel."""
+        return self._channels[0].sample_rate
 
     @property
     def data(self) -> np.ndarray:
@@ -195,14 +177,15 @@ class DetectorStrainStack:
         rows = [np.asarray(s.data, dtype=float) for s in self._channels]
         return np.stack(rows, axis=0).copy()
 
-    def __getitem__(self, key: int | str) -> gwpy.timeseries.TimeSeries:
-        """Return one channel by index or detector name, as a GWpy series (the same object each time).
+    def __getitem__(self, key: int | str) -> TimeSeries:
+        """Return one channel by index or detector name (the same object each time).
 
         Args:
             key: Index or detector name.
 
         Returns:
-            GWpy TimeSeries object for the specified channel.
+            The channel's :class:`~gwmock_signal.timeseries.TimeSeries`. A GWpy series given to the
+            stack is held, and returned, as this package's series sharing its samples.
 
         Raises:
             KeyError: If the key is not found.
@@ -214,11 +197,11 @@ class DetectorStrainStack:
                 idx = self._names.index(key)
             except ValueError as exc:
                 raise KeyError(key) from exc
-            return self._public_channels[idx]
+            return self._channels[idx]
         if isinstance(key, bool):
             raise TypeError("index must be int or str, got bool")
         if isinstance(key, int):
-            return self._public_channels[key]
+            return self._channels[key]
         raise TypeError(f"index must be int or str, got {type(key)}")
 
     def __len__(self) -> int:
@@ -250,20 +233,16 @@ class DetectorStrainStack:
             system package manager or conda.
         """
         path = Path(path)
-        # From the series read back, as the t0 and sample_rate properties are, so a file and the
-        # stack describe the same timing.
-        t0_val = float(self.t0.value)
-        dt_val = 1.0 / float(self.sample_rate.value)
+        t0_val = self.t0
+        dt_val = self._channels[0].dt
         channel_names = list(self._names)
 
         if format == "gwf":
             from gwpy.timeseries import TimeSeriesDict  # noqa: PLC0415 -- only frame output needs GWpy
 
             tsd = TimeSeriesDict()
-            for name, ts in zip(self._names, self._public_channels, strict=True):
-                named = ts.copy()
-                named.name = name
-                tsd[name] = named
+            for name, ts in zip(self._names, self._channels, strict=True):
+                tsd[name] = dataclasses.replace(ts, name=name).to_gwpy()
             tsd.write(str(path), format="gwf")
 
         elif format == "hdf5":
@@ -363,10 +342,10 @@ class DetectorStrainStack:
 
         raise ValueError(f"Unknown format {format!r}. Choose from 'hdf5', 'npy'.")
 
-    def to_dict(self) -> dict[str, gwpy.timeseries.TimeSeries]:
-        """Map detector name to GWpy series (same objects as ``__getitem__``).
+    def to_dict(self) -> dict[str, TimeSeries]:
+        """Map detector name to its channel (the same objects as ``__getitem__``).
 
         Returns:
-            Mapping of detector name to GWpy series.
+            Mapping of detector name to :class:`~gwmock_signal.timeseries.TimeSeries`.
         """
-        return dict(zip(self._names, self._public_channels, strict=True))
+        return dict(zip(self._names, self._channels, strict=True))

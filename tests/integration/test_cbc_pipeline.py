@@ -66,7 +66,7 @@ def _make_background(detector_names: tuple[str, ...]) -> dict[str, TimeSeries]:
 def _matched_filter_sigma_lal(ts: TimeSeries) -> float:
     """Return the matched-filter sigma using the LAL design PSD helper."""
     data = np.asarray(ts.value, dtype=float)
-    dt = float(ts.dt.value)
+    dt = ts.dt
     freqs = np.fft.rfftfreq(len(data), d=dt)
     if len(freqs) < 2:
         return 0.0

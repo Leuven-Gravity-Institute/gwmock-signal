@@ -14,6 +14,7 @@ from gwpy.timeseries import TimeSeries
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
+from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import LALSimulationBackend
 
 # ---------------------------------------------------------------------------
@@ -121,5 +122,5 @@ def test_matched_filter_snr_peak_consistent_with_optimal() -> None:
     opt = optimal_snr(h1_strain, psd, low_frequency_cutoff=FMIN)
     snr_ts = matched_filter_snr(h1_strain, h1_strain, psd, low_frequency_cutoff=FMIN)
 
-    assert isinstance(snr_ts, TimeSeries)
+    assert isinstance(snr_ts, NativeTimeSeries)
     assert snr_ts.value.max() == pytest.approx(opt, rel=1e-4)
