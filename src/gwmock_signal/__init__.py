@@ -18,7 +18,6 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-
 #: Public name -> (module, attribute). Resolved lazily by ``__getattr__`` so the optional ``[jax]``
 #: dependency stays optional: importing this package must not import JAX, only touching one of the
 #: device symbols may.
