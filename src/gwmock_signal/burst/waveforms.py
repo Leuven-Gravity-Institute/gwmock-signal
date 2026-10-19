@@ -15,17 +15,19 @@
 
 The ad hoc families -- sine-Gaussian, Gaussian and band-limited white-noise burst -- are generated
 by LALSimulation's own burst routines, the ones the LIGO-Virgo-KAGRA burst injections use, so this
-module encodes no second opinion about their shapes or normalisation. It only adds three things
-LALSimulation leaves to its caller:
+module encodes no second opinion about their shapes. It adds three things LALSimulation leaves to
+its caller:
 
 * **Placement.** LALSimulation centres every burst on ``t = 0``; it is moved to ``peak_time``.
 * **Inclination.** The sine-Gaussian and white-noise generators take a polarisation-ellipse
   eccentricity. A source with inclination ``iota`` has ``h_x / h_+ = 2 cos(iota) / (1 + cos^2 iota)``,
   which is eccentricity ``e = sin^2(iota) / (1 + cos^2 iota)``; the sign of ``cos(iota)`` (the
   handedness, which ``e`` cannot carry) is applied to the cross polarization.
-* **hrss for white noise.** LALSimulation normalises that family by ``int hdot^2 dt``; it is
-  rescaled here so every ad hoc family is normalised the same way, by
-  ``hrss = sqrt(int (h_+^2 + h_x^2) dt)``.
+* **Discrete hrss.** Every family is scaled so that its samples carry the requested
+  ``hrss = sqrt(sum (h_+^2 + h_x^2) dt)``. For a well-sampled sine-Gaussian or Gaussian this
+  changes nothing measurable (about 1e-16); it corrects a pulse the samples do not resolve (a
+  0.1 ms Gaussian at 8192 Hz by 1.3e-3) and the white-noise burst, which LALSimulation normalises
+  by ``int hdot^2 dt``.
 """
 
 from __future__ import annotations

@@ -47,7 +47,9 @@ def _resample(values: np.ndarray, rate: float, new_rate: float) -> np.ndarray:
 
     ``resample_uniform_sinc`` interpolates; it does not low-pass. A file being
     downsampled must therefore already be band-limited below the new Nyquist
-    frequency, and one that is not is refused rather than aliased.
+    frequency, and one that is not is refused rather than aliased. The check
+    uses a Hann-windowed spectrum, whose skirt can also refuse a strong tone
+    within a few frequency bins below the new Nyquist frequency.
 
     Args:
         values: Samples at ``rate``.
