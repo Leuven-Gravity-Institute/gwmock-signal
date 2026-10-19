@@ -36,9 +36,11 @@ _NSBH = {
 }
 
 
-def _generate(approximant: str, mass1: float, mass2: float, distance: float, **extra: float) -> np.ndarray:
+def _generate(
+    approximant: str, mass1: float, mass2: float, distance: float, backend: object = None, **extra: float
+) -> np.ndarray:
     """Return the plus and cross polarizations of one binary, stacked."""
-    waveform = LALSimulationBackend().generate_td_waveform(
+    waveform = (backend or LALSimulationBackend()).generate_td_waveform(
         approximant,
         tc=0.0,
         sampling_frequency=_FS,
@@ -127,3 +129,16 @@ def test_every_guarded_approximant_is_evaluated_in_the_frequency_domain() -> Non
         assert lalsimulation.SimInspiralImplementedFDApproximants(
             lalsimulation.GetApproximantFromString(approximant)
         ), approximant
+
+
+@pytest.mark.requires_lalsuite
+def test_the_gwsignal_backend_rescales_the_same_binary() -> None:
+    """The gwsignal backend generates a binary above the guard and agrees with the LAL backend."""
+    pytest.importorskip("lalsimulation.gwsignal", reason="lalsimulation.gwsignal not available")
+    from gwmock_signal.waveform.backends import GWSignalBackend
+
+    lal_strain = _generate("IMRPhenomNSBH", 2.5 * 7.0, 2.5 * 1.4, 10000.0, **_NSBH)
+    gwsignal_strain = _generate("IMRPhenomNSBH", 2.5 * 7.0, 2.5 * 1.4, 10000.0, backend=GWSignalBackend(), **_NSBH)
+
+    peak = np.max(np.abs(lal_strain))
+    np.testing.assert_allclose(gwsignal_strain, lal_strain, rtol=0.0, atol=1e-11 * peak)

@@ -30,7 +30,7 @@ implementation of the ``dt = 1/deltaF + epoch`` conditioning correction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -61,9 +61,9 @@ def _mass_scale(approximant: str, mass1: float, mass2: float) -> float:
 
     A frequency-domain waveform in general relativity depends on the masses only through
     ``M f`` and on the distance only as ``1 / d``, with amplitude ``M^2``, so
-    ``h(f; M, d) = s * h(s f; M / s, d / s)`` holds exactly for any ``s``: the masses, the distance
-    and every frequency of the grid are divided and multiplied by ``s``, and the result is
-    multiplied by ``s``. Tidal deformabilities and spins are dimensionless and do not change.
+    ``h(f; M, d) = s * h(s f; M / s, d / s)`` holds exactly for any ``s``: the masses and the
+    distance are divided by ``s``, every frequency of the grid is multiplied by ``s``, and the
+    polarizations (and any epoch shift) are multiplied by ``s``. Tidal deformabilities and spins are dimensionless and do not change.
 
     Args:
         approximant: LAL approximant name.
@@ -266,9 +266,34 @@ class LALSimulationBackend(WaveformBackend):
 
         Returns the raw plus/cross frequency-series buffers and the time shift
         (in seconds) that re-references them to the frequency-domain phase
-        convention. Subclasses may override this to source the same quantities
-        from a different generator while sharing the segment sizing and
-        conditioning performed by :meth:`generate_td_waveform`.
+        convention. An approximant whose LAL implementation bounds the lighter
+        mass is evaluated at rescaled masses, distance and grid (:func:`_mass_scale`)
+        and the result scaled back, here, so every generator sees the same rule.
+        """
+        scale = _mass_scale(approximant, p.mass1, p.mass2)
+        if scale == 1.0:
+            return self._generate_fd(approximant, p, grid)
+        scaled_p = replace(p, mass1=p.mass1 / scale, mass2=p.mass2 / scale, distance=p.distance / scale)
+        scaled_grid = _FrequencyGrid(
+            delta_f=grid.delta_f * scale,
+            minimum_frequency=grid.minimum_frequency * scale,
+            f_max=grid.f_max * scale,
+            f_ref=grid.f_ref * scale,
+        )
+        hp, hc, epoch_shift = self._generate_fd(approximant, scaled_p, scaled_grid)
+        # The scaled waveform runs on a clock 1 / scale times as fast, and its amplitude is
+        # 1 / scale of the binary's at the same frequency index.
+        return scale * hp, scale * hc, scale * epoch_shift
+
+    def _generate_fd(
+        self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Generate the FD polarizations and epoch correction for parameters LAL accepts as given.
+
+        Subclasses may override this to source the same quantities from a
+        different generator while sharing the mass rescaling of
+        :meth:`_evaluate_fd` and the segment sizing and conditioning performed
+        by :meth:`generate_td_waveform`.
         """
         lal = _lalsuite.require("lal", self.LAL_FEATURE)
         lalsimulation = _lalsuite.require("lalsimulation", self.LAL_FEATURE)
@@ -278,26 +303,25 @@ class LALSimulationBackend(WaveformBackend):
         lalsimulation.SimInspiralWaveformParamsInsertTidalLambda2(lal_params, p.lambda_2)
         _apply_waveform_arguments(lal_params, p.waveform_arguments)
 
-        scale = _mass_scale(approximant, p.mass1, p.mass2)
         wf_args = (
-            p.mass1 / scale * MSUN,
-            p.mass2 / scale * MSUN,
+            p.mass1 * MSUN,
+            p.mass2 * MSUN,
             p.spin_1x,
             p.spin_1y,
             p.spin_1z,
             p.spin_2x,
             p.spin_2y,
             p.spin_2z,
-            p.distance / scale * MPC,
+            p.distance * MPC,
             p.inclination,
             p.coa_phase,
             0.0,  # longitude of ascending nodes
             0.0,  # eccentricity
             0.0,  # mean periastron anomaly
-            grid.delta_f * scale,
-            grid.minimum_frequency * scale,
-            grid.f_max * scale,
-            grid.f_ref * scale,
+            grid.delta_f,
+            grid.minimum_frequency,
+            grid.f_max,
+            grid.f_ref,
             lal_params,
             approx_enum,
         )
@@ -310,9 +334,7 @@ class LALSimulationBackend(WaveformBackend):
         else:
             hp, hc = lalsimulation.SimInspiralFD(*wf_args)
             epoch_shift = 1.0 / hp.deltaF + (hp.epoch.gpsSeconds + hp.epoch.gpsNanoSeconds * 1e-9)
-        # The scaled waveform runs on a clock 1 / scale times as fast, and its amplitude is
-        # 1 / scale of the binary's at the same frequency index.
-        return scale * np.asarray(hp.data.data), scale * np.asarray(hc.data.data), scale * epoch_shift
+        return np.asarray(hp.data.data), np.asarray(hc.data.data), epoch_shift
 
     def pre_coalescence_duration(
         self,
