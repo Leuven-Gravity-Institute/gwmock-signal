@@ -29,8 +29,9 @@ workflow; use the Python API when you are already inside a notebook or pipeline.
 
 Under **User guide → Examples** in the sidebar:
 
-1. **[Waveforms](waveform.md)** — Produce $h_{+}$, $h_{\times}$ via LAL
-   (default) or PyCBC (optional); registry for custom models.
+1. **[Waveforms](waveform.md)** — Produce $h_{+}$, $h_{\times}$ via LAL (the
+   default where lalsuite is installed), ripple (the default where it is not and
+   the `jax` extra is) or PyCBC (optional); registry for custom models.
 2. **[Detector projection](detector-projection.md)** — Map polarizations to each
    IFO strain using antenna patterns and delays.
 3. **[Continuous waves](continuous-waves.md)** — Produce already projected $h$

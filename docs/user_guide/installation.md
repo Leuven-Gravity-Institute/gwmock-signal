@@ -141,7 +141,8 @@ Declared in `pyproject.toml` for the library:
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
   LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
   publishes no wheel yet; there, the LAL waveform backends are unavailable
-  (detector geometry does not need it).
+  (detector geometry does not need it), and with the `jax` extra installed the
+  default waveform backend is the ripple one instead.
 - **pyyaml** — configuration parsing where used
 - **gwmock-data** — the time series, its sampling grid and HDF5 input and
   output, shared by the gwmock packages; `gwmock_signal.TimeSeries` is
@@ -181,7 +182,11 @@ On Python 3.15, `lalsuite` and `h5py` publish no wheel yet, so a plain
 time series, detector projection onto built-in and custom detectors, injection,
 simulation with a waveform model you register, the CLI, and NumPy, text and HDF5
 files. The LAL waveform backends need `lalsuite`, and report how to install it
-when used.
+when used. Install the `jax` extra (`pip install 'gwmock-signal[jax]'`) to
+generate CBC waveforms there: with lalsuite absent, the default waveform backend
+is then ripple's (IMRPhenomD, IMRPhenomHM, IMRPhenomXAS, IMRPhenomXHM,
+IMRPhenomPv2, TaylorF2 and the tidal variants), with a warning that the
+waveforms are ripple's rather than LAL's.
 
 From Python 3.15 the package also imports some of its heavier dependencies only
 when they are first used (PEP 810): `astropy.time`, needed only to compute

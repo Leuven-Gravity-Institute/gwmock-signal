@@ -64,8 +64,10 @@ def inject_cbc_signal(  # noqa: PLR0913
         minimum_frequency: Low-frequency cutoff in Hz, passed to the waveform
             generator.
         waveform_backend: Optional waveform backend instance used to generate
-            polarizations. Defaults to ``LALSimulationBackend`` via
-            ``CBCSimulator``.
+            polarizations. Defaults, via ``CBCSimulator``, to
+            :func:`~gwmock_signal.waveform.factory.default_waveform_backend`: LAL where lalsuite is
+            installed, ripple where it is not and the ``jax`` extra is, and an ``ImportError`` naming
+            both when neither is.
         earth_rotation: If ``True``, evaluate antenna patterns at
             time-dependent GPS times (recommended for longer signals). If
             ``False``, use a single reference time at the segment midpoint.

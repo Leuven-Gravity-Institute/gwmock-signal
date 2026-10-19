@@ -25,6 +25,7 @@ __lazy_modules__ = [
     "gwmock_signal.pipeline",
     "gwmock_signal.timeseries",
     "gwmock_signal.waveform.backends",
+    "gwmock_signal.waveform.factory",
 ]
 
 import json
@@ -40,6 +41,7 @@ from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
 from gwmock_signal.timeseries import TimeSeries
 from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
+from gwmock_signal.waveform.factory import default_waveform_backend
 
 inject_app = typer.Typer(
     name="inject",
@@ -92,12 +94,13 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         ),
     ] = "IMRPhenomD",
     backend: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--backend",
-            help="Waveform backend: 'lal' (default), 'gwsignal', 'pycbc', or 'ripple' (JAX; currently IMRPhenomD only).",
+            help="Waveform backend: 'lal', 'gwsignal', 'pycbc', or 'ripple' (JAX). Default: 'lal' where lalsuite "
+            "is installed, otherwise 'ripple' if the jax extra is installed (an error naming both if neither is).",
         ),
-    ] = "lal",
+    ] = None,
     seed: Annotated[
         int | None,
         typer.Option(
@@ -181,8 +184,9 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
     if f_min <= 0:
         raise typer.BadParameter("--f-min must be > 0", param_hint="--f-min")
 
-    backend_name = backend.strip().lower()
+    backend_name = "default" if backend is None else backend.strip().lower()
     backend_factories = {
+        "default": default_waveform_backend,
         "lal": LALSimulationBackend,
         "gwsignal": GWSignalBackend,
         "pycbc": PyCBCBackend,

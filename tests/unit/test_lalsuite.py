@@ -8,6 +8,7 @@ importing ``gwmock_signal`` modules must still work, and using a LAL feature mus
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -164,8 +165,15 @@ def test_without_lalsuite_modules_import_and_lal_features_explain_themselves():
     assert custom_only_network == "NO ERROR"
     assert custom_projection == "NO ERROR"
     assert list_detectors == "NO ERROR"  # the built-in codes ship with the package
+    # With lalsuite absent the default waveform backend falls back to ripple when the jax extra is
+    # installed, so the factory then works; without ripple it says how to install either.
+    factory = lines.pop("factory")
+    if importlib.util.find_spec("ripplegw") is not None:
+        assert factory == "NO ERROR"
+    else:
+        assert factory.startswith("The default (LAL) waveform backend requires lalsuite"), factory
+        assert "pip install 'gwmock-signal[jax]'" in factory
     expected_feature = {
-        "factory": "The LAL waveform backend",
         "lal_backend": "The LAL waveform backend",
         "gwsignal_backend": "The gwsignal waveform backend",
         "registry_lookup": "Projecting onto a detector from LAL's registry",
