@@ -140,6 +140,7 @@ def test_white_noise_burst_power_is_centred_in_its_band():
         (gaussian, {"peak_time": "not-a-time", "hrss": 1e-21, "duration": 1e-3}, "peak_time"),
         (sine_gaussian, _sg(peak_time=math.inf), "peak_time"),
         (white_noise_burst, _wnb(seed=2**64), "seed"),
+        (gaussian, {"peak_time": PEAK, "hrss": 1e307, "duration": 1e-3}, "amplitude"),
     ],
 )
 def test_invalid_burst_parameters_are_refused(generator, params, match):
@@ -148,7 +149,14 @@ def test_invalid_burst_parameters_are_refused(generator, params, match):
         generator(params, FS)
 
 
-@pytest.mark.parametrize("rate", [0.0, -1.0, math.nan, math.inf, "nope", None])
+def test_white_noise_compactness_is_judged_as_lalsimulation_judges_it():
+    """Where duration * bandwidth rounds to 2/pi but LAL's sigma^2 is negative, the burst is refused here too."""
+    params = _wnb(duration=1.0280234012117881e-06, bandwidth=619265.8373507474, low_frequency=10.0)
+    with pytest.raises(ValueError, match="compact"):
+        white_noise_burst(params, 2e6)
+
+
+@pytest.mark.parametrize("rate", [0.0, -1.0, math.nan, math.inf, "nope", None, 1e-309])
 @pytest.mark.parametrize(
     ("generator", "params"),
     [

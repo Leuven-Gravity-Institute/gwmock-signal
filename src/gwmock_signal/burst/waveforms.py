@@ -50,8 +50,6 @@ SINE_GAUSSIAN = "sine_gaussian"
 GAUSSIAN = "gaussian"
 WHITE_NOISE_BURST = "white_noise_burst"
 
-#: LALSimulation refuses a white-noise burst whose time-frequency area is below this.
-_MIN_WNB_TIME_BANDWIDTH = 2.0 / math.pi
 #: Columns of a waveform file: time relative to ``peak_time``, then ``h_+`` and ``h_x``.
 _WAVEFORM_FILE_COLUMNS = 3
 #: Relative spread of the sample spacing a waveform file may have and still count as uniform.
@@ -90,7 +88,7 @@ def _sample_rate(sampling_frequency: float) -> float:
         rate = float(sampling_frequency)
     except (TypeError, ValueError) as error:
         raise ValueError(f"sampling_frequency must be finite and positive, got {sampling_frequency!r}.") from error
-    if not (math.isfinite(rate) and rate > 0):
+    if not (math.isfinite(rate) and rate > 0 and math.isfinite(1.0 / rate)):
         raise ValueError(f"sampling_frequency must be finite and positive, got {sampling_frequency!r}.")
     return rate
 
@@ -183,6 +181,9 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
     sampling_frequency = _sample_rate(sampling_frequency)
     duration = _positive(params, "duration")
     hrss = _positive(params, "hrss")
+    # LALSimulation's own amplitude check: the peak h_rss / sqrt(sqrt(pi) duration) must be finite.
+    if not math.isfinite(hrss / math.sqrt(math.sqrt(math.pi) * duration)):
+        raise ValueError(f"hrss={hrss!r} with duration={duration!r} gives a non-finite peak amplitude.")
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     hp, hc = lalsimulation.SimBurstGaussian(duration, hrss, 1.0 / sampling_frequency)
     return _at_hrss(hp, hc, hrss, peak_time)
@@ -215,7 +216,10 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     duration = _positive(params, "duration")
     centre = _positive(params, "low_frequency") + bandwidth / 2
     _below_nyquist(centre + bandwidth / 2, sampling_frequency, "low_frequency + bandwidth")
-    if duration * bandwidth < _MIN_WNB_TIME_BANDWIDTH:
+    # LALSimulation's own test, evaluated the same way so that rounding cannot put a burst on
+    # opposite sides of the boundary here and there: duration^2 / 4 - 1 / (pi^2 bandwidth^2) >= 0,
+    # which is duration * bandwidth >= 2 / pi.
+    if duration**2 / 4.0 - 1.0 / (math.pi**2 * bandwidth**2) < 0:
         raise ValueError(
             f"duration * bandwidth = {duration * bandwidth:g} is below 2/pi; "
             "a white-noise burst cannot be that compact in both time and frequency."
