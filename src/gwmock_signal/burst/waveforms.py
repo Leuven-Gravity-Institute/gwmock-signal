@@ -28,6 +28,13 @@ its caller:
   changes nothing measurable (about 1e-16); it corrects a pulse the samples do not resolve (a
   0.1 ms Gaussian at 8192 Hz by 1.3e-3) and the white-noise burst, which LALSimulation normalises
   by ``int hdot^2 dt``.
+
+Every parameter is checked against its documented domain -- finite, positive where it must be,
+below the Nyquist frequency, a white-noise burst not more compact than its time-bandwidth limit --
+before LAL is resolved, so an invalid argument is reported the same way whether or not lalsuite is
+installed. Limits that belong to LALSimulation's numerics rather than to a parameter's meaning,
+such as the range of the GPS epoch it places a very long burst at, are left to LALSimulation to
+report.
 """
 
 from __future__ import annotations
@@ -216,13 +223,14 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     duration = _positive(params, "duration")
     centre = _positive(params, "low_frequency") + bandwidth / 2
     _below_nyquist(centre + bandwidth / 2, sampling_frequency, "low_frequency + bandwidth")
-    # LALSimulation's own test, evaluated the same way so that rounding cannot put a burst on
-    # opposite sides of the boundary here and there: duration^2 / 4 - 1 / (pi^2 bandwidth^2) >= 0,
-    # which is duration * bandwidth >= 2 / pi.
-    if duration**2 / 4.0 - 1.0 / (math.pi**2 * bandwidth**2) < 0:
+    # LALSimulation's own test, written in its operation order so that rounding cannot put a burst
+    # on opposite sides of the boundary here and there: the envelope variance
+    # duration^2 / 4 - 1 / (pi^2 bandwidth^2) must not be negative (duration * bandwidth >= 2 / pi).
+    sigma_t_squared = duration * duration / 4.0 - 1.0 / (math.pi * math.pi * bandwidth * bandwidth)
+    if sigma_t_squared < 0:
         raise ValueError(
-            f"duration * bandwidth = {duration * bandwidth:g} is below 2/pi; "
-            "a white-noise burst cannot be that compact in both time and frequency."
+            f"duration={duration!r} and bandwidth={bandwidth!r} give a negative envelope variance "
+            f"({sigma_t_squared:g} s^2): a white-noise burst cannot be that compact in both time and frequency."
         )
     seed = int(params["seed"])
     if not 0 <= seed < 2**64:

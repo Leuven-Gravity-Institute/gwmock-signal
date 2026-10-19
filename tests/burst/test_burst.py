@@ -134,7 +134,7 @@ def test_white_noise_burst_power_is_centred_in_its_band():
         (sine_gaussian, _sg(hrss=-1.0), "hrss"),
         (sine_gaussian, {"peak_time": PEAK, "hrss": 1e-21}, "frequency"),
         (white_noise_burst, _wnb(low_frequency=4000.0), "Nyquist"),
-        (white_noise_burst, _wnb(duration=1e-3, bandwidth=10.0), "2/pi"),
+        (white_noise_burst, _wnb(duration=1e-3, bandwidth=10.0), "compact"),
         (white_noise_burst, _wnb(seed=-1), "seed"),
         (gaussian, {"peak_time": PEAK, "hrss": 1e-21, "duration": 0.0}, "duration"),
         (gaussian, {"peak_time": "not-a-time", "hrss": 1e-21, "duration": 1e-3}, "peak_time"),
@@ -149,11 +149,23 @@ def test_invalid_burst_parameters_are_refused(generator, params, match):
         generator(params, FS)
 
 
-def test_white_noise_compactness_is_judged_as_lalsimulation_judges_it():
-    """Where duration * bandwidth rounds to 2/pi but LAL's sigma^2 is negative, the burst is refused here too."""
-    params = _wnb(duration=1.0280234012117881e-06, bandwidth=619265.8373507474, low_frequency=10.0)
+@pytest.mark.parametrize(
+    ("duration", "bandwidth", "rate"),
+    [(1.0280234012117881e-06, 619265.8373507474, 2e6), (1e-8, 63661977.236758135, 2e8)],
+)
+def test_white_noise_compactness_is_judged_as_lalsimulation_judges_it(duration, bandwidth, rate):
+    """At the last ulp of the compactness boundary, a burst LAL refuses is refused here too."""
+    params = _wnb(duration=duration, bandwidth=bandwidth, low_frequency=10.0)
     with pytest.raises(ValueError, match="compact"):
-        white_noise_burst(params, 2e6)
+        white_noise_burst(params, rate)
+
+
+@pytest.mark.requires_lalsuite
+def test_a_burst_lal_accepts_at_the_compactness_boundary_is_generated():
+    """Where LAL's envelope variance rounds to exactly zero, the burst is generated, as LAL allows."""
+    params = _wnb(duration=1.1034568230836762e-12, bandwidth=576932199837.6967, low_frequency=10.0, hrss=1e-21)
+    hp, _ = white_noise_burst(params, 2e12)
+    assert np.all(np.isfinite(np.asarray(hp.value)))
 
 
 @pytest.mark.parametrize("rate", [0.0, -1.0, math.nan, math.inf, "nope", None, 1e-309])
