@@ -259,20 +259,17 @@ class LALSimulationBackend(WaveformBackend):
             raise ValueError("lambda_2 must be >= 0")
         return resolved
 
-    def _evaluate_fd(
+    def _evaluate_fd_rescaled(
         self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
     ) -> tuple[np.ndarray, np.ndarray, float]:
-        """Evaluate the one-sided FD polarizations plus the epoch correction.
+        """Call :meth:`_evaluate_fd`, rescaling an approximant whose LAL implementation bounds a mass.
 
-        Returns the raw plus/cross frequency-series buffers and the time shift
-        (in seconds) that re-references them to the frequency-domain phase
-        convention. An approximant whose LAL implementation bounds the lighter
-        mass is evaluated at rescaled masses, distance and grid (:func:`_mass_scale`)
-        and the result scaled back, here, so every generator sees the same rule.
+        The rescaling (:func:`_mass_scale`) wraps the generator hook rather than living
+        inside it, so a subclass that overrides :meth:`_evaluate_fd` gets it too.
         """
         scale = _mass_scale(approximant, p.mass1, p.mass2)
         if scale == 1.0:
-            return self._generate_fd(approximant, p, grid)
+            return self._evaluate_fd(approximant, p, grid)
         scaled_p = replace(p, mass1=p.mass1 / scale, mass2=p.mass2 / scale, distance=p.distance / scale)
         scaled_grid = _FrequencyGrid(
             delta_f=grid.delta_f * scale,
@@ -280,20 +277,21 @@ class LALSimulationBackend(WaveformBackend):
             f_max=grid.f_max * scale,
             f_ref=grid.f_ref * scale,
         )
-        hp, hc, epoch_shift = self._generate_fd(approximant, scaled_p, scaled_grid)
+        hp, hc, epoch_shift = self._evaluate_fd(approximant, scaled_p, scaled_grid)
         # The scaled waveform runs on a clock 1 / scale times as fast, and its amplitude is
         # 1 / scale of the binary's at the same frequency index.
         return scale * hp, scale * hc, scale * epoch_shift
 
-    def _generate_fd(
+    def _evaluate_fd(
         self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
     ) -> tuple[np.ndarray, np.ndarray, float]:
-        """Generate the FD polarizations and epoch correction for parameters LAL accepts as given.
+        """Evaluate the one-sided FD polarizations plus the epoch correction.
 
-        Subclasses may override this to source the same quantities from a
-        different generator while sharing the mass rescaling of
-        :meth:`_evaluate_fd` and the segment sizing and conditioning performed
-        by :meth:`generate_td_waveform`.
+        Returns the raw plus/cross frequency-series buffers and the time shift
+        (in seconds) that re-references them to the frequency-domain phase
+        convention. Subclasses may override this to source the same quantities
+        from a different generator while sharing the mass rescaling, segment
+        sizing and conditioning performed by :meth:`generate_td_waveform`.
         """
         lal = _lalsuite.require("lal", self.LAL_FEATURE)
         lalsimulation = _lalsuite.require("lalsimulation", self.LAL_FEATURE)
@@ -427,7 +425,7 @@ class LALSimulationBackend(WaveformBackend):
         f_ref = self._f_ref if self._f_ref is not None else minimum_frequency
 
         grid = _FrequencyGrid(delta_f=delta_f, minimum_frequency=minimum_frequency, f_max=f_max, f_ref=f_ref)
-        hp_raw, hc_raw, epoch_shift = self._evaluate_fd(approximant, p, grid)
+        hp_raw, hc_raw, epoch_shift = self._evaluate_fd_rescaled(approximant, p, grid)
 
         n_freq = n_samples // 2 + 1
         freqs = np.arange(n_freq) * delta_f

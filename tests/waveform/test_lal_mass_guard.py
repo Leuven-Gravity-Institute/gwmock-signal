@@ -142,3 +142,19 @@ def test_the_gwsignal_backend_rescales_the_same_binary() -> None:
 
     peak = np.max(np.abs(lal_strain))
     np.testing.assert_allclose(gwsignal_strain, lal_strain, rtol=0.0, atol=1e-11 * peak)
+
+
+@pytest.mark.requires_lalsuite
+def test_a_subclass_overriding_the_generator_hook_is_rescaled() -> None:
+    """A backend that overrides ``_evaluate_fd`` is called with the rescaled binary, not the guarded one."""
+    seen: list[tuple[float, float]] = []
+
+    class Recording(LALSimulationBackend):
+        def _evaluate_fd(self, approximant, p, grid):  # the private hook's signature
+            seen.append((p.mass2, grid.delta_f))
+            return super()._evaluate_fd(approximant, p, grid)
+
+    _generate("IMRPhenomNSBH", 2.5 * 7.0, 2.5 * 1.4, 10000.0, backend=Recording(), **_NSBH)
+
+    ((mass2, _),) = seen
+    assert mass2 == pytest.approx(1.5, rel=1e-12)

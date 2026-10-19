@@ -77,7 +77,7 @@ class GWSignalBackend(LALSimulationBackend):
 
     LAL_FEATURE = "The gwsignal waveform backend"
 
-    def _generate_fd(
+    def _evaluate_fd(
         self, approximant: str, p: _ResolvedParameters, grid: _FrequencyGrid
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Evaluate FD-native approximants via gwsignal; defer the rest to LAL."""
@@ -86,13 +86,13 @@ class GWSignalBackend(LALSimulationBackend):
         if not lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
             # gwsignal's FD path discards the conditioning epoch needed to
             # re-reference TD-native approximants; the parent keeps it.
-            return super()._generate_fd(approximant, p, grid)
+            return super()._evaluate_fd(approximant, p, grid)
         if p.waveform_arguments:
             # gwsignal's public dictionary cannot carry extra LAL options
             # faithfully (whitelist; REAL8-only extras; broken ModeArray) --
             # see the module docstring. The parent path applies them
             # type-correctly and is bit-identical for these approximants.
-            return super()._generate_fd(approximant, p, grid)
+            return super()._evaluate_fd(approximant, p, grid)
 
         # Deferred: importing astropy and gwsignal is not free, and the LAL
         # fallback above must work even if they were somehow unavailable.
