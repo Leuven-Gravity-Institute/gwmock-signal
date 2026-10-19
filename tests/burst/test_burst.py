@@ -137,6 +137,8 @@ def test_white_noise_burst_power_is_centred_in_its_band():
         (white_noise_burst, _wnb(duration=1e-3, bandwidth=10.0), "2/pi"),
         (white_noise_burst, _wnb(seed=-1), "seed"),
         (gaussian, {"peak_time": PEAK, "hrss": 1e-21, "duration": 0.0}, "duration"),
+        (gaussian, {"peak_time": "not-a-time", "hrss": 1e-21, "duration": 1e-3}, "peak_time"),
+        (sine_gaussian, _sg(peak_time=math.inf), "peak_time"),
     ],
 )
 def test_invalid_burst_parameters_are_refused(generator, params, match):

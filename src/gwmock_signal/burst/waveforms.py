@@ -73,6 +73,17 @@ def _positive(params: Mapping[str, Any], key: str) -> float:
     return value
 
 
+def _finite(params: Mapping[str, Any], key: str) -> float:
+    """Return ``params[key]`` as a float, refusing anything not a finite number."""
+    try:
+        value = float(params[key])
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{key} must be a finite number, got {params[key]!r}.") from error
+    if not math.isfinite(value):
+        raise ValueError(f"{key} must be a finite number, got {params[key]!r}.")
+    return value
+
+
 def _below_nyquist(frequency: float, sampling_frequency: float, key: str) -> None:
     """Refuse a frequency the sample rate cannot represent."""
     if frequency >= sampling_frequency / 2:
@@ -125,6 +136,7 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
         ``(h_plus, h_cross)``.
     """
     _require(params, ("peak_time", "hrss", "frequency", "quality_factor", "inclination"), SINE_GAUSSIAN)
+    peak_time = _finite(params, "peak_time")
     frequency = _positive(params, "frequency")
     _below_nyquist(frequency, sampling_frequency, "frequency")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
@@ -139,7 +151,7 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
         0.0,
         1.0 / sampling_frequency,
     )
-    return _at_hrss(hp, hc, hrss, params["peak_time"], cross_sign)
+    return _at_hrss(hp, hc, hrss, peak_time, cross_sign)
 
 
 def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
@@ -155,11 +167,12 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
         ``(h_plus, h_cross)``.
     """
     _require(params, ("peak_time", "hrss", "duration"), GAUSSIAN)
+    peak_time = _finite(params, "peak_time")
     duration = _positive(params, "duration")
     hrss = _positive(params, "hrss")
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     hp, hc = lalsimulation.SimBurstGaussian(duration, hrss, 1.0 / sampling_frequency)
-    return _at_hrss(hp, hc, hrss, params["peak_time"])
+    return _at_hrss(hp, hc, hrss, peak_time)
 
 
 def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
@@ -183,6 +196,7 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
         ("peak_time", "hrss", "low_frequency", "bandwidth", "duration", "inclination", "seed"),
         WHITE_NOISE_BURST,
     )
+    peak_time = _finite(params, "peak_time")
     bandwidth = _positive(params, "bandwidth")
     duration = _positive(params, "duration")
     centre = _positive(params, "low_frequency") + bandwidth / 2
@@ -202,7 +216,7 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     hp, hc = lalsimulation.GenerateBandAndTimeLimitedWhiteNoiseBurst(
         duration, centre, bandwidth, eccentricity, 0.0, 1.0, 1.0 / sampling_frequency, lal.gsl_rng("ranlux", seed)
     )
-    return _at_hrss(hp, hc, hrss, params["peak_time"], cross_sign)
+    return _at_hrss(hp, hc, hrss, peak_time, cross_sign)
 
 
 def read_waveform_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
