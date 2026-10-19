@@ -31,10 +31,12 @@ from gwmock_signal.burst.waveforms import GAUSSIAN, SINE_GAUSSIAN, WHITE_NOISE_B
 #: Value of every drawn event's ``injection_set`` key.
 TEST_SET_LABEL = "test"
 
-#: The draft families: the ad hoc morphologies of the LVK O3 all-sky short-burst search
-#: (Phys. Rev. D 104, 122004, Table I) with the sine-Gaussian central frequency drawn rather than
-#: gridded. Sine-Gaussians and white-noise bursts take a drawn inclination (elliptical, uniform in
-#: ``cos(iota)``); Gaussians are linearly polarized and take none.
+#: The draft families: the Gaussians and white-noise bursts of the LVK O3 all-sky short-burst search
+#: (Phys. Rev. D 104, 122004, Table I), and sine-Gaussians at Q = 3, 9 and 100 with the central
+#: frequency drawn log-uniformly over 30-1800 Hz instead of O3's grid. O3's Table I lists circular
+#: sine-Gaussians; its elliptical set (Sec. IV A) is the one followed here. Sine-Gaussians and
+#: white-noise bursts take a drawn inclination (elliptical, uniform in ``cos(iota)``); Gaussians are
+#: linearly polarized and take none.
 DRAFT_BURST_FAMILIES: tuple[Mapping[str, Any], ...] = (
     {"burst_model": SINE_GAUSSIAN, "quality_factor": 3.0},
     {"burst_model": SINE_GAUSSIAN, "quality_factor": 9.0},

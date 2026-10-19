@@ -108,10 +108,11 @@ $10^{-16}$.
 
 The Gaussian durations and white-noise parameters are those of the O3 all-sky
 search (Phys. Rev. D **104**, 122004, Table I). The sine-Gaussians are this
-set's own choice, not O3's: O3's Table I lists sine-Gaussians at fixed pairs of
-$Q = 3$, $8.9$, $9$ and $100$ and central frequencies from 70 Hz to 3067 Hz, in
-both elliptical and circular polarization. This set keeps $Q = 3$, $9$ and
-$100$, elliptical polarization only, and draws the central frequency
+set's own choice, not O3's. O3's Table I lists circular sine-Gaussians at fixed
+pairs of $Q = 3$, $8.9$, $9$ and $100$ and central frequencies from 70 Hz to
+3067 Hz; O3 also injected an elliptical set, uniform in $\cos\iota$, alongside
+the circular one at optimal orientation (§IV A). This set keeps $Q = 3$, $9$ and
+$100$, elliptical only (uniform in $\cos\iota$), and draws the central frequency
 log-uniformly over 30–1800 Hz instead of using O3's grid, which keeps every
 $f_0$ far below the 4096 Hz Nyquist frequency of 8192 Hz data.
 `DRAFT_BURST_FAMILIES` holds this table.
@@ -255,12 +256,15 @@ interface; the waveform files themselves come from their authors.
   envelope is $\exp[-2 (f - f_0)^2 / \Delta f^2]$, so $\sigma_f = \Delta f / 2$,
   and the time envelope's variance is set to $\sigma_t^2 = \tau^2 / 4 - 1 /
   (\pi^2 \Delta f^2)$ before the band is applied, so that the result has
-  $\sigma_t = \tau / 2$. Over 200 realisations of $(\tau, f_0, \Delta f) = (0.1\
-  \text{s}, 150\ \text{Hz}, 100\ \text{Hz})$ at 16384 Hz, the power-weighted
-  widths give $\sigma_t = 0.0502$ s and $\sigma_f = 49.8$ Hz. The parameter
-  docstring in `LALSimBurst.c` writes the envelopes with $\tau$ and $\Delta f$
-  themselves as the standard deviation; the code and the function's detailed
-  description use half of each.
+  $\sigma_t = \tau / 2$. For a Gaussian amplitude envelope of standard deviation
+  $\tau/2$ (and $\Delta f/2$), the power $h_+^2 + h_\times^2$ has second moment
+  $\tau/(2\sqrt{2})$ (and $\Delta f/(2\sqrt{2})$). Averaged over 200
+  realisations (seeds 0–199) at 16384 Hz with inclination 0 and $(\tau, f_0,
+  \Delta f) = (0.1\ \text{s}, 150\ \text{Hz}, 100\ \text{Hz})$, the
+  power-weighted second moments are 0.0350 s in time and 35.3 Hz in frequency,
+  against 0.0354 s and 35.4 Hz. The parameter docstring in `LALSimBurst.c`
+  writes the envelopes with $\tau$ and $\Delta f$ themselves as the standard
+  deviation; the code and the function's detailed description use half of each.
 
 ## Relation to MDC-1
 
