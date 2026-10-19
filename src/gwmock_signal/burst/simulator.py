@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-from gwpy.timeseries import TimeSeries
+from gwmock_data.resampling import resample_uniform_sinc
 
 from gwmock_signal.burst.waveforms import PARAMETRIC_MODELS, read_waveform_file
 from gwmock_signal.simulator import TransientSimulator
+from gwmock_signal.timeseries import TimeSeries
 
 #: Keys every burst event carries, whatever its model. The model-specific ones are checked when the
 #: model is generated, because they differ between families.
@@ -34,6 +35,42 @@ _REQUIRED: frozenset[str] = frozenset(
 )
 
 InclinationDependence = Literal["none", "axisymmetric", "rotating"]
+
+
+#: Largest fraction of a waveform file's power allowed above the new Nyquist frequency when it is
+#: downsampled, since the shared kernel does not low-pass.
+_ALIAS_TOLERANCE = 1e-10
+
+
+def _resample(values: np.ndarray, rate: float, new_rate: float) -> np.ndarray:
+    """Resample a waveform file's samples with the shared band-limited kernel.
+
+    ``resample_uniform_sinc`` interpolates; it does not low-pass. A file being
+    downsampled must therefore already be band-limited below the new Nyquist
+    frequency, and one that is not is refused rather than aliased.
+
+    Args:
+        values: Samples at ``rate``.
+        rate: Sample rate of ``values`` in Hz.
+        new_rate: Sample rate to return, in Hz.
+
+    Returns:
+        The samples at ``new_rate`` over the same span.
+
+    Raises:
+        ValueError: If downsampling and more than ``_ALIAS_TOLERANCE`` of the
+            waveform's power lies above the new Nyquist frequency.
+    """
+    if new_rate < rate:
+        power = np.abs(np.fft.rfft(values)) ** 2
+        above = power[np.fft.rfftfreq(values.shape[0], 1.0 / rate) > new_rate / 2.0].sum()
+        if above > _ALIAS_TOLERANCE * power.sum():
+            raise ValueError(
+                f"The waveform file carries {above / power.sum():.2e} of its power above {new_rate / 2.0:g} Hz, "
+                f"the Nyquist frequency of {new_rate:g} Hz; low-pass it before resampling."
+            )
+    n_new = max(1, int(np.floor((values.shape[0] - 1) * new_rate / rate)) + 1)
+    return resample_uniform_sinc(values, np.arange(n_new) * (rate / new_rate))
 
 
 @dataclass(frozen=True)
@@ -153,7 +190,7 @@ class BurstSimulator(TransientSimulator):
                 it here would change the hrss the event records.
 
         Returns:
-            Tuple of ``(hp, hc)`` GWpy ``TimeSeries`` objects.
+            Tuple of ``(hp, hc)`` series.
 
         Raises:
             ValueError: If ``burst_model`` is unknown or the event lacks one of its parameters.
@@ -187,11 +224,13 @@ class BurstSimulator(TransientSimulator):
         scale = entry.reference_distance / distance
         plus_factor, cross_factor = _INCLINATION_FACTORS[entry.inclination_dependence](inclination)
         t0 = float(params["peak_time"]) + times[0]
-        dt = times[1] - times[0]
-        series = [
-            TimeSeries(scale * factor * strain, t0=t0, dt=dt, name=name)
-            for strain, factor, name in ((plus, plus_factor, "plus"), (cross, cross_factor, "cross"))
-        ]
-        if not math.isclose(1.0 / dt, sampling_frequency, rel_tol=1e-9):
-            series = [s.resample(sampling_frequency) for s in series]
+        file_rate = 1.0 / (times[1] - times[0])
+        resample = not math.isclose(file_rate, sampling_frequency, rel_tol=1e-9)
+        series = []
+        for strain, factor, name in ((plus, plus_factor, "plus"), (cross, cross_factor, "cross")):
+            values = scale * factor * np.asarray(strain, dtype=float)
+            if resample:
+                values = _resample(values, file_rate, sampling_frequency)
+            rate = sampling_frequency if resample else file_rate
+            series.append(TimeSeries(values, t0=t0, sample_rate=rate, name=name))
         return series[0], series[1]

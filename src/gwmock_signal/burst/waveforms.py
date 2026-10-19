@@ -38,7 +38,8 @@ from typing import Any
 import lal
 import lalsimulation
 import numpy as np
-from gwpy.timeseries import TimeSeries
+
+from gwmock_signal.timeseries import TimeSeries
 
 #: Ad hoc model names, as ``burst_model`` takes them.
 SINE_GAUSSIAN = "sine_gaussian"
@@ -87,11 +88,11 @@ def _eccentricity_and_handedness(inclination: float) -> tuple[float, float]:
 
 
 def _to_timeseries(hp: Any, hc: Any, peak_time: float, cross_sign: float = 1.0) -> tuple[TimeSeries, TimeSeries]:
-    """Turn LAL polarizations centred on ``t = 0`` into GWpy series centred on *peak_time*."""
+    """Turn LAL polarizations centred on ``t = 0`` into series centred on *peak_time*."""
     t0 = float(peak_time) + float(hp.epoch)
-    dt = hp.deltaT
-    plus = TimeSeries(np.array(hp.data.data, dtype=float), t0=t0, dt=dt, name="plus")
-    cross = TimeSeries(cross_sign * np.array(hc.data.data, dtype=float), t0=t0, dt=dt, name="cross")
+    rate = 1.0 / hp.deltaT
+    plus = TimeSeries(np.array(hp.data.data, dtype=float), t0=t0, sample_rate=rate, name="plus")
+    cross = TimeSeries(cross_sign * np.array(hc.data.data, dtype=float), t0=t0, sample_rate=rate, name="cross")
     return plus, cross
 
 
@@ -181,7 +182,7 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     )
     scale = _positive(params, "hrss") / lalsimulation.MeasureHrss(hp, hc)
     plus, cross = _to_timeseries(hp, hc, params["peak_time"], cross_sign)
-    return plus * scale, cross * scale
+    return plus.with_data(plus.value * scale), cross.with_data(cross.value * scale)
 
 
 def read_waveform_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

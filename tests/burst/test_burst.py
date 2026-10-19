@@ -67,7 +67,7 @@ def test_waveform_peaks_at_peak_time(generator):
     params = _sg() if generator is sine_gaussian else {"peak_time": PEAK, "hrss": 1e-21, "duration": 2.5e-3}
     hp, hc = generator(params, FS)
     envelope = np.asarray(hp.value) ** 2 + np.asarray(hc.value) ** 2
-    peak_time = float(hp.times.value[np.argmax(envelope)])
+    peak_time = float(hp.times[np.argmax(envelope)])
     assert peak_time == pytest.approx(PEAK, abs=0.5 / FS)
 
 
@@ -110,7 +110,7 @@ def test_white_noise_burst_power_is_centred_in_its_band():
     """The band is placed by its lower edge: power centres on low_frequency + bandwidth / 2."""
     hp, hc = white_noise_burst(_wnb(low_frequency=750.0, bandwidth=100.0), FS)
     power = np.abs(np.fft.rfft(hp.value)) ** 2 + np.abs(np.fft.rfft(hc.value)) ** 2
-    freqs = np.fft.rfftfreq(len(hp), 1 / FS)
+    freqs = np.fft.rfftfreq(hp.n_samples, 1 / FS)
     centroid = float(np.sum(freqs * power) / np.sum(power))
     assert 760.0 < centroid < 840.0
 
@@ -156,11 +156,21 @@ def test_file_waveform_is_scaled_placed_and_resampled(tmp_path):
         {"burst_model": "ccsn", "peak_time": PEAK, "distance": 0.04, **SKY}, FS, 10.0
     )
 
-    assert hp.sample_rate.value == FS
-    assert float(hp.t0.value) == pytest.approx(PEAK + times[0], abs=1e-6)
-    # 16384 -> 8192 Hz keeps every other sample of a 300 Hz signal up to the anti-alias filter.
-    np.testing.assert_allclose(hp.value, 0.25 * plus[::2], rtol=0.0, atol=1e-3 * np.max(np.abs(plus)))
+    assert hp.sample_rate == FS
+    assert float(hp.t0) == pytest.approx(PEAK + times[0], abs=1e-6)
+    # 16384 -> 8192 Hz lands every output sample on an even input sample, where the sinc kernel
+    # returns the sample itself, so the result is every other sample of the file.
+    np.testing.assert_allclose(hp.value, 0.25 * plus[::2], rtol=0.0, atol=1e-12 * np.max(np.abs(plus)))
     np.testing.assert_allclose(hc.value, 0.5 * hp.value, rtol=1e-12, atol=0.0)
+
+
+def test_file_waveform_with_content_above_the_new_nyquist_is_refused(tmp_path):
+    """Downsampling a file with power above the new Nyquist frequency is refused, not aliased."""
+    path = tmp_path / "model.txt"
+    _write_waveform(path, frequency=6000.0)
+    simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=1.0)})
+    with pytest.raises(ValueError, match="above 4096 Hz"):
+        simulator.generate_polarizations({"burst_model": "ccsn", "peak_time": PEAK, "distance": 1.0}, FS, 10.0)
 
 
 def test_file_waveform_at_the_target_rate_is_used_unchanged(tmp_path):
@@ -300,7 +310,7 @@ def test_simulate_projects_a_burst_onto_each_detector():
     for name in ("H1", "L1"):
         strain = stack[name]
         assert np.all(np.isfinite(strain.value))
-        peak = float(strain.times.value[np.argmax(np.abs(strain.value))])
+        peak = float(strain.times[np.argmax(np.abs(strain.value))])
         # The light-travel delay from the geocentre is at most ~21 ms; the carrier adds half a cycle.
         assert abs(peak - PEAK) < 0.025
 
