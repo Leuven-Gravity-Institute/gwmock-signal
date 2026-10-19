@@ -257,14 +257,15 @@ interface; the waveform files themselves come from their authors.
   and the time envelope's variance is set to $\sigma_t^2 = \tau^2 / 4 - 1 /
   (\pi^2 \Delta f^2)$ before the band is applied, so that the result has
   $\sigma_t = \tau / 2$. For a Gaussian amplitude envelope of standard deviation
-  $\tau/2$ (and $\Delta f/2$), the power $h_+^2 + h_\times^2$ has second moment
-  $\tau/(2\sqrt{2})$ (and $\Delta f/(2\sqrt{2})$). Averaged over 200
-  realisations (seeds 0–199) at 16384 Hz with inclination 0 and $(\tau, f_0,
-  \Delta f) = (0.1\ \text{s}, 150\ \text{Hz}, 100\ \text{Hz})$, the
-  power-weighted second moments are 0.0350 s in time and 35.3 Hz in frequency,
-  against 0.0354 s and 35.4 Hz. The parameter docstring in `LALSimBurst.c`
-  writes the envelopes with $\tau$ and $\Delta f$ themselves as the standard
-  deviation; the code and the function's detailed description use half of each.
+  $\tau/2$ (and $\Delta f/2$), the power $h_+^2 + h_\times^2$ has RMS width (the
+  square root of its power-weighted second moment) $\tau/(2\sqrt{2})$ (and
+  $\Delta f/(2\sqrt{2})$). Averaged over 200 realisations (seeds 0–199) at 16384
+  Hz with inclination 0 and $(\tau, f_0, \Delta f) = (0.1\ \text{s}, 150\
+  \text{Hz}, 100\ \text{Hz})$, the power-weighted RMS widths are 0.0350 s in
+  time and 35.3 Hz in frequency, against 0.0354 s and 35.4 Hz. The parameter
+  docstring in `LALSimBurst.c` writes the envelopes with $\tau$ and $\Delta f$
+  themselves as the standard deviation; the code and the function's detailed
+  description use half of each.
 
 ## Relation to MDC-1
 
