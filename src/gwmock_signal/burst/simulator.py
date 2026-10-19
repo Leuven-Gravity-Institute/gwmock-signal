@@ -39,7 +39,7 @@ InclinationDependence = Literal["none", "axisymmetric", "rotating"]
 
 #: Largest fraction of a waveform file's power allowed above the new Nyquist frequency when it is
 #: downsampled, since the shared kernel does not low-pass.
-_ALIAS_TOLERANCE = 1e-10
+_ALIAS_TOLERANCE = 1e-12
 
 
 def _resample(values: np.ndarray, rate: float, new_rate: float) -> np.ndarray:
@@ -62,7 +62,9 @@ def _resample(values: np.ndarray, rate: float, new_rate: float) -> np.ndarray:
             waveform's power lies above the new Nyquist frequency.
     """
     if new_rate < rate:
-        power = np.abs(np.fft.rfft(values)) ** 2
+        # A Hann window keeps the periodogram's leakage (about 1e-5 for an untapered tone) far below
+        # the tolerance, so only content that is really above the new Nyquist frequency is counted.
+        power = np.abs(np.fft.rfft(values * np.hanning(values.shape[0]))) ** 2
         above = power[np.fft.rfftfreq(values.shape[0], 1.0 / rate) > new_rate / 2.0].sum()
         if above > _ALIAS_TOLERANCE * power.sum():
             raise ValueError(

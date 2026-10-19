@@ -96,6 +96,18 @@ def _to_timeseries(hp: Any, hc: Any, peak_time: float, cross_sign: float = 1.0) 
     return plus, cross
 
 
+def _at_hrss(hp: Any, hc: Any, hrss: float, peak_time: float, cross_sign: float = 1.0) -> tuple[TimeSeries, TimeSeries]:
+    """Scale LAL polarizations so their discrete ``h_rss`` is *hrss*, and place them at *peak_time*.
+
+    LAL normalises the continuous waveform, which the samples reproduce only when they resolve it: a
+    0.1 ms Gaussian at 8192 Hz is under one sample wide and overshoots its label by 1.3e-3. Scaling
+    by ``hrss / MeasureHrss`` makes the label describe the injected samples for every family.
+    """
+    scale = hrss / lalsimulation.MeasureHrss(hp, hc)
+    plus, cross = _to_timeseries(hp, hc, peak_time, cross_sign)
+    return plus.with_data(plus.value * scale), cross.with_data(cross.value * scale)
+
+
 def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
     """Return an elliptically polarized sine-Gaussian centred on ``peak_time``.
 
@@ -119,7 +131,7 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
         0.0,
         1.0 / sampling_frequency,
     )
-    return _to_timeseries(hp, hc, params["peak_time"], cross_sign)
+    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"], cross_sign)
 
 
 def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
@@ -140,13 +152,13 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
         _positive(params, "hrss"),
         1.0 / sampling_frequency,
     )
-    return _to_timeseries(hp, hc, params["peak_time"])
+    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"])
 
 
 def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
     """Return a band- and time-limited white-noise burst centred on ``peak_time``.
 
-    The band is set by its lower edge and width, as the LVK injection tables quote it. LALSimulation
+    The band is set by its lower edge and width. LALSimulation
     shapes both the band and the time envelope smoothly rather than with hard edges, so the content
     is concentrated in, not confined to, ``[low_frequency, low_frequency + bandwidth]``.
 
@@ -180,9 +192,7 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     hp, hc = lalsimulation.GenerateBandAndTimeLimitedWhiteNoiseBurst(
         duration, centre, bandwidth, eccentricity, 0.0, 1.0, 1.0 / sampling_frequency, lal.gsl_rng("ranlux", seed)
     )
-    scale = _positive(params, "hrss") / lalsimulation.MeasureHrss(hp, hc)
-    plus, cross = _to_timeseries(hp, hc, params["peak_time"], cross_sign)
-    return plus.with_data(plus.value * scale), cross.with_data(cross.value * scale)
+    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"], cross_sign)
 
 
 def read_waveform_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

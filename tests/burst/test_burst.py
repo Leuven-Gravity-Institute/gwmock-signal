@@ -58,7 +58,7 @@ def _wnb(**overrides):
 def test_ad_hoc_families_are_normalised_to_the_requested_hrss(generator, params):
     """Every ad hoc family carries exactly the hrss the event asks for, measured without LAL."""
     hp, hc = generator(params, FS)
-    assert _rss(hp, hc) == pytest.approx(params["hrss"], rel=1e-6)
+    assert _rss(hp, hc) == pytest.approx(params["hrss"], rel=1e-9, abs=0.0)
 
 
 @pytest.mark.parametrize("generator", [sine_gaussian, gaussian])
@@ -171,6 +171,21 @@ def test_file_waveform_with_content_above_the_new_nyquist_is_refused(tmp_path):
     simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=1.0)})
     with pytest.raises(ValueError, match="above 4096 Hz"):
         simulator.generate_polarizations({"burst_model": "ccsn", "peak_time": PEAK, "distance": 1.0}, FS, 10.0)
+
+
+def test_a_band_limited_file_that_is_not_periodic_is_resampled(tmp_path):
+    """A ringdown cut off at the file's end leaks in a raw periodogram, but carries nothing above Nyquist."""
+    path = tmp_path / "model.txt"
+    rate = 16384.0
+    times = np.arange(4096) / rate
+    plus = 1e-20 * np.exp(-times / 0.02) * np.sin(2 * np.pi * 200.0 * times)
+    plus[-64:] *= np.linspace(1.0, 0.0, 64)
+    np.savetxt(path, np.column_stack([times, plus, 0.5 * plus]))
+    simulator = BurstSimulator(waveform_files={"ccsn": WaveformFile(path, reference_distance=1.0)})
+
+    hp, _ = simulator.generate_polarizations({"burst_model": "ccsn", "peak_time": PEAK, "distance": 1.0}, FS, 10.0)
+
+    np.testing.assert_allclose(hp.value, plus[::2], rtol=0.0, atol=1e-12 * np.max(np.abs(plus)))
 
 
 def test_file_waveform_at_the_target_rate_is_used_unchanged(tmp_path):
@@ -394,7 +409,7 @@ def test_every_drawn_event_simulates():
     simulator = BurstSimulator()
     for event in _draw(end_time=PEAK + 300.0 * len(DRAFT_BURST_FAMILIES) * 3):
         hp, hc = simulator.generate_polarizations(event, FS, 10.0)
-        assert _rss(hp, hc) == pytest.approx(event["hrss"], rel=1e-6)
+        assert _rss(hp, hc) == pytest.approx(event["hrss"], rel=1e-9, abs=0.0)
 
 
 @pytest.mark.parametrize(

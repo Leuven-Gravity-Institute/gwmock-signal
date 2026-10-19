@@ -43,7 +43,8 @@ DRAFT_BURST_FAMILIES: tuple[Mapping[str, Any], ...] = (
     {"burst_model": GAUSSIAN, "duration": 2.5e-3},
     {"burst_model": WHITE_NOISE_BURST, "low_frequency": 100.0, "bandwidth": 100.0, "duration": 0.1},
     {"burst_model": WHITE_NOISE_BURST, "low_frequency": 250.0, "bandwidth": 100.0, "duration": 0.1},
-    {"burst_model": WHITE_NOISE_BURST, "low_frequency": 750.0, "bandwidth": 100.0, "duration": 0.1},
+    # O3 quotes this band by its centre, f0 = 750 Hz, where it quotes the other two by their lower edges.
+    {"burst_model": WHITE_NOISE_BURST, "low_frequency": 700.0, "bandwidth": 100.0, "duration": 0.1},
 )
 
 #: Families whose polarization depends on the inclination.
