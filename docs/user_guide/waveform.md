@@ -35,16 +35,17 @@ Waveform generation is split into three layers:
    `generate_td_waveform(approximant, tc, sampling_frequency, minimum_frequency, **params)`.
 
 2. **Concrete backends**
-    - **`LALSimulationBackend`** (default) — uses **LALSimulation**, evaluating
-      in the frequency domain (`SimInspiralChooseFDWaveform`, or `SimInspiralFD`
-      for time-domain-native approximants) and conditioning to the time domain
-      so coalescence sits at the frequency-domain phase reference. Shipped with
-      the core dependency **`lalsuite`**; no optional extra is required. On
-      Python 3.15 and later, which lalsuite publishes no wheel for yet, it is
-      unavailable and constructing it raises an `ImportError` saying so.
-      Parameter handling is **strict**: only documented mass, spin, distance,
-      inclination, and coalescence-phase aliases are accepted; unknown keys
-      raise `ValueError`.
+    - **`LALSimulationBackend`** (the default where lalsuite is installed) —
+      uses **LALSimulation**, evaluating in the frequency domain
+      (`SimInspiralChooseFDWaveform`, or `SimInspiralFD` for time-domain-native
+      approximants) and conditioning to the time domain so coalescence sits at
+      the frequency-domain phase reference. Shipped with the core dependency
+      **`lalsuite`**; no optional extra is required. On Python 3.15 and later,
+      which lalsuite publishes no wheel for yet, it is unavailable and
+      constructing it raises an `ImportError` saying so; the default then falls
+      back to `RippleBackend` (see below). Parameter handling is **strict**:
+      only documented mass, spin, distance, inclination, and coalescence-phase
+      aliases are accepted; unknown keys raise `ValueError`.
 
     - **`GWSignalBackend`** — routes **frequency-domain-native** approximants
       through the LVK's forward-looking
@@ -76,26 +77,31 @@ Waveform generation is split into three layers:
       segment reserved after coalescence).
 
 3. **`WaveformFactory`** — on construction, takes
-   `backend: WaveformBackend | None` (default `LALSimulationBackend()`),
-   registers **one callable per** name returned by
-   `backend.available_approximants()`, and dispatches
+   `backend: WaveformBackend | None` (default `default_waveform_backend()`:
+   `LALSimulationBackend()` where lalsuite is installed, otherwise
+   `RippleBackend()` with a logged warning when the `jax` extra is installed,
+   otherwise an `ImportError` naming both remedies), registers **one callable
+   per** name returned by `backend.available_approximants()`, and dispatches
    `generate(waveform_model, parameters, **extra)` to the right callable.
 
 [`CBCSimulator`](../api/simulator/) and [`inject_cbc_signal`](../api/pipeline/)
 accept an optional `waveform_backend` and build a `WaveformFactory(backend=…)`
-internally. The CLI `inject cbc` exposes **`--backend lal`** (default),
-**`--backend gwsignal`**, **`--backend pycbc`**, or **`--backend ripple`**.
+internally; given none, they use `default_waveform_backend()` (LAL where
+lalsuite is installed, ripple where it is not and the `jax` extra is, otherwise
+an `ImportError` naming both). The CLI `inject cbc` exposes **`--backend lal`**,
+**`--backend gwsignal`**, **`--backend pycbc`**, or **`--backend ripple`**, and
+without `--backend` takes the same default.
 
 ## Supported waveform model names
 
 Built-in model names are **not hard-coded in this documentation**: they depend
 on your installed **`lalsuite`** / **PyCBC** versions.
 
-| Backend           | Where names come from                                                                                           | Install                  |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| **LAL** (default) | Every approximant for which LAL marks a **time-domain** implementation (`SimInspiralImplementedTDApproximants`) | Core (`lalsuite`)        |
-| **PyCBC**         | `pycbc.waveform.td_approximants()`                                                                              | Optional extra `[pycbc]` |
-| **ripple**        | Fixed curated set (see below)                                                                                   | Optional extra `[jax]`   |
+| Backend                                       | Where names come from                                                                                           | Install                  |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| **LAL** (default where lalsuite is installed) | Every approximant for which LAL marks a **time-domain** implementation (`SimInspiralImplementedTDApproximants`) | Core (`lalsuite`)        |
+| **PyCBC**                                     | `pycbc.waveform.td_approximants()`                                                                              | Optional extra `[pycbc]` |
+| **ripple**                                    | Fixed curated set (see below)                                                                                   | Optional extra `[jax]`   |
 
 Unlike LAL/PyCBC, the **ripple** backend supports a **fixed** set of
 approximants: `IMRPhenomD`, `IMRPhenomHM`, `IMRPhenomXAS`, `IMRPhenomXHM`,
@@ -129,12 +135,12 @@ or check upstream tables (LALSimulation approximant documentation;
 
 ## Examples
 
-### Example 1 — `WaveformFactory` with default LAL backend (BBH, IMRPhenomD)
+### Example 1 — `WaveformFactory` with the LAL backend (BBH, IMRPhenomD)
 
 ```python
-from gwmock_signal.waveform import WaveformFactory
+from gwmock_signal.waveform import LALSimulationBackend, WaveformFactory
 
-factory = WaveformFactory()
+factory = WaveformFactory(LALSimulationBackend())
 pol = factory.generate(
     "IMRPhenomD",
     {
@@ -285,8 +291,8 @@ The string is resolved via `importlib`; the resolved object must be callable.
 
 ## LAL backend — accepted parameters
 
-When using `LALSimulationBackend` (the default), only the following parameter
-keys are accepted. Extra keys raise `ValueError`.
+When using `LALSimulationBackend` (the default where lalsuite is installed),
+only the following parameter keys are accepted. Extra keys raise `ValueError`.
 
 | Canonical name          | Aliases    | Default      | Description                   |
 | ----------------------- | ---------- | ------------ | ----------------------------- |

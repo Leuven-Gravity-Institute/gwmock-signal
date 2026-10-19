@@ -16,16 +16,57 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import logging
+import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from gwmock_signal.waveform.backends import LALSimulationBackend, WaveformBackend
+from gwmock_signal._lalsuite import missing_lalsuite_message
+from gwmock_signal.waveform.backends import LALSimulationBackend, RippleBackend, WaveformBackend
 
 if TYPE_CHECKING:
     from gwmock_signal.timeseries import TimeSeries
 
 logger = logging.getLogger("gwmock_signal.waveform")
+
+
+def _lalsuite_installed() -> bool:
+    """Whether ``lalsimulation`` can be found; a broken installation then fails with its own error when used."""
+    return importlib.util.find_spec("lalsimulation") is not None
+
+
+def default_waveform_backend() -> WaveformBackend:
+    """Return the backend used when none is given: LAL where lalsuite is installed, otherwise ripple.
+
+    lalsuite publishes no wheel for some Python versions (3.15, at the time of writing), so there the LAL
+    backend cannot run. The ripple (JAX) backend covers the common approximants and installs there, so it
+    is used instead when the ``jax`` extra is installed, with a warning: its waveforms are ripple's, not
+    LAL's, and differ from what the same configuration produces where lalsuite is installed.
+
+    Returns:
+        The LAL backend if ``lalsimulation`` can be found, else the ripple backend.
+
+    Raises:
+        ImportError: If neither lalsuite nor ripple is installed, naming both remedies.
+    """
+    if _lalsuite_installed():
+        return LALSimulationBackend()
+    try:
+        backend = RippleBackend()
+    except ImportError as exc:
+        raise ImportError(
+            missing_lalsuite_message("The default (LAL) waveform backend")
+            + " Alternatively, install the jax extra (pip install 'gwmock-signal[jax]') to use the ripple "
+            "waveform backend, which is used automatically when lalsuite is not installed."
+        ) from exc
+    python = f"{sys.version_info.major}.{sys.version_info.minor}"
+    logger.warning(
+        "lalsuite is not installed (Python %s), so waveforms are generated with the ripple (JAX) backend "
+        "rather than the default LAL one; they differ from what the same configuration produces with LAL.",
+        python,
+    )
+    return backend
 
 
 class WaveformFactory:
@@ -43,7 +84,7 @@ class WaveformFactory:
             Enumerating approximants can be slow; reuse one factory
             instance in tight loops instead of creating many factories.
         """
-        self._backend = backend or LALSimulationBackend()
+        self._backend = backend if backend is not None else default_waveform_backend()
         self._models: dict[str, Callable[..., dict[str, TimeSeries]]] = {
             name: self._wrap_backend_call(name) for name in self._backend.available_approximants()
         }

@@ -40,7 +40,9 @@ tree (`src/gwmock_signal/`).
 ## Main entry points (quick links)
 
 - **[Waveform](waveform/)** — Time-domain polarizations: `WaveformFactory` over
-  `LALSimulationBackend` (default) or `PyCBCBackend` (optional); direct
+  `LALSimulationBackend` (the default where lalsuite is installed; otherwise
+  `RippleBackend` when the `jax` extra is installed, and an `ImportError` naming
+  both when neither is) or `PyCBCBackend` (optional); direct
   `pycbc_waveform_wrapper` for PyCBC-only workflows.
 - **[Projection](projection/)** — Strain per detector
   (`project_polarizations_to_network`).
