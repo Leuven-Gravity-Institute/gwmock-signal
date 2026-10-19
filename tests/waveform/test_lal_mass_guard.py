@@ -11,12 +11,6 @@ result; the references below generate the same binary without any rescaling.
 
 from __future__ import annotations
 
-try:
-    import lal
-except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
-    if exc.name != "lal":
-        raise
-    lal = None
 import numpy as np
 import pytest
 
