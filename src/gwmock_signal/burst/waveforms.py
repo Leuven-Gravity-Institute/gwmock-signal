@@ -84,6 +84,17 @@ def _finite(params: Mapping[str, Any], key: str) -> float:
     return value
 
 
+def _sample_rate(sampling_frequency: float) -> float:
+    """Return *sampling_frequency* as a float, refusing anything not finite and positive."""
+    try:
+        rate = float(sampling_frequency)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"sampling_frequency must be finite and positive, got {sampling_frequency!r}.") from error
+    if not (math.isfinite(rate) and rate > 0):
+        raise ValueError(f"sampling_frequency must be finite and positive, got {sampling_frequency!r}.")
+    return rate
+
+
 def _below_nyquist(frequency: float, sampling_frequency: float, key: str) -> None:
     """Refuse a frequency the sample rate cannot represent."""
     if frequency >= sampling_frequency / 2:
@@ -137,6 +148,7 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
     """
     _require(params, ("peak_time", "hrss", "frequency", "quality_factor", "inclination"), SINE_GAUSSIAN)
     peak_time = _finite(params, "peak_time")
+    sampling_frequency = _sample_rate(sampling_frequency)
     frequency = _positive(params, "frequency")
     _below_nyquist(frequency, sampling_frequency, "frequency")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
@@ -168,6 +180,7 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
     """
     _require(params, ("peak_time", "hrss", "duration"), GAUSSIAN)
     peak_time = _finite(params, "peak_time")
+    sampling_frequency = _sample_rate(sampling_frequency)
     duration = _positive(params, "duration")
     hrss = _positive(params, "hrss")
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
@@ -197,6 +210,7 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
         WHITE_NOISE_BURST,
     )
     peak_time = _finite(params, "peak_time")
+    sampling_frequency = _sample_rate(sampling_frequency)
     bandwidth = _positive(params, "bandwidth")
     duration = _positive(params, "duration")
     centre = _positive(params, "low_frequency") + bandwidth / 2
@@ -207,8 +221,8 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
             "a white-noise burst cannot be that compact in both time and frequency."
         )
     seed = int(params["seed"])
-    if seed < 0:
-        raise ValueError(f"seed must be a non-negative integer, got {params['seed']!r}.")
+    if not 0 <= seed < 2**64:
+        raise ValueError(f"seed must be an integer in [0, 2**64), got {params['seed']!r}.")
     hrss = _positive(params, "hrss")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)

@@ -139,12 +139,28 @@ def test_white_noise_burst_power_is_centred_in_its_band():
         (gaussian, {"peak_time": PEAK, "hrss": 1e-21, "duration": 0.0}, "duration"),
         (gaussian, {"peak_time": "not-a-time", "hrss": 1e-21, "duration": 1e-3}, "peak_time"),
         (sine_gaussian, _sg(peak_time=math.inf), "peak_time"),
+        (white_noise_burst, _wnb(seed=2**64), "seed"),
     ],
 )
 def test_invalid_burst_parameters_are_refused(generator, params, match):
     """Unrepresentable or malformed parameters raise a ValueError naming the problem."""
     with pytest.raises(ValueError, match=match):
         generator(params, FS)
+
+
+@pytest.mark.parametrize("rate", [0.0, -1.0, math.nan, math.inf, "nope", None])
+@pytest.mark.parametrize(
+    ("generator", "params"),
+    [
+        (sine_gaussian, _sg()),
+        (gaussian, {"peak_time": PEAK, "hrss": 1e-21, "duration": 1e-3}),
+        (white_noise_burst, _wnb()),
+    ],
+)
+def test_an_unusable_sample_rate_is_refused_before_any_waveform_is_made(generator, params, rate):
+    """A sample rate that is not finite and positive is refused, whether or not lalsuite is installed."""
+    with pytest.raises(ValueError, match="sampling_frequency"):
+        generator(params, rate)
 
 
 # ---------------------------------------------------------------------------
