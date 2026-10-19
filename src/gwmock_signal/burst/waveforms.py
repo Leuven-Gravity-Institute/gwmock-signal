@@ -37,11 +37,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import lal
-import lalsimulation
 import numpy as np
 
+from gwmock_signal import _lalsuite
 from gwmock_signal.timeseries import TimeSeries
+
+#: What a missing ``lalsuite`` stops, as named in the error.
+_LAL_FEATURE = "The burst waveforms"
 
 #: Ad hoc model names, as ``burst_model`` takes them.
 SINE_GAUSSIAN = "sine_gaussian"
@@ -105,6 +107,7 @@ def _at_hrss(hp: Any, hc: Any, hrss: float, peak_time: float, cross_sign: float 
     0.1 ms Gaussian at 8192 Hz is under one sample wide and overshoots its label by 1.3e-3. Scaling
     by ``hrss / MeasureHrss`` makes the label describe the injected samples for every family.
     """
+    lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     scale = hrss / lalsimulation.MeasureHrss(hp, hc)
     plus, cross = _to_timeseries(hp, hc, peak_time, cross_sign)
     return plus.with_data(plus.value * scale), cross.with_data(cross.value * scale)
@@ -125,6 +128,7 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
     frequency = _positive(params, "frequency")
     _below_nyquist(frequency, sampling_frequency, "frequency")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
+    lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     hp, hc = lalsimulation.SimBurstSineGaussian(
         _positive(params, "quality_factor"),
         frequency,
@@ -149,6 +153,7 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
         ``(h_plus, h_cross)``.
     """
     _require(params, ("peak_time", "hrss", "duration"), GAUSSIAN)
+    lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     hp, hc = lalsimulation.SimBurstGaussian(
         _positive(params, "duration"),
         _positive(params, "hrss"),
@@ -191,6 +196,8 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     if seed < 0:
         raise ValueError(f"seed must be a non-negative integer, got {params['seed']!r}.")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
+    lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
+    lal = _lalsuite.require("lal", _LAL_FEATURE)
     hp, hc = lalsimulation.GenerateBandAndTimeLimitedWhiteNoiseBurst(
         duration, centre, bandwidth, eccentricity, 0.0, 1.0, 1.0 / sampling_frequency, lal.gsl_rng("ranlux", seed)
     )

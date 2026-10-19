@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import math
 
-import lal
+try:
+    import lal
+except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
+    if exc.name != "lal":
+        raise
+    lal = None
 import numpy as np
 import pytest
 
@@ -47,6 +52,7 @@ def _wnb(**overrides):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize(
     ("generator", "params"),
     [
@@ -61,6 +67,7 @@ def test_ad_hoc_families_are_normalised_to_the_requested_hrss(generator, params)
     assert _rss(hp, hc) == pytest.approx(params["hrss"], rel=1e-9, abs=0.0)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("generator", [sine_gaussian, gaussian])
 def test_waveform_peaks_at_peak_time(generator):
     """The waveform's envelope peaks on the event's peak_time, not at LAL's t = 0."""
@@ -71,6 +78,7 @@ def test_waveform_peaks_at_peak_time(generator):
     assert peak_time == pytest.approx(PEAK, abs=0.5 / FS)
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("inclination", [0.0, 0.5, 1.0, math.pi / 2, 2.2, math.pi])
 def test_sine_gaussian_polarization_ratio_follows_inclination(inclination):
     """The cross/plus amplitude ratio is the rotating-source ratio for the inclination."""
@@ -82,6 +90,7 @@ def test_sine_gaussian_polarization_ratio_follows_inclination(inclination):
     assert _rss(hc) / _rss(hp) == pytest.approx(expected, abs=1e-6)
 
 
+@pytest.mark.requires_lalsuite
 def test_inclination_beyond_half_pi_flips_the_cross_handedness():
     """Viewing from behind (iota -> pi - iota) keeps h_+ and negates h_x."""
     hp_front, hc_front = sine_gaussian(_sg(inclination=0.6), FS)
@@ -91,12 +100,14 @@ def test_inclination_beyond_half_pi_flips_the_cross_handedness():
     assert np.max(np.abs(hc_front.value)) > 0
 
 
+@pytest.mark.requires_lalsuite
 def test_gaussian_is_linearly_polarized():
     """Gaussian pulses have no cross polarization."""
     _, hc = gaussian({"peak_time": PEAK, "hrss": 1e-21, "duration": 1e-4}, FS)
     assert not np.any(hc.value)
 
 
+@pytest.mark.requires_lalsuite
 def test_white_noise_burst_is_reproducible_from_its_seed():
     """The seed fixes the noise realisation, and a different seed changes it."""
     a = white_noise_burst(_wnb(seed=7), FS)
@@ -106,6 +117,7 @@ def test_white_noise_burst_is_reproducible_from_its_seed():
     assert not np.allclose(a[0].value, c[0].value, rtol=0.0, atol=0.0)
 
 
+@pytest.mark.requires_lalsuite
 def test_white_noise_burst_power_is_centred_in_its_band():
     """The band is placed by its lower edge: power centres on low_frequency + bandwidth / 2."""
     hp, hc = white_noise_burst(_wnb(low_frequency=750.0, bandwidth=100.0), FS)
@@ -115,6 +127,7 @@ def test_white_noise_burst_power_is_centred_in_its_band():
     assert 760.0 < centroid < 840.0
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize(
     ("generator", "params", "match"),
     [
@@ -248,6 +261,7 @@ def _m2_polarization(iota, sign):
     return (_swsh(iota, 2) + sign * _swsh(iota, -2)).real
 
 
+@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("inclination", [0.0, 0.4, 1.0, math.pi / 2, 2.2, math.pi])
 @pytest.mark.parametrize("dependence", ["none", "axisymmetric", "rotating"])
 def test_file_waveform_inclination_factors_follow_the_quadrupole_pattern(tmp_path, dependence, inclination):
@@ -317,6 +331,7 @@ def test_unknown_burst_model_is_refused():
         )
 
 
+@pytest.mark.requires_lalsuite
 def test_simulate_projects_a_burst_onto_each_detector():
     """The full pipeline returns one finite channel per detector, peaking near peak_time."""
     event = {"burst_model": "sine_gaussian", **_sg(), **SKY}
@@ -404,6 +419,7 @@ def test_injection_set_is_reproducible_and_family_values_override_draws():
     assert all(e["inclination"] == 0.0 for e in first)
 
 
+@pytest.mark.requires_lalsuite
 def test_every_drawn_event_simulates():
     """Every event the draft set produces generates at its recorded hrss."""
     simulator = BurstSimulator()
