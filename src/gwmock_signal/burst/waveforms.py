@@ -128,16 +128,18 @@ def sine_gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple
     frequency = _positive(params, "frequency")
     _below_nyquist(frequency, sampling_frequency, "frequency")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
+    quality_factor = _positive(params, "quality_factor")
+    hrss = _positive(params, "hrss")
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     hp, hc = lalsimulation.SimBurstSineGaussian(
-        _positive(params, "quality_factor"),
+        quality_factor,
         frequency,
-        _positive(params, "hrss"),
+        hrss,
         eccentricity,
         0.0,
         1.0 / sampling_frequency,
     )
-    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"], cross_sign)
+    return _at_hrss(hp, hc, hrss, params["peak_time"], cross_sign)
 
 
 def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
@@ -153,13 +155,11 @@ def gaussian(params: Mapping[str, Any], sampling_frequency: float) -> tuple[Time
         ``(h_plus, h_cross)``.
     """
     _require(params, ("peak_time", "hrss", "duration"), GAUSSIAN)
+    duration = _positive(params, "duration")
+    hrss = _positive(params, "hrss")
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
-    hp, hc = lalsimulation.SimBurstGaussian(
-        _positive(params, "duration"),
-        _positive(params, "hrss"),
-        1.0 / sampling_frequency,
-    )
-    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"])
+    hp, hc = lalsimulation.SimBurstGaussian(duration, hrss, 1.0 / sampling_frequency)
+    return _at_hrss(hp, hc, hrss, params["peak_time"])
 
 
 def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
@@ -195,13 +195,14 @@ def white_noise_burst(params: Mapping[str, Any], sampling_frequency: float) -> t
     seed = int(params["seed"])
     if seed < 0:
         raise ValueError(f"seed must be a non-negative integer, got {params['seed']!r}.")
+    hrss = _positive(params, "hrss")
     eccentricity, cross_sign = _eccentricity_and_handedness(float(params["inclination"]))
     lalsimulation = _lalsuite.require("lalsimulation", _LAL_FEATURE)
     lal = _lalsuite.require("lal", _LAL_FEATURE)
     hp, hc = lalsimulation.GenerateBandAndTimeLimitedWhiteNoiseBurst(
         duration, centre, bandwidth, eccentricity, 0.0, 1.0, 1.0 / sampling_frequency, lal.gsl_rng("ranlux", seed)
     )
-    return _at_hrss(hp, hc, _positive(params, "hrss"), params["peak_time"], cross_sign)
+    return _at_hrss(hp, hc, hrss, params["peak_time"], cross_sign)
 
 
 def read_waveform_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

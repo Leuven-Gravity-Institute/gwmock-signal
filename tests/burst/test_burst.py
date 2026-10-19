@@ -127,7 +127,6 @@ def test_white_noise_burst_power_is_centred_in_its_band():
     assert 760.0 < centroid < 840.0
 
 
-@pytest.mark.requires_lalsuite
 @pytest.mark.parametrize(
     ("generator", "params", "match"),
     [
