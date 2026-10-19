@@ -320,6 +320,14 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
 - Unknown model names raise `ValueError`; use `list_models()` after install.
 - **LAL** surfaces invalid physics or unsupported parameter combinations as
   LAL/LALSimulation errors; **PyCBC** behaves like PyCBC’s `get_td_waveform`.
+- **Redshifted neutron stars.** LAL's `IMRPhenomNSBH` refuses a neutron star
+  heavier than 3 M☉, and the backend passes detector-frame masses, so a 1.4 M☉
+  neutron star is refused from `z ≈ 1.15` on. For that approximant the LAL
+  backend evaluates the binary at masses, distance and frequencies divided by a
+  common factor and multiplies the result back, which is exact for a
+  frequency-domain model: the masses enter only through `M f`. The result agrees
+  with direct generation to about 1e-13 of the peak. Errors on other limits
+  (tidal deformability above 5000, for example) still surface from LAL.
 - Series are **offset by `tc`** in the sense documented for each backend; they
   are **not** cropped to a science segment — windowing is downstream.
 - **Reuse one `WaveformFactory`** in hot loops: construction calls
