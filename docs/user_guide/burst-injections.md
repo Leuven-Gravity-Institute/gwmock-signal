@@ -131,6 +131,36 @@ so each injection is recovered or missed on its own. Sky positions are
 **isotropic** (uniform in right ascension and $\sin\delta$), and polarization
 angles uniform in $[0, \pi)$.
 
+### Choosing the strength range and the interval
+
+Both are inputs to `draw_burst_injection_set`, with no default, because they
+depend on the detector network. The LVK searches give a convention to follow:
+
+- **Interval.** The O2 all-sky short-duration search injected one event every 50
+  s, with a uniform jitter of ±5 s [O2, Sect. III.C]. 50 s is far longer than
+  any family here (the longest, a `Q = 100` sine-Gaussian at 30 Hz, has an
+  envelope of about 0.75 s), so the events do not overlap. This draw places
+  events on a fixed grid without the jitter.
+- **Strength.** The O3 search injected each family on the grid $h_\mathrm{rss} =
+  (\sqrt{3})^N \times 5 \times 10^{-23}\,\mathrm{Hz}^{-1/2}$, `N = 0, ..., 8`,
+  and found 50% detection efficiency at $h_\mathrm{rss} \approx 0.8$–$1.9 \times
+  10^{-22}$ for its sine-Gaussians [O3, Sect. IV, Table I], so the grid spans
+  the threshold from just below it to well above. For another network, scale the
+  grid by the ratio of the networks' amplitude spectral densities in the band,
+  which moves the threshold by the same factor and keeps its place in the range.
+  For one 10 km Einstein Telescope interferometer (`ET_10_full_cryo_psd`)
+  against O3 Livingston (`aLIGO_O3_actual_L1_psd`), both bundled with
+  `gwmock-noise`, the ratio is close to 0.07 from 70 Hz to 1.8 kHz, giving a
+  log-uniform range of $3.5 \times 10^{-24}$ to $2.8 \times 10^{-22}$. The
+  single-interferometer ratio ignores the differences in network geometry and
+  antenna response.
+
+[O2]: B. P. Abbott et al., "All-sky search for short gravitational-wave bursts
+in the second Advanced LIGO and Advanced Virgo run", Phys. Rev. D 100, 024017
+(2019), arXiv:1905.03457. [O3]: R. Abbott et al., "All-sky search for short
+gravitational-wave bursts in the third Advanced LIGO and Advanced Virgo run",
+Phys. Rev. D 104, 122004 (2021), arXiv:2107.03701.
+
 ### Test set, not population
 
 The rate is chosen to measure a search's sensitivity, not drawn from any
@@ -237,9 +267,9 @@ from the LVK O3 all-sky search, or left open, for the reason given.
 
 These rows of the specification are draft and are fixed per data set:
 
-- the `hrss_range`, which depends on the network's detection threshold; MDC-1
-  has no value;
-- the injection `interval`; MDC-1 has no value;
+- the `hrss_range` and the injection `interval`, which MDC-1 does not set;
+  [Choosing the strength range and the interval](#choosing-the-strength-range-and-the-interval)
+  gives the convention;
 - the sine-Gaussian frequency range and whether O3's gridded $f_0$ values are
   wanted instead of a log-uniform draw;
 - whether circular sine-Gaussians are injected alongside elliptical ones;
