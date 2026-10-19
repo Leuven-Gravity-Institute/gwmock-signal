@@ -456,6 +456,14 @@ def test_injection_set_is_reproducible_and_family_values_override_draws():
     assert all(e["inclination"] == 0.0 for e in first)
 
 
+def test_injection_set_refuses_a_file_family_without_a_distance():
+    """A numerical family gets no drawn distance, so the draw refuses it unless the family fixes one."""
+    with pytest.raises(ValueError, match="need a distance"):
+        _draw(families=({"burst_model": "ccsn"},), end_time=PEAK + 1000.0)
+    events = _draw(families=({"burst_model": "ccsn", "distance": 10.0},), end_time=PEAK + 1000.0)
+    assert all(e["distance"] == 10.0 for e in events)
+
+
 @pytest.mark.requires_lalsuite
 def test_every_drawn_event_simulates():
     """Every event the draft set produces generates at its recorded hrss."""
