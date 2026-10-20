@@ -107,10 +107,15 @@ $10^{-16}$.
 | Numerical (e.g. CCSN)   | supplied as files; see [Numerical waveforms](#numerical-waveforms)                                                                          | as in the file                                                      |
 
 The Gaussian durations and white-noise parameters are those of the O3 all-sky
-search (Phys. Rev. D **104**, 122004, Table I). The sine-Gaussian $Q$ values are
-a subset of O3's, which also include $Q = 8.9$; their central frequency is drawn
-instead of gridded, over 30–1800 Hz, which keeps every $f_0$ far below the 4096
-Hz Nyquist frequency of 8192 Hz data. `DRAFT_BURST_FAMILIES` holds this table.
+search (Phys. Rev. D **104**, 122004, Table I). The sine-Gaussians are this
+set's own choice, not O3's. O3's Table I lists circular sine-Gaussians at fixed
+pairs of $Q = 3$, $8.9$, $9$ and $100$ and central frequencies from 70 Hz to
+3067 Hz; O3 also injected an elliptical set, uniform in $\cos\iota$, alongside
+the circular one at optimal orientation (§IV A). This set keeps $Q = 3$, $9$ and
+$100$, elliptical only (uniform in $\cos\iota$), and draws the central frequency
+log-uniformly over 30–1800 Hz instead of using O3's grid, which keeps every
+$f_0$ far below the 4096 Hz Nyquist frequency of 8192 Hz data.
+`DRAFT_BURST_FAMILIES` holds this table.
 
 A source at inclination $\iota$ radiates $h_\times / h_+ = 2\cos\iota / (1 +
 \cos^2\iota)$: circular when face-on, linear when edge-on. A circularly
@@ -237,9 +242,30 @@ interface; the waveform files themselves come from their authors.
   LALSimulation takes its centre, so the band is centred on $f_\text{low} +
   \Delta f / 2$. LALSimulation shapes the band and the time envelope smoothly,
   so the content is concentrated in, not confined to, $[f_\text{low},
-  f_\text{low} + \Delta f]$. Whether LAL's `duration` and `bandwidth` are
-  exactly O3's $\tau_\text{WNB}$ and $\Delta f$ has not been checked against an
-  independent reference.
+  f_\text{low} + \Delta f]$.
+- **White-noise duration and bandwidth.** LAL's `duration` and `bandwidth` are
+  O3's $\tau_\text{WNB}$ and $\Delta f$. O3 injects the same white-noise set as
+  the O2 search (Phys. Rev. D **104**, 122004, §IV A), and O2 generated its
+  injections with Minke through LALSimulation (Phys. Rev. D **100**, 024017,
+  arXiv:1905.03457, §III C). Minke's `WhiteNoiseBurst` (`minke/sources.py`,
+  version 2.3.0) passes the burst group's $\tau$ and $\Delta f$ to LAL unchanged
+  as `duration` and `bandwidth`, with the centre $f_\text{low} + \Delta f / 2$,
+  as this package does. In LALSimulation's
+  `XLALGenerateBandAndTimeLimitedWhiteNoiseBurst` (`LALSimBurst.c`), both are
+  twice the standard deviation of a Gaussian amplitude envelope: the frequency
+  envelope is $\exp[-2 (f - f_0)^2 / \Delta f^2]$, so $\sigma_f = \Delta f / 2$,
+  and the time envelope's variance is set to $\sigma_t^2 = \tau^2 / 4 - 1 /
+  (\pi^2 \Delta f^2)$ before the band is applied, so that the result has
+  $\sigma_t = \tau / 2$. For a Gaussian amplitude envelope of standard deviation
+  $\tau/2$ (and $\Delta f/2$), the power $h_+^2 + h_\times^2$ has RMS width (the
+  square root of its power-weighted second moment) $\tau/(2\sqrt{2})$ (and
+  $\Delta f/(2\sqrt{2})$). Averaged over 200 realisations (seeds 0–199) at 16384
+  Hz with inclination 0 and $(\tau, f_0, \Delta f) = (0.1\ \text{s}, 150\
+  \text{Hz}, 100\ \text{Hz})$, the power-weighted RMS widths are 0.0350 s in
+  time and 35.3 Hz in frequency, against 0.0354 s and 35.4 Hz. The parameter
+  docstring in `LALSimBurst.c` writes the envelopes with $\tau$ and $\Delta f$
+  themselves as the standard deviation; the code and the function's detailed
+  description use half of each.
 
 ## Relation to MDC-1
 

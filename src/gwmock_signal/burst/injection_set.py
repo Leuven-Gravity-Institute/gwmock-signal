@@ -31,10 +31,12 @@ from gwmock_signal.burst.waveforms import GAUSSIAN, SINE_GAUSSIAN, WHITE_NOISE_B
 #: Value of every drawn event's ``injection_set`` key.
 TEST_SET_LABEL = "test"
 
-#: The draft families: the ad hoc morphologies of the LVK O3 all-sky short-burst search
-#: (Phys. Rev. D 104, 122004, Table I) with the sine-Gaussian central frequency drawn rather than
-#: gridded. Sine-Gaussians and white-noise bursts take a drawn inclination (elliptical, uniform in
-#: ``cos(iota)``); Gaussians are linearly polarized and take none.
+#: The draft families: the Gaussians and white-noise bursts of the LVK O3 all-sky short-burst search
+#: (Phys. Rev. D 104, 122004, Table I), and sine-Gaussians at Q = 3, 9 and 100 with the central
+#: frequency drawn log-uniformly over 30-1800 Hz instead of O3's grid. O3's Table I lists circular
+#: sine-Gaussians; its elliptical set (Sec. IV A) is the one followed here. Sine-Gaussians and
+#: white-noise bursts take a drawn inclination (elliptical, uniform in ``cos(iota)``); Gaussians are
+#: linearly polarized and take none.
 DRAFT_BURST_FAMILIES: tuple[Mapping[str, Any], ...] = (
     {"burst_model": SINE_GAUSSIAN, "quality_factor": 3.0},
     {"burst_model": SINE_GAUSSIAN, "quality_factor": 9.0},
@@ -49,6 +51,7 @@ DRAFT_BURST_FAMILIES: tuple[Mapping[str, Any], ...] = (
 
 #: Families whose polarization depends on the inclination.
 _INCLINED = frozenset({SINE_GAUSSIAN, WHITE_NOISE_BURST})
+_AD_HOC = frozenset({SINE_GAUSSIAN, GAUSSIAN, WHITE_NOISE_BURST})
 #: Largest seed handed to the white-noise generator (an unsigned 32-bit integer).
 _MAX_SEED = 2**32 - 1
 
@@ -82,6 +85,10 @@ def draw_burst_injection_set(  # noqa: PLR0913
     * ``frequency`` log-uniform in *sine_gaussian_frequency_range* for sine-Gaussians;
     * ``seed`` for white-noise bursts, so each event's noise realisation is reproducible.
 
+    Nothing is drawn for a family whose ``burst_model`` names a numerical waveform file, so such a
+    family must fix its own ``distance`` (and ``inclination``, when its file's response depends on
+    it); a family without a ``distance`` is refused here rather than when the event is simulated.
+
     Args:
         start_time: GPS start of the span, s.
         end_time: GPS end of the span, s.
@@ -99,7 +106,8 @@ def draw_burst_injection_set(  # noqa: PLR0913
 
     Raises:
         ValueError: If the span or interval is not positive, a range is not positive, or
-            *families* is empty or has an entry without ``burst_model``.
+            *families* is empty, has an entry without ``burst_model``, or has a numerical
+            (file) family without a fixed ``distance``.
     """
     if not (math.isfinite(start_time) and math.isfinite(end_time) and end_time > start_time):
         raise ValueError(f"end_time must be after start_time, got [{start_time}, {end_time}).")
@@ -109,6 +117,14 @@ def draw_burst_injection_set(  # noqa: PLR0913
         raise ValueError("families must not be empty.")
     if any("burst_model" not in family for family in families):
         raise ValueError("every family must name its burst_model.")
+    undistanced = sorted(
+        {str(f["burst_model"]) for f in families if f["burst_model"] not in _AD_HOC and "distance" not in f}
+    )
+    if undistanced:
+        raise ValueError(
+            f"families {undistanced} are not ad hoc ({sorted(_AD_HOC)}), so their events need a distance, "
+            "which this draw does not supply: fix 'distance' (Mpc) in each such family."
+        )
     log_hrss = _log_bounds(hrss_range, "hrss_range")
     log_frequency = _log_bounds(sine_gaussian_frequency_range, "sine_gaussian_frequency_range")
 
