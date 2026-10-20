@@ -873,7 +873,7 @@ dev = [
 ]
 docs = [
     { name = "mkdocstrings-python", specifier = ">=2.0.9" },
-    { name = "zensical", specifier = ">=0.0.70" },
+    { name = "zensical", specifier = ">=0.0.71" },
 ]
 release = [{ name = "git-cliff", specifier = ">=2.14.2" }]
 
