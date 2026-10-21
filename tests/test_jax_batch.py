@@ -68,6 +68,7 @@ def test_simulate_cbc_batch_missing_sky_parameter_raises() -> None:
 def test_simulate_cbc_batch_matches_host_pipeline() -> None:
     """Each batched event/detector matches the host NumPy pipeline (overlap > 0.999)."""
     from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.resampling import edge_padding
 
     backend = RippleBackend(segment_duration=8.0)  # fixed grid shared with the host path
     result = simulate_cbc_batch(
@@ -106,7 +107,11 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
                 polarization_angle=float(_CATALOGUE["polarization_angle"][i]),
                 earth_rotation=False,
             )[detector]
-            a, b = host.value, device[i, j]
+            # The host output is padded at each end against the geocentre delay; the batch keeps
+            # the segment's own length, so the two are compared on that segment.
+            pad = edge_padding(_FS)
+            b = device[i, j]
+            a = host.value[pad : pad + len(b)]
             overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
             assert overlap > 0.999, f"event {i} {detector} overlap {overlap:.5f}"
 
@@ -293,12 +298,14 @@ def _numpy_reference_strain(*, earth_rotation: bool):
     """Yield ``(event, detector_index, name, expected)`` from the per-event NumPy projection.
 
     Rebuilds the same time-domain polarizations the device path projects -- one shared frequency
-    grid, inverse-FFT, roll to place coalescence -- then runs the host projection on them. Shared by
+    grid, inverse-FFT, roll to place coalescence -- then runs the host projection on them, at the
+    segment's own length. Shared by
     both branches so neither can be compared against a different waveform than the other.
     """
     from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.network import _project
+    from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
     from gwmock_signal.waveform.backends.ripple import RippleBackend
 
     backend = RippleBackend()
@@ -315,7 +322,10 @@ def _numpy_reference_strain(*, earth_rotation: bool):
         start = epoch + _EQUIVALENCE_CATALOGUE["coa_time"][event]
         hp = np.roll(np.fft.irfft(np.asarray(fd.plus[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
         hc = np.roll(np.fft.irfft(np.asarray(fd.cross[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
-        reference = project_polarizations_to_network(
+        # Same-length projection, which is what the batch computes: it returns the segment it was
+        # given rather than one padded against the geocentre delay, and its phase-shift branch
+        # wraps what the delay moves past an end, as the host's same-length projection does.
+        reference = _project(
             {
                 "plus": GWpyTimeSeries(hp, t0=start, sample_rate=_EQUIVALENCE_FS),
                 "cross": GWpyTimeSeries(hc, t0=start, sample_rate=_EQUIVALENCE_FS),
@@ -325,6 +335,11 @@ def _numpy_reference_strain(*, earth_rotation: bool):
             declination=float(_EQUIVALENCE_CATALOGUE["declination"][event]),
             polarization_angle=float(_EQUIVALENCE_CATALOGUE["polarization_angle"][event]),
             earth_rotation=earth_rotation,
+            precess_source_direction=False,
+            backend="numpy",
+            sinc_taps=DEFAULT_SINC_TAPS,
+            kaiser_beta=DEFAULT_KAISER_BETA,
+            keep_delayed_samples=False,
         )
         for index, name in enumerate(_EQUIVALENCE_DETECTORS):
             yield event, index, name, reference[name].value

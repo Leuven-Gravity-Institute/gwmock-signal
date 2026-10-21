@@ -304,7 +304,10 @@ class TransientSimulator(GWSimulator):
             detector_names: IFO codes (e.g. ``'H1'``, ``'L1'``, ``'V1'``).
             background: Optional mapping of detector name to background
                 ``TimeSeries`` (e.g. noise or zeros), the package's or GWpy's. If omitted, the projected
-                detector response is returned directly on the waveform time grid.
+                detector response is returned directly on the waveform time grid, extended at each
+                end by the padding that keeps the geocentre-to-detector delay from pushing signal
+                out of the buffer; see
+                :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
             sampling_frequency: Sample rate in Hz.
             minimum_frequency: Low-frequency cutoff in Hz.
             earth_rotation: If ``True``, evaluate antenna patterns at

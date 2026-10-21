@@ -97,6 +97,23 @@ def _validate_polarizations(
     return hp, hc
 
 
+def _padded_for_delay(
+    hp: TimeSeries, hc: TimeSeries, *, sinc_taps: int, kaiser_beta: float
+) -> tuple[TimeSeries, TimeSeries]:
+    """Return the polarizations zero-padded so no delayed sample falls outside the projection.
+
+    Without this every detector series was exactly as long as the input while the delay moved up
+    to ~21 ms of signal past an end: a short burst vanished entirely on the rotating branch and
+    wrapped to the wrong end of the buffer on the phase-shift branch. Sized by
+    :func:`~gwmock_signal.projection.resampling.edge_padding` -- the delay bound for any ground-based
+    detector plus the kernel's half-width -- rather than by this network's largest delay, so every
+    series shares one start and length and the device kernel's shape does not depend on the sky
+    position. ``t0`` moves back by whole samples, so the input's samples keep their times.
+    """
+    pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
+    return hp.pad(pad, pad), hc.pad(pad, pad)
+
+
 def _gmst_accurate(t_gps: float) -> float:
     """Return Greenwich mean sidereal time in radians using Astropy."""
     return float(gmst_rad_astropy(float(t_gps)))
@@ -420,6 +437,21 @@ def project_polarizations_to_network(  # noqa: PLR0913
     :mod:`gwmock_signal.projection.resampling`, gathered from a zero-padded copy so kernel
     taps reaching past either end read zero rather than repeating the endpoint.
 
+    **Each detector series is longer than the input, and starts earlier.** Delaying the signal
+    by the geocentre-to-detector light-travel time -- up to Earth's radius over the speed of
+    light, about 21 ms -- moves part of it past the end, or before the start, of the
+    polarization buffer. The polarizations are therefore zero-padded by
+    :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end before they
+    are projected, and every returned series covers that padded span: it starts that many
+    samples before the input and has twice that many more samples, on the input's own sample
+    lattice. The padding is sized for the largest delay any ground-based detector can have, plus
+    the resampling kernel's half-width, so it is the same for every detector, sky position and
+    backend: all returned series share one start time and length. Inside the input's span the
+    samples are what a same-length projection gives, up to rounding; outside it they hold the
+    delayed signal that a same-length projection would have dropped (``earth_rotation=True``) or
+    wrapped round to the other end of the buffer (``earth_rotation=False``). A caller that needs
+    the input's span exactly can crop to it, at the cost of that content.
+
     Args:
         polarizations: Mapping containing ``plus`` and ``cross`` time series, each a
             :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy ``TimeSeries``, on a common
@@ -470,13 +502,16 @@ def project_polarizations_to_network(  # noqa: PLR0913
 
     Returns:
             Mapping from each detector name to the projected strain as a
-            :class:`~gwmock_signal.timeseries.TimeSeries` (same length and sample rate as the inputs).
+            :class:`~gwmock_signal.timeseries.TimeSeries`, at the inputs' sample rate and on their
+            sample lattice, padded by ``edge_padding(sample_rate, sinc_taps, kaiser_beta)`` samples
+            at each end as described above.
 
     Raises:
         TypeError: If ``polarizations`` is not a mapping of time series as required.
         ValueError: If keys are missing, time grids disagree, a detector name is not
-            recognized, ``backend`` is unknown, or ``backend="jax"`` is combined with
-            ``earth_rotation=False``.
+            recognized, ``backend`` is unknown, ``backend="jax"`` is combined with
+            ``earth_rotation=False``, or the resampling kernel (``sinc_taps``, ``kaiser_beta``)
+            is invalid -- checked on both branches, since it sizes the padding on both.
     """
     return _project(
         polarizations,
@@ -508,8 +543,15 @@ def _project(  # noqa: PLR0913
     backend: str,
     sinc_taps: int,
     kaiser_beta: float,
+    keep_delayed_samples: bool = True,
 ) -> dict[str, TimeSeries]:
-    """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`."""
+    """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`.
+
+    ``keep_delayed_samples=False`` returns series exactly as long as the input instead, dropping
+    whatever the delay moves past either end. Only for a caller that has already generated the
+    polarizations with that margin and trims it off itself -- the continuous-wave simulator,
+    whose signal carries on beyond the buffer rather than ending in it.
+    """
     validate_projection_backend(backend)
     if backend == "jax" and not earth_rotation:
         # The constant-pattern branch is a frequency-domain phase shift, and no device
@@ -526,18 +568,28 @@ def _project(  # noqa: PLR0913
         raise ValueError("detector_names must not contain duplicates.")
     detectors = _make_detectors(list(detector_names))
 
+    # The caller's span, not the padded one, for the two things that describe the input rather than
+    # the projection grid: the duration warning, and where the sky-position line is anchored.
+    input_start = float(hp.t0)
+    _warn_if_constant_pattern_is_stretched(
+        np.array([input_start, input_start + (hp.n_samples - 1) * hp.dt]), earth_rotation=earth_rotation
+    )
+    if keep_delayed_samples:
+        # Padded before anything reads the time axis, so both branches and both backends project
+        # the padded span as if it were the input.
+        hp, hc = _padded_for_delay(hp, hc, sinc_taps=sinc_taps, kaiser_beta=kaiser_beta)
+
     time_array = np.asarray(hp.times, dtype=float)
     reference_time = float(0.5 * (time_array[0] + time_array[-1]))
-
-    _warn_if_constant_pattern_is_stretched(time_array, earth_rotation=earth_rotation)
 
     # Resolved once, before anything else reads the sky position. Every branch below -- host scalar,
     # host array, and the device kernel, for the delay *and* the antenna pattern -- derives its
     # geometry from these numbers, so deciding here rather than at each site is what makes it
     # impossible for one path to precess and another not to.
     #
-    # Anchored at the *first* sample, because that is the origin the device kernel's `sample_offsets`
-    # counts from, so both backends read the same line without a second convention to keep straight.
+    # Anchored at the caller's *first* sample, before any padding; the device kernel's
+    # `sample_offsets` count from its own first sample, so the line is carried there below, and both
+    # backends read the same line.
     #
     # A position and a *rate*, not a position alone. Freezing it per segment looks harmless -- the
     # angles move 2306 arcseconds per century, so across 4096 s they drift 3e-6 arcseconds -- but that
@@ -555,7 +607,7 @@ def _project(  # noqa: PLR0913
         # typed floats, so a process using both conventions at one segment shape would compile the
         # same device kernel twice.
         (right_ascension, declination), (d_right_ascension, d_declination) = precessed_sky_anchor_and_rate(
-            right_ascension, declination, float(time_array[0])
+            right_ascension, declination, input_start
         )
     else:
         d_right_ascension = d_declination = 0.0
@@ -572,8 +624,11 @@ def _project(  # noqa: PLR0913
             hc,
             detectors,
             time_array=time_array,
-            right_ascension=right_ascension,
-            declination=declination,
+            # The device kernel counts its offsets from its own first sample, the padded one, so the
+            # line is carried there from the caller's first sample, where it was fitted. Fitting it
+            # at the padded start instead would draw a slightly different line.
+            right_ascension=right_ascension + d_right_ascension * (float(time_array[0]) - input_start),
+            declination=declination + d_declination * (float(time_array[0]) - input_start),
             right_ascension_rate=d_right_ascension,
             declination_rate=d_declination,
             polarization_angle=polarization_angle,
@@ -594,7 +649,7 @@ def _project(  # noqa: PLR0913
     strains: dict[str, TimeSeries] = {}
 
     # Per sample, not per segment: see the anchor-and-rate comment above.
-    precession_offsets = time_array - time_array[0]
+    precession_offsets = time_array - input_start
     right_ascension_array = right_ascension + d_right_ascension * precession_offsets
     declination_array = declination + d_declination * precession_offsets
     gmst_array = _gmst_accurate_array(time_array)

@@ -21,6 +21,7 @@ from gwmock_signal.projection.network import (
     _CONSTANT_PATTERN_WARN_SECONDS,
     project_polarizations_to_network,
 )
+from gwmock_signal.projection.resampling import edge_padding
 
 
 def _uniform_series(n: int = 128, fs: float = 4096.0, t0: float = 100.0) -> TimeSeries:
@@ -263,8 +264,10 @@ def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
             polarization_angle=0.0,
             earth_rotation=False,
         )
-    rms_out = float(np.sqrt(np.mean(out["H1"].value ** 2)))
-    rms_in = float(np.sqrt(np.mean(signal**2)))
+    # Summed rather than averaged: the output is padded at both ends, so a mean over it would be
+    # diluted by the padding rather than measuring what the shift retained.
+    rms_out = float(np.sqrt(np.sum(out["H1"].value ** 2)))
+    rms_in = float(np.sqrt(np.sum(signal**2)))
     assert abs(rms_out / rms_in - 1.0) < 1e-4
 
 
@@ -290,9 +293,12 @@ def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
             polarization_angle=0.0,
             earth_rotation=False,
         )
-    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    # The projection shifts the zero-padded series, so the reference does too.
+    pad = edge_padding(fs)
+    padded = np.pad(signal, (pad, pad))
+    freqs = np.fft.rfftfreq(n + 2 * pad, d=1.0 / fs)
     phase = np.exp(-2j * np.pi * freqs * delay)
-    ref = np.fft.irfft(np.fft.rfft(signal) * phase, n=n)
+    ref = np.fft.irfft(np.fft.rfft(padded) * phase, n=n + 2 * pad)
     np.testing.assert_allclose(out["H1"].value, ref, rtol=1e-10, atol=1e-12)
 
 
@@ -569,9 +575,10 @@ class TestTheDeviceBackend:
             "H1"
         ]
 
-        assert device.t0 == 1.4e9
+        pad = edge_padding(512.0)
+        assert device.t0 == 1.4e9 - pad / 512.0
         assert device.sample_rate == 512.0
-        assert len(device.value) == len(polarizations["plus"].value)
+        assert len(device.value) == len(polarizations["plus"].value) + 2 * pad
 
     @pytest.mark.requires_gwpy
     def test_the_device_kernel_is_what_runs(self):
@@ -755,8 +762,11 @@ class TestTheDeviceBackend:
             )
         )
 
-        peak = float(np.max(np.abs(reference.value)))
-        worst = float(np.max(np.abs(degraded - reference.value))) / peak
+        # The primitive is called on the unpadded input, so it is compared on the input's span.
+        pad = edge_padding(512.0)
+        within = reference.value[pad : pad + len(plus)]
+        peak = float(np.max(np.abs(within)))
+        worst = float(np.max(np.abs(degraded - within))) / peak
         assert worst > 1e-4, (
             f"32-bit output differed from the 64-bit host path by only {worst:.3e} of peak, so the "
             f"guard is refusing something harmless and its message overstates the hazard"

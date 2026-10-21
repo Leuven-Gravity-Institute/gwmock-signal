@@ -499,6 +499,11 @@ class ContinuousWaveSimulator(GWSimulator):
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
+            # The margin above already gives the delay somewhere to read from, and the trim below
+            # assumes a series exactly as long as the polarizations. A transient's projection is
+            # padded so delayed signal is not lost past the buffer; a continuous wave's signal does
+            # not end at the buffer, so here that padding would only be cut off again.
+            keep_delayed_samples=False,
         )
 
         # The projection returns dimensionless series; the trimmed signal is labelled ``strain``, as

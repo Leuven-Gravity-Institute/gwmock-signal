@@ -69,6 +69,21 @@ for name, h in strains.items():
     print(name, h.shape, h.t0)
 ```
 
+Each returned series is longer than the polarizations and starts earlier. The
+projection delays the signal by the light-travel time from the geocentre to the
+detector, up to about 21 ms, so the polarizations are zero-padded at both ends
+by `edge_padding(sample_rate, sinc_taps, kaiser_beta)` samples (from
+`gwmock_signal.projection.resampling`) before projecting, and the output covers
+the padded span on the input's sample lattice. The padding is the bound for any
+ground-based detector plus the resampling kernel's half-width, so every
+detector, sky position and backend gets the same start time and length. Inside
+the input's span the samples are those of a same-length projection, up to
+rounding; outside it they hold the delayed signal a same-length projection would
+drop. This matters most for signals shorter than the delay: a 0.1 ms burst, 17
+samples at 8192 Hz, would otherwise be lost entirely. Crop to the input's span
+if you need it, at the cost of that content; injecting the series into data
+places it by its own start time.
+
 ## Example 2 — Short segment, fixed antenna pattern
 
 For very short waveforms where Earth rotation over the segment is negligible:

@@ -100,6 +100,7 @@ class TestNetworkProjection:
         from gwpy.timeseries import TimeSeries
 
         from gwmock_signal.projection.network import project_polarizations_to_network
+        from gwmock_signal.projection.resampling import edge_padding
 
         n, fs, t0 = 128, 4096.0, 1000000000.0
         t = np.arange(n) / fs
@@ -116,8 +117,11 @@ class TestNetworkProjection:
             earth_rotation=False,
         )
         assert set(result.keys()) == set(net.detector_names)
+        # Padded at each end against the geocentre delay, by the same amount for every detector.
+        pad = edge_padding(fs)
         for code in net.detector_names:
-            assert result[code].n_samples == n
+            assert result[code].n_samples == n + 2 * pad
+            assert result[code].t0 == t0 - pad / fs
 
 
 class TestNetworkFromDetectors:

@@ -21,6 +21,7 @@ from gwmock_signal.projection.network import (  # noqa: E402
     _gmst_accurate,
     _time_delay_from_earth_center_lal,
 )
+from gwmock_signal.projection.resampling import edge_padding  # noqa: E402
 
 # GPS times spanning the 36 s (pre-2017) and 37 s leap-second eras.
 _GPS_TIMES = [1126259462.4, 1187008882.4, 1238166018.0, 1370000000.0]
@@ -182,13 +183,14 @@ def test_device_projection_matches_host_pipeline() -> None:
     """The on-device FD projection reproduces the host (NumPy) earth_rotation=False path.
 
     End-to-end check that ripple FD -> JAX antenna/delay/projection -> irfft equals
-    project_polarizations_to_network for the same event, to a zero-lag overlap (so the
+    the host's same-length projection for the same event, to a zero-lag overlap (so the
     delay timing is validated, not just the morphology).
     """
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
     from gwpy.timeseries import TimeSeries
 
-    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.network import _project
+    from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
     from gwmock_signal.waveform.backends import RippleBackend
 
     fs, f_min = 2048.0, 20.0
@@ -213,8 +215,21 @@ def test_device_projection_matches_host_pipeline() -> None:
         "plus": TimeSeries(np.fft.irfft(np.asarray(fd.plus), n=n) / dt, t0=t0, dt=dt),
         "cross": TimeSeries(np.fft.irfft(np.asarray(fd.cross), n=n) / dt, t0=t0, dt=dt),
     }
-    host = project_polarizations_to_network(
-        pols, ["H1"], right_ascension=ra, declination=dec, polarization_angle=psi, earth_rotation=False
+    # Same-length, because the polarizations here are circular -- coalescence at the first sample,
+    # the inspiral wrapped to the end -- and the device FD projection shifts them circularly. The
+    # public projection pads the buffer so a delay cannot wrap, which this arrangement relies on.
+    host = _project(
+        pols,
+        ["H1"],
+        right_ascension=ra,
+        declination=dec,
+        polarization_angle=psi,
+        earth_rotation=False,
+        precess_source_direction=False,
+        backend="numpy",
+        sinc_taps=DEFAULT_SINC_TAPS,
+        kaiser_beta=DEFAULT_KAISER_BETA,
+        keep_delayed_samples=False,
     )["H1"]
 
     # Device path: F+, Fx and tau at the host's reference time (segment midpoint).
@@ -288,6 +303,9 @@ def test_rotating_projection_matches_numpy_path() -> None:
         earth_rotation=True,
         **sky,
     )["E1"].value
+    # The device primitive below is given the unpadded input, so it is compared on the input's span.
+    pad = edge_padding(sampling_frequency)
+    reference = reference[pad : pad + n_samples]
 
     response, location = reconstructed_geometry("E1")
     anchors, rate = gmst_anchor_and_rate(start_time)
@@ -375,6 +393,8 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
         earth_rotation=False,
         **sky,
     )["E1"].value
+    pad = edge_padding(sampling_frequency)
+    static = static[pad : pad + n_samples]
 
     mismatch = np.max(np.abs(rotating - static)) / np.max(np.abs(rotating))
     assert mismatch > 0.1, f"expected a large difference over 4096 s, got {mismatch:.3g}"

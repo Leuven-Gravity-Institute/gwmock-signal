@@ -131,6 +131,11 @@ segments = assemble_segments(
   [`project_polarizations_to_network`](detector-projection.md). The
   time-dependent (`earth_rotation=True`) response is **not** available on
   device.
+- **Segment length.** Each event's strain keeps the length of its waveform
+  segment. Unlike [`project_polarizations_to_network`](detector-projection.md),
+  which pads its output so the geocentre-to-detector delay (up to about 21 ms)
+  cannot move signal past either end, the batched path relies on the segment's
+  own margins before the inspiral and after the ringdown to hold that delay.
 - **Sidereal time.** Sidereal time uses an on-device IAU model with default leap
   seconds and `dut1 = 0`, accurate to ~1e-4 rad; this is the small difference
   from the Astropy-based CPU path.
