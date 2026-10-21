@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.network import _project, validate_projection_backend
-from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
+from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform import WaveformBackend, WaveformFactory
 
@@ -373,6 +373,23 @@ class TransientSimulator(GWSimulator):
 _PROJECTION_ONLY_PARAMETERS = frozenset({"right_ascension", "declination", "polarization_angle", "coa_time"})
 
 
+def _projected_duration(buffer_duration: float | None, sampling_frequency: float) -> float | None:
+    """Extend a polarization-buffer duration by the padding projection adds at that end.
+
+    :meth:`TransientSimulator.simulate` projects with the default kernel, which pads the
+    polarizations by :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end so
+    the geocentre-to-detector delay cannot push signal out of the buffer. The projected strain a
+    caller places therefore starts that much earlier and ends that much later than the waveform
+    backend's buffer, and a placement query answering for the buffer alone would let a segment
+    boundary crop the difference. ``None`` stays ``None``: unknown plus a constant is still unknown.
+    """
+    if buffer_duration is None:
+        return None
+    return float(buffer_duration) + edge_padding(sampling_frequency, DEFAULT_SINC_TAPS, DEFAULT_KAISER_BETA) / float(
+        sampling_frequency
+    )
+
+
 def _waveform_parameters(params: Mapping[str, Any]) -> dict[str, Any]:
     """Return *params* without the keys the projection owns, which the backend rejects."""
     return {key: value for key, value in params.items() if key not in _PROJECTION_ONLY_PARAMETERS}
@@ -505,13 +522,18 @@ class CBCSimulator(TransientSimulator):
             backend cannot say. Treat ``None`` as *unknown*, never as zero -- see
             :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration`.
             Note the value is where the buffer starts, not where audible signal begins, which makes
-            it safe for placement: a segment chosen from it never crops real signal.
+            it safe for placement: a segment chosen from it never crops real signal. It includes
+            the projection's padding (see :func:`_projected_duration`), because :meth:`simulate`
+            returns the projected strain, which starts that much before the polarizations.
         """
-        return self._waveform_factory.pre_coalescence_duration(
-            self._waveform_model,
+        return _projected_duration(
+            self._waveform_factory.pre_coalescence_duration(
+                self._waveform_model,
+                sampling_frequency,
+                minimum_frequency,
+                **_waveform_parameters(params),
+            ),
             sampling_frequency,
-            minimum_frequency,
-            **_waveform_parameters(params),
         )
 
     def post_coalescence_duration(
@@ -546,13 +568,17 @@ class CBCSimulator(TransientSimulator):
             Seconds from coalescence to one sample past the buffer's end, always positive; or
             ``None`` when the backend cannot say. Treat ``None`` as *unknown*, never as zero --
             zero asserts the content stops at coalescence, which would discard exactly the events
-            whose tail reaches into the segment being written.
+            whose tail reaches into the segment being written. Includes the projection's padding,
+            as :meth:`pre_coalescence_duration` does and for the same reason.
         """
-        return self._waveform_factory.post_coalescence_duration(
-            self._waveform_model,
+        return _projected_duration(
+            self._waveform_factory.post_coalescence_duration(
+                self._waveform_model,
+                sampling_frequency,
+                minimum_frequency,
+                **_waveform_parameters(params),
+            ),
             sampling_frequency,
-            minimum_frequency,
-            **_waveform_parameters(params),
         )
 
     def generate_polarizations(

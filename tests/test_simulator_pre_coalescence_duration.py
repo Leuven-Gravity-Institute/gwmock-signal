@@ -4,8 +4,8 @@ The backend already answers this; the point of exposing it on the simulator is t
 placing signals into segmented data holds a simulator, not a backend, and reaching the backend
 through ``_waveform_factory._backend`` would be two private attributes across a package boundary.
 
-The property under test is agreement: the number a simulator promises must be where the buffer it
-generates actually starts. A test recomputing the sizing formula would pass against a simulator
+The property under test is agreement: the number a simulator promises must be where the strain it
+returns actually starts. A test recomputing the sizing formula would pass against a simulator
 whose generation had drifted from what it reports, which is the failure that matters.
 """
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from gwmock_signal.projection.resampling import edge_padding
 from gwmock_signal.simulator import CBCSimulator
 
 _TC = 1419724820.0
@@ -45,9 +46,19 @@ def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_fre
     """Promise equals delivery, through the same entry point a caller uses."""
     simulator = CBCSimulator(waveform_model="IMRPhenomD")
 
+    # The canonical mass names `simulate` validates; the query is handed the same mapping.
+    params = {key: value for key, value in params.items() if key not in {"mass1", "mass2"}} | {
+        "detector_frame_mass_1": params["mass1"],
+        "detector_frame_mass_2": params["mass2"],
+    }
     predicted = simulator.pre_coalescence_duration(params, sampling_frequency, 20.0)
-    hp, _ = simulator.generate_polarizations(params, sampling_frequency, 20.0)
-    actual = _TC - hp.t0
+    # What a caller places is the projected strain, which starts before the polarizations by the
+    # padding that keeps the geocentre delay inside the buffer. The phase-shift branch, because
+    # where the output starts does not depend on the branch and it is the cheaper one.
+    output = simulator.simulate(
+        params, ["H1"], sampling_frequency=sampling_frequency, minimum_frequency=20.0, earth_rotation=False
+    )
+    actual = _TC - output.t0
 
     assert predicted is not None
     assert predicted == pytest.approx(actual, abs=0.5 / sampling_frequency)
@@ -159,6 +170,28 @@ def test_the_query_accepts_exactly_what_generation_accepts():
     predicted = simulator.pre_coalescence_duration(_BBH, 1024.0, 20.0)
     hp, _ = simulator.generate_polarizations(_BBH, 1024.0, 20.0)
 
-    assert predicted == pytest.approx(_TC - hp.t0, abs=0.5 / 1024.0)
+    # The polarization buffer plus the projection's padding: see the test above.
+    assert predicted == pytest.approx(_TC - hp.t0 + edge_padding(1024.0) / 1024.0, abs=0.5 / 1024.0)
     # And the mapping really does carry the keys that used to break it, or this proves nothing.
     assert {"coa_time", "right_ascension", "declination", "polarization_angle"} <= set(_BBH)
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize("sampling_frequency", [1024.0, 2048.0])
+def test_the_simulator_predicts_where_its_own_output_ends(sampling_frequency):
+    """The tail is promised for the projected strain too, which ends after the polarizations."""
+    simulator = CBCSimulator(waveform_model="IMRPhenomD")
+    params = {key: value for key, value in _BBH.items() if key not in {"mass1", "mass2"}} | {
+        "detector_frame_mass_1": _BBH["mass1"],
+        "detector_frame_mass_2": _BBH["mass2"],
+    }
+
+    predicted = simulator.post_coalescence_duration(params, sampling_frequency, 20.0)
+    output = simulator.simulate(
+        params, ["H1"], sampling_frequency=sampling_frequency, minimum_frequency=20.0, earth_rotation=False
+    )
+    # "One sample past the buffer's end", as the query documents.
+    actual = output.t0 + output.data.shape[-1] / sampling_frequency - _TC
+
+    assert predicted is not None
+    assert predicted == pytest.approx(actual, abs=0.5 / sampling_frequency)
