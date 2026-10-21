@@ -550,10 +550,10 @@ class CBCSimulator(TransientSimulator):
         than the run itself cannot distinguish an event whose content is entirely in the past from
         one whose tail lands in the segment being written, and must generate both to find out.
 
-        **This is buffer padding, not physical ringdown.** It is a fraction of the buffer, so it
-        scales with it: a fraction of a second for a stellar-mass binary, tens of seconds for a
-        binary neutron star at the same cutoff, and longer as the cutoff falls. A caller
-        substituting a constant is not approximating it.
+        **This is what the backend keeps after coalescence, not a physical ringdown time.** It
+        depends on the backend's conditioning -- a fraction of the buffer on ripple, the remnant's
+        merger and ringdown bounds plus a taper's time response on LAL -- and ranges from a fraction
+        of a second to tens of seconds. A caller substituting a constant is not approximating it.
 
         Exposed here for the same reason as the pre side: reaching the backend through
         ``_waveform_factory`` means two private attributes across a package boundary, and a caller

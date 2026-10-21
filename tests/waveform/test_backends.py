@@ -321,16 +321,13 @@ def test_lal_fd_td_roundtrip() -> None:
     import lal
     import lalsimulation
 
-    from gwmock_signal.waveform.backends import conditioning
-
     td = LALSimulationBackend().generate_td_waveform(
         "IMRPhenomD", tc=_TC, sampling_frequency=_FS, minimum_frequency=_F_MIN, **_CONVENTION_SOURCE
     )["plus"]
 
     # Reconstruct LAL's FD template on the same grid the backend used.
     m1, m2 = _CONVENTION_SOURCE["detector_frame_mass_1"], _CONVENTION_SOURCE["detector_frame_mass_2"]
-    chirp_mass = (m1 * m2) ** 0.6 / (m1 + m2) ** 0.2
-    n_samples = conditioning.segment_sample_count(chirp_mass, _F_MIN, _FS, eta=m1 * m2 / (m1 + m2) ** 2)
+    n_samples = td.value.size
     delta_f = _FS / n_samples
     hp_fd, _ = lalsimulation.SimInspiralChooseFDWaveform(
         m1 * lal.MSUN_SI,
@@ -364,6 +361,8 @@ def test_lal_fd_td_roundtrip() -> None:
     a, b = recon[in_band], template[in_band]
     overlap = np.real(np.sum(a * np.conj(b))) / np.sqrt(np.sum(np.abs(a) ** 2) * np.sum(np.abs(b) ** 2))
     assert 1.0 - overlap < 1e-6, f"FFT(TD) vs FD overlap {overlap:.8f}"
+    # And bin for bin: the band from the cutoff up is the model's own, untouched by the taper below it.
+    assert np.max(np.abs(a - b)) < 1e-10 * np.max(np.abs(b))
 
 
 @pytest.mark.requires_lalsuite
@@ -386,8 +385,8 @@ def test_lal_coalescence_at_fd_phase_reference_not_amplitude_peak() -> None:
 def test_lal_and_ripple_agree_on_coalescence() -> None:
     """LAL and ripple place the same source at the same sample (one shared tc convention).
 
-    Both backends reference coalescence to the FD phase reference and share the same
-    segment sizing, so the amplitude peaks coincide to within a sample -- the
+    Both backends reference coalescence to the FD phase reference, so the amplitude peaks
+    coincide to within a sample -- the
     mass-dependent ~12 M offset from the old ChooseTDWaveform epoch is gone.
     """
     pytest.importorskip("ripplegw", reason="ripplegw not installed")
@@ -398,8 +397,8 @@ def test_lal_and_ripple_agree_on_coalescence() -> None:
     lal_hp = LALSimulationBackend().generate_td_waveform("IMRPhenomD", **common)["plus"]
     rip_hp = RippleBackend().generate_td_waveform("IMRPhenomD", **common)["plus"]
 
-    # Same auto-sized grid (MTSUN and segment sizing are shared).
-    assert lal_hp.value.size == rip_hp.value.size
+    # The buffers are sized differently -- the LAL backend from below its cutoff and the remnant's
+    # ringdown, ripple from its own taper -- but coalescence is placed on the same convention.
     lal_peak = float(lal_hp.times[int(np.argmax(np.abs(lal_hp.value)))])
     rip_peak = float(rip_hp.times[int(np.argmax(np.abs(rip_hp.value)))])
     assert abs(lal_peak - rip_peak) < 1.5 / _FS, (

@@ -45,7 +45,9 @@ Waveform generation is split into three layers:
       constructing it raises an `ImportError` saying so; the default then falls
       back to `RippleBackend` (see below). Parameter handling is **strict**:
       only documented mass, spin, distance, inclination, and coalescence-phase
-      aliases are accepted; unknown keys raise `ValueError`.
+      aliases are accepted; unknown keys raise `ValueError`. How the
+      frequency-domain waveform becomes a time series is described under
+      [Frequency-to-time conditioning](#frequency-to-time-conditioning-lal-and-gwsignal).
 
     - **`GWSignalBackend`** — routes **frequency-domain-native** approximants
       through the LVK's forward-looking
@@ -333,6 +335,69 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
   are **not** cropped to a science segment — windowing is downstream.
 - **Reuse one `WaveformFactory`** in hot loops: construction calls
   `available_approximants()` once and can be slow on cold import.
+
+## Frequency-to-time conditioning (LAL and gwsignal)
+
+The LAL and gwsignal backends evaluate the model in the frequency domain, with
+coalescence at the frequency-domain phase reference, and inverse-transform it
+into a buffer. A periodic transform folds whatever extends past either end of
+that buffer back into it, so the buffer has to hold the whole signal and the
+spectrum must not end in a step.
+
+- **Tapered, not cut, below `minimum_frequency`.** The model is generated from a
+  start frequency below the cutoff and multiplied by a raised cosine that rises
+  from zero there to one at `minimum_frequency`. Every bin from
+  `minimum_frequency` up is the model's own value, unchanged; the content below
+  it is tapered and is part of the injected strain.
+- **Start frequency.** As LALSimulation's own conditioning chooses it: the
+  frequency with 10% more chirp time than `minimum_frequency`, or, when the
+  cutoff lies above the lowest innermost-stable-orbit frequency of a Kerr black
+  hole of the binary's mass (heavy binaries, whose band starts in the merger),
+  than that frequency instead.
+- **Before coalescence**, the buffer holds the quadrupole's chirp time from
+  where the highest sized harmonic enters the generated band (`m = 2` for a
+  quadrupole-only model, `m = 3` for a model with higher harmonics, the largest
+  `|m|` of an explicit `ModeArray`), the larger of LALSimulation's bound and
+  this package's 1PN estimate, plus three cycles and the taper's time response
+  (one over its width).
+- **After coalescence**, LALSimulation's merger and ringdown time bounds for the
+  remnant (eleven e-folds of the fundamental quasi-normal mode at the largest
+  spin the components allow), plus three cycles and the taper's time response.
+  `ringdown_fraction`, when set, is a lower bound on this as a fraction of the
+  buffer; by default no fixed fraction is used.
+- The total is rounded up to a power of two seconds; a pinned `segment_duration`
+  replaces it and keeps at least half for the inspiral.
+
+How this relates to LALSimulation's `SimInspiralTDFromFD`: the start frequency,
+the raised-cosine window, the three extra cycles and the merger and ringdown
+bounds are LALSimulation's. Two things differ, both to keep the requested band
+exactly as the model gives it. LALSimulation finishes with an eighth-order
+Butterworth high-pass at the cutoff and a time-domain taper at both ends, which
+change the band just above the cutoff; here the frequency taper sits entirely
+below it and the buffer is made long enough that its ends are already quiet. And
+the buffer reaches back for higher harmonics, which enter the band before the
+quadrupole does.
+
+Measured at 8192 Hz with a 5 Hz cutoff against the same waveform on a buffer
+eight times longer, the buffer differs by at most 2.0e-04 of peak (a 201+138
+solar mass binary with higher harmonics), 2.2e-05 for a 451+438 one, 1e-06 to
+4e-06 for intermediate-mass and neutron-star–black-hole binaries and 1e-10 for a
+long binary neutron star, with mismatches below 1e-08 and first samples below
+2e-05 of peak. The previous conditioning — a hard cut at the cutoff and a buffer
+sized for the inspiral above it with a fixed tenth after coalescence — left up
+to 0.34 of peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
+
+Buffers are longer as a result, most for heavy binaries: at a 5 Hz cutoff, a
+2302+248 solar mass binary goes from 4 s to 256 s, heavy stellar-mass binaries
+with higher harmonics typically from 8 s to 32 s, and long binary-neutron-star
+buffers are mostly unchanged.
+
+If LALSimulation refuses to start an approximant below the cutoff, the backend
+generates it from the cutoff and places the same taper _above_ it instead, which
+does reduce the lowest part of the band, and logs a warning. Every approximant
+tried — the IMRPhenomX, D, NSBH and NRTidalv2 families, TaylorF2, IMRPhenomTPHM
+and SEOBNRv4 — starts below the cutoff without complaint. The ripple backend has
+its own taper, described in its constructor documentation.
 
 ## Scientific notes
 

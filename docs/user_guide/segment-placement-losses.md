@@ -26,14 +26,18 @@ name them, and so should anything that cites the tables.
     The LAL figures on this page were measured when the LAL and gwsignal backends
     sized their buffer from the 0PN chirp time plus a flat 2 s. They now use the
     1PN chirp time with a proportional margin, the estimate the ripple backend
-    uses, so some of these buffers are one power of two longer. At 1024 Hz:
+    uses, so some of these buffers are one power of two longer. They have since
+    been sized from below the cutoff, where the waveform is now tapered rather
+    than cut, and keep the merger and ringdown time the remnant needs rather than
+    a fixed tenth of the buffer, so the leads below moved again while these four
+    buffers did not. At 1024 Hz:
 
     | binary   | cutoff | lead, then | lead, now | buffer, then | buffer, now |
     | -------- | ------ | ---------- | --------- | ------------ | ----------- |
-    | 30+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
-    | 25+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
-    | 1.4+1.35 | 30 Hz  | 57.6 s     | 115.2 s   | 64 s         | 128 s       |
-    | 2.0+1.5  | 20 Hz  | 115.2 s    | 230.4 s   | 128 s        | 256 s       |
+    | 30+25    | 20 Hz  | 3.600 s    | 7.365 s   | 4 s          | 8 s         |
+    | 25+25    | 20 Hz  | 3.600 s    | 7.355 s   | 4 s          | 8 s         |
+    | 1.4+1.35 | 30 Hz  | 57.6 s     | 127.2 s   | 64 s         | 128 s       |
+    | 2.0+1.5  | 20 Hz  | 115.2 s    | 254.8 s   | 128 s        | 256 s       |
 
     With `ringdown_fraction` 0.2, 30+25 at 20 Hz now leads by 6.400 s. Every
     other LAL buffer quoted below is unchanged, so for 30+25 and 25+25 the

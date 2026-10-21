@@ -82,9 +82,10 @@ class WaveformBackend(ABC):
         costs*, together with what they are a proxy for and what they are not anchored against.
 
         Asked of the backend rather than computed by the caller on purpose. The length is a
-        property of how each library conditions its output: the LAL backend sizes with
-        :func:`~gwmock_signal.waveform.backends.conditioning.segment_sample_count`, the gwsignal
-        backend inherits that because it overrides only the frequency-domain evaluation, ripple
+        property of how each library conditions its output: the LAL backend sizes from the
+        chirp time below its cutoff and the remnant's ringdown (see its ``generate_td_waveform``),
+        the gwsignal backend inherits that because it overrides only the frequency-domain
+        evaluation, ripple
         applies its own 5-smooth sizing, and PyCBC delegates to its library. A caller reproducing
         any of that would be a second implementation of a quantity that already exists, wrong
         differently per backend -- and wrong in the direction that silently truncates.
@@ -134,11 +135,13 @@ class WaveformBackend(ABC):
         event whose content is entirely in the past from one whose tail lands in the segment it is
         about to write -- so it must generate both.
 
-        **The tail is a fraction of the buffer, not a fixed ringdown.** It therefore scales with
-        everything the buffer scales with: a stellar-mass binary at 20 Hz carries a fraction of a
-        second, a binary neutron star at the same cutoff carries tens of seconds, and a lower
-        cutoff lengthens both. A caller substituting a constant -- "ringdown is milliseconds" --
-        is not approximating this quantity, it is discarding it.
+        **The tail is what the backend's conditioning keeps after coalescence, not a physical
+        ringdown time.** It depends on the backend: ripple reserves a fraction of the buffer, so its
+        tail scales with the buffer (a fraction of a second for a stellar-mass binary at 20 Hz, tens
+        of seconds for a binary neutron star); the LAL and gwsignal backends keep the remnant's
+        merger and ringdown bounds plus the taper's time response, seconds for a heavy binary at a
+        low cutoff. A caller substituting a constant -- "ringdown is milliseconds" -- is not
+        approximating this quantity, it is discarding it.
 
         Asked of the backend for the same reason as the pre side: the length is a property of how
         each library conditions its output, and a caller reproducing that arithmetic would be a
