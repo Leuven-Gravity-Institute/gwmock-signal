@@ -48,7 +48,7 @@ repos:
             exclude: ^src/gwmock_signal/data/lal_detectors\.json$
 
     - repo: https://github.com/DavidAnson/markdownlint-cli2
-      rev: v0.23.3
+      rev: v0.24.0
       hooks:
           - id: markdownlint-cli2
             args:
