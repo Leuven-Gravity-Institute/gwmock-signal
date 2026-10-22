@@ -99,17 +99,28 @@ A burst event has two times with different meanings.
 - **`peak_time`** is the burst's physical reference, the centre of its envelope
   at the geocentre. It alone positions the waveform, and every event needs it.
 - **`coa_time`** is optional: the key a caller writing segmented data places
-  every transient by. It has no physics for a burst and is never used to
-  generate one, so `simulate` returns the same strain whatever `coa_time` is.
+  every transient by. It has no physics for a burst: it never moves or reshapes
+  the waveform.
 
 `coa_time = peak_time` is the simple choice. Any `coa_time` inside the event's
-output is equally valid, such as the start of the polarization buffer, which
-some populations use: the [placement queries](#placing-bursts-in-segmented-data)
-measure from `coa_time`, so the output's start and end come out the same either
-way. A `coa_time` outside the output is refused by those queries, because no
-segment claimed from it could hold the event as placed. An event with `coa_time`
-but no `peak_time` is refused too: `coa_time` may lie anywhere in the buffer, so
-it does not say where the peak is. A `coa_time` of `None` counts as absent.
+output is equally valid and gives the same strain, such as the start of the
+polarization buffer, which some populations use: the
+[placement queries](#placing-bursts-in-segmented-data) measure from `coa_time`,
+so the output's start and end come out the same either way. "Inside the output"
+means from the first sample `simulate` returns to one sample past its last, the
+projection's padding included.
+
+A `coa_time` that is not a finite number, or that lies outside the output, is
+refused with a `ValueError` naming the output's span — by the two placement
+queries, by `generate_polarizations` and so by `simulate`, through one shared
+check. No segment claimed from such a time could hold the burst, and refusing it
+in generation too means a caller that treats a failed query as "unknown" and
+places the event by `coa_time` anyway fails, instead of writing a cropped burst.
+The check in generation is made on the buffer just generated, so it costs
+nothing extra. An event with `coa_time` but no `peak_time` is refused too:
+`coa_time` may lie anywhere in the buffer, so it does not say where the peak is.
+A `coa_time` of `None` counts as absent, and an event without one is generated
+exactly as before.
 
 ### Waveform families
 

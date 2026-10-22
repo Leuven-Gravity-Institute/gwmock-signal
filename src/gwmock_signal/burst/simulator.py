@@ -68,6 +68,51 @@ def _placement_time(params: Mapping[str, Any]) -> float:
     return peak_time if params.get("coa_time") is None else _finite_time(params, "coa_time")
 
 
+def _span_key(params: Mapping[str, Any], sampling_frequency: float) -> Any:
+    """Return the cache key of an event's polarization span, or ``None`` when it cannot be hashed.
+
+    ``coa_time`` is left out: generation never reads it, so every placement of one event shares
+    one entry.
+    """
+    try:
+        key = (float(sampling_frequency), tuple(sorted((k, v) for k, v in params.items() if k != "coa_time")))
+        hash(key)
+    except (TypeError, ValueError):
+        # An unhashable or unorderable parameter: measure without remembering.
+        return None
+    return key
+
+
+def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float]) -> tuple[float, float]:
+    """Return ``(pre, post)`` of the projected output around the placement time, or refuse it.
+
+    The single check behind the duration queries, :meth:`BurstSimulator.generate_polarizations`
+    and so :meth:`BurstSimulator.simulate`: they refuse exactly the same placements, with the same
+    message.
+
+    Args:
+        params: One burst event.
+        span: ``(start, end, sample_rate)`` of its polarization buffer.
+
+    Raises:
+        ValueError: If ``peak_time`` or a given ``coa_time`` is not a finite number, or the placement
+            time lies before the projected output's first sample or after its end.
+    """
+    placement = _placement_time(params)
+    start, end, rate = span
+    pre = _projected_duration(placement - start, rate)
+    post = _projected_duration(end - placement, rate)
+    if pre < 0 or post < 0:
+        key = "coa_time" if params.get("coa_time") is not None else "peak_time"
+        raise ValueError(
+            f"{key}={placement!r} lies outside this burst's output, which runs from {placement - pre!r} "
+            f"to {placement + post!r} s (peak_time={params.get('peak_time')!r}); no segment placed by it "
+            "could hold the burst. Set coa_time inside the output -- coa_time = peak_time is the simple "
+            "choice -- or omit it."
+        )
+    return pre, post
+
+
 InclinationDependence = Literal["none", "axisymmetric", "rotating"]
 
 
@@ -186,12 +231,15 @@ class BurstSimulator(TransientSimulator):
 
     **Two times, two meanings.** ``peak_time`` is the burst's physical reference, and it alone
     positions the waveform. ``coa_time`` is the key a caller writing segmented data places every
-    transient by; it carries no physics for a burst and is never used to generate one, so
-    :meth:`simulate` returns the same strain whatever it is. :meth:`pre_coalescence_duration` and
-    :meth:`post_coalescence_duration` measure from it -- from ``peak_time`` when it is absent -- so
-    ``coa_time - pre`` and ``coa_time + post`` are where the output starts and ends for any
-    ``coa_time`` inside the output. ``coa_time = peak_time`` is the simple choice; the start of the
-    buffer, or any other instant inside it, is equally valid.
+    transient by; it carries no physics for a burst and never moves or changes the waveform.
+    :meth:`pre_coalescence_duration` and :meth:`post_coalescence_duration` measure from it -- from
+    ``peak_time`` when it is absent -- so ``coa_time - pre`` and ``coa_time + post`` are where the
+    output starts and ends. ``coa_time = peak_time`` is the simple choice; the start of the
+    polarization buffer, or any other instant inside the output, is equally valid and gives the
+    same strain. A ``coa_time`` that is not a finite number, or that lies outside the output -- before
+    its first sample or after its end, padding included -- cannot place the event, and is refused
+    with the same ``ValueError`` by the two queries, :meth:`generate_polarizations` and
+    :meth:`simulate`, so a caller that ignores a failed query still cannot inject a cropped burst.
 
     Args:
         waveform_files: Model name -> :class:`WaveformFile`. Each file is read once, on first use.
@@ -297,37 +345,21 @@ class BurstSimulator(TransientSimulator):
 
     def _buffer_extent(self, params: Mapping[str, Any], sampling_frequency: float) -> tuple[float, float]:
         """Return ``(lead, tail)`` of the projected output around the placement time, in seconds."""
-        placement = _placement_time(params)
-        start, end, rate = self._polarization_span(params, sampling_frequency)
-        lead = _projected_duration(placement - start, rate)
-        tail = _projected_duration(end - placement, rate)
-        if lead < 0 or tail < 0:
-            raise ValueError(
-                f"coa_time={placement!r} lies outside this burst's output, which runs from "
-                f"{placement - lead!r} to {placement + tail!r} s (peak_time={params.get('peak_time')!r}). "
-                "Set coa_time inside it -- coa_time = peak_time is the simple choice -- or omit it."
-            )
-        return lead, tail
+        _placement_time(params)  # Refuse unusable times before paying for a generation.
+        key = _span_key(params, sampling_frequency)
+        span = self._extent_cache.get(key) if key is not None else None
+        if span is None:
+            span = self._remember(key, *self._generate(params, sampling_frequency))
+        elif key is not None:
+            self._extent_cache.move_to_end(key)
+        return _placement_extent(params, span)
 
-    def _polarization_span(self, params: Mapping[str, Any], sampling_frequency: float) -> tuple[float, float, float]:
-        """Return the polarization buffer's ``(start, end, sample_rate)``, generating it if needed.
+    def _remember(self, key: Any, hp: TimeSeries, hc: TimeSeries) -> tuple[float, float, float]:
+        """Return the polarization buffer's ``(start, end, sample_rate)``, remembering it under *key*.
 
         Remembered per event without ``coa_time``, which generation never reads, so an event asked
-        about under several placement times is generated once.
+        about under several placement times, and then generated, is generated once per query run.
         """
-        try:
-            key: Any = (
-                float(sampling_frequency),
-                tuple(sorted((k, v) for k, v in params.items() if k != "coa_time")),
-            )
-            hash(key)
-        except TypeError:
-            # An unhashable or unorderable parameter: measure without remembering.
-            key = None
-        if key is not None and key in self._extent_cache:
-            self._extent_cache.move_to_end(key)
-            return self._extent_cache[key]
-        hp, hc = self.generate_polarizations(params, sampling_frequency, 0.0)
         span = (
             min(hp.t0, hc.t0),
             max(hp.t0 + hp.n_samples / hp.sample_rate, hc.t0 + hc.n_samples / hc.sample_rate),
@@ -335,6 +367,7 @@ class BurstSimulator(TransientSimulator):
         )
         if key is not None:
             self._extent_cache[key] = span
+            self._extent_cache.move_to_end(key)
             if len(self._extent_cache) > _EXTENT_CACHE_SIZE:
                 self._extent_cache.popitem(last=False)
         return span
@@ -362,8 +395,22 @@ class BurstSimulator(TransientSimulator):
             Tuple of ``(hp, hc)`` series.
 
         Raises:
-            ValueError: If ``burst_model`` is unknown or the event lacks one of its parameters.
+            ValueError: If ``burst_model`` is unknown or the event lacks one of its parameters; or
+                if the event gives a ``coa_time`` the duration queries refuse -- not a finite
+                number, or outside the projected output. The check is the queries' own, made on the
+                buffer just generated, so it costs no second generation. Without ``coa_time`` the
+                event is generated as before.
         """
+        placed = params.get("coa_time") is not None
+        if placed:
+            _placement_time(params)  # Refuse an unusable time before paying for a generation.
+        hp, hc = self._generate(params, sampling_frequency)
+        if placed:
+            _placement_extent(params, self._remember(_span_key(params, sampling_frequency), hp, hc))
+        return hp, hc
+
+    def _generate(self, params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
+        """Return the polarizations for *params*, centred on ``peak_time``; ``coa_time`` is not read."""
         model = params["burst_model"]
         if model in PARAMETRIC_MODELS:
             return PARAMETRIC_MODELS[model](params, sampling_frequency)

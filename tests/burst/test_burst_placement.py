@@ -164,19 +164,62 @@ def test_moving_coa_time_shifts_the_answers_by_exactly_the_offset(family):
         assert simulator.post_coalescence_duration(moved, 8192.0, 5.0) == pytest.approx(tail - offset, abs=1e-12)
 
 
+def _calls(simulator, rate=4096.0):
+    """Every entry point that must refuse the same placements, keyed by name."""
+    return {
+        "pre": lambda event: simulator.pre_coalescence_duration(event, rate, 5.0),
+        "post": lambda event: simulator.post_coalescence_duration(event, rate, 5.0),
+        "polarizations": lambda event: simulator.generate_polarizations(event, rate, 5.0),
+        "simulate": lambda event: simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0),
+    }
+
+
 @pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("side", ["before", "after"])
-@pytest.mark.parametrize("query", ["pre", "post"])
-def test_a_coa_time_outside_the_output_is_refused(side, query):
-    """A placement time the output does not contain cannot be honoured, so it is refused."""
+@pytest.mark.parametrize("call", ["pre", "post", "polarizations", "simulate"])
+@pytest.mark.parametrize("family", ["sg-q9", "ga-0.1ms", "wnb-700"])
+def test_a_coa_time_outside_the_output_is_refused_everywhere(family, side, call):
+    """One sample outside the output is refused by the queries and by generation alike.
+
+    A caller that treats a failed query as "duration unknown" and places by ``coa_time`` anyway
+    then fails in generation instead of injecting a cropped burst.
+    """
+    simulator = BurstSimulator()
+    event = _event(family)
+    lead = simulator.pre_coalescence_duration(event, 4096.0, 5.0)
+    tail = simulator.post_coalescence_duration(event, 4096.0, 5.0)
+    coa_time = PEAK - lead - 1.0 / 4096.0 if side == "before" else PEAK + tail + 1.0 / 4096.0
+    with pytest.raises(ValueError, match="lies outside this burst's output") as refused:
+        _calls(BurstSimulator() if call in {"polarizations", "simulate"} else simulator)[call](
+            {**event, "coa_time": coa_time}
+        )
+    # The same check, so the same message, whichever entry point raised it.
+    with pytest.raises(ValueError, match="lies outside") as from_query:
+        simulator.pre_coalescence_duration({**event, "coa_time": coa_time}, 4096.0, 5.0)
+    assert str(refused.value) == str(from_query.value)
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize("edge", ["first sample", "polarization start", "last sample"])
+def test_a_coa_time_at_the_edge_of_the_output_is_accepted_everywhere(edge):
+    """The output's first and last samples, and the polarization buffer's start, are valid placements."""
     simulator = BurstSimulator()
     event = _event("sg-q9")
     lead = simulator.pre_coalescence_duration(event, 4096.0, 5.0)
     tail = simulator.post_coalescence_duration(event, 4096.0, 5.0)
-    coa_time = PEAK - lead - 1.0 / 4096.0 if side == "before" else PEAK + tail + 1.0 / 4096.0
-    method = simulator.pre_coalescence_duration if query == "pre" else simulator.post_coalescence_duration
-    with pytest.raises(ValueError, match="outside this burst's output"):
-        method({**event, "coa_time": coa_time}, 4096.0, 5.0)
+    hp, _ = simulator.generate_polarizations(event, 4096.0, 5.0)
+    coa_time = {
+        "first sample": PEAK - lead + 1e-6,
+        "polarization start": float(hp.t0),
+        "last sample": PEAK + tail - 1.0 / 4096.0,
+    }[edge]
+    placed = {**event, "coa_time": coa_time}
+    expected = simulator.simulate(event, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)["H1"]
+    for call in _calls(simulator).values():
+        call(placed)
+    strain = simulator.simulate(placed, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)["H1"]
+    assert strain.t0 == expected.t0
+    np.testing.assert_array_equal(np.asarray(strain.value), np.asarray(expected.value))
 
 
 @pytest.mark.requires_lalsuite
@@ -184,7 +227,7 @@ def test_queries_for_one_event_share_one_generation(mocker):
     """Start and end, and every placement time of one event, cost one generation between them."""
     simulator = BurstSimulator()
     event = _event("sg-q9")
-    spy = mocker.spy(simulator, "generate_polarizations")
+    spy = mocker.spy(simulator, "_generate")
     lead = simulator.pre_coalescence_duration(event, 8192.0, 5.0)
     simulator.post_coalescence_duration(event, 8192.0, 5.0)
     simulator.pre_coalescence_duration({**event, "coa_time": PEAK + 0.01}, 8192.0, 5.0)
@@ -192,6 +235,9 @@ def test_queries_for_one_event_share_one_generation(mocker):
     assert spy.call_count == 1
     simulator.pre_coalescence_duration(event, 2048.0, 5.0)
     assert spy.call_count == 2
+    # Generation with a coa_time checks it on the buffer it has just made: no second generation.
+    simulator.generate_polarizations({**event, "coa_time": PEAK}, 4096.0, 5.0)
+    assert spy.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +247,8 @@ def test_queries_for_one_event_share_one_generation(mocker):
 
 @pytest.mark.requires_lalsuite
 @pytest.mark.parametrize("family", ["sg-q100-30hz", "ga-2.5ms", "wnb-250"])
-def test_coa_time_never_changes_the_strain(family):
-    """Whatever ``coa_time`` is, or whether it is there, ``simulate`` returns the same strain."""
+def test_a_valid_coa_time_never_changes_the_strain(family):
+    """Any ``coa_time`` inside the output, or none, gives the strain ``peak_time`` alone gives."""
     simulator = BurstSimulator()
     event = _event(family)
     variants = {
@@ -231,17 +277,17 @@ def test_coa_time_never_changes_the_strain(family):
         ({"coa_time": "noon"}, "coa_time must be a finite number"),
     ],
 )
-@pytest.mark.parametrize("query", ["pre", "post"])
-def test_an_unusable_time_is_refused_by_the_queries(overrides, match, query):
-    """No usable peak, or an unusable placement time, is refused rather than answered.
+@pytest.mark.parametrize("call", ["pre", "post", "polarizations", "simulate"])
+def test_an_unusable_time_is_refused(overrides, match, call):
+    """No usable peak, or an unusable placement time, is refused rather than answered or generated.
 
     A ``coa_time`` alone is refused too: it may lie anywhere inside the buffer, so it does not say
     where the peak is.
     """
-    simulator = BurstSimulator()
-    method = simulator.pre_coalescence_duration if query == "pre" else simulator.post_coalescence_duration
-    with pytest.raises(ValueError, match=match):
-        method(_event("sg-q9", **overrides), 4096.0, 5.0)
+    event = _event("sg-q9", **overrides)
+    # Generation reports an unusable peak_time in its own words, naming the key.
+    with pytest.raises(ValueError, match=match if call in {"pre", "post"} or "coa" in match else "peak_time"):
+        _calls(BurstSimulator())[call](event)
 
 
 @pytest.mark.parametrize("peak_time", [None, math.nan, "noon"])
@@ -294,9 +340,16 @@ class OneBurst:
             event["coa_time"] = self._peak
         else:
             from gwmock_signal.burst import BurstSimulator
+            from gwmock_signal.projection.resampling import edge_padding
 
             plus, _ = BurstSimulator().generate_polarizations(event, self._rate, 0.0)
-            event["coa_time"] = float(plus.t0)
+            # The projected output runs from the buffer's start less the padding to its end plus it.
+            pad = edge_padding(self._rate) / self._rate
+            event["coa_time"] = {
+                "buffer start": float(plus.t0),
+                "before output": float(plus.t0) - pad - 1.0 / self._rate,
+                "after output": float(plus.t0) + plus.n_samples / self._rate + pad + 1.0 / self._rate,
+            }[self._placement]
         return {name: np.array([event[name]], dtype=object) for name in NAMES}
 '''
 
@@ -355,7 +408,6 @@ def _run_gwmock(workdir: Path, name: str, duration: int, placement: str) -> subp
         check=False,
         timeout=600,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
     return result
 
 
@@ -374,7 +426,9 @@ def test_a_burst_across_a_segment_boundary_is_placed_whole_by_the_orchestrator(t
         pytest.skip(f"gwmock is not importable by {_GWMOCK_PYTHON}; set GWMOCK_PYTHON to an interpreter that has it")
     (tmp_path / "one_burst.py").write_text(textwrap.dedent(_POPULATION_MODULE))
     split = _run_gwmock(tmp_path, "split", 16, placement)
-    _run_gwmock(tmp_path, "whole", 32, placement)
+    whole_run = _run_gwmock(tmp_path, "whole", 32, placement)
+    for run in (split, whole_run):
+        assert run.returncode == 0, run.stdout + run.stderr
 
     first = np.load(tmp_path / "out-split" / "signal" / "S-1000000000-16.npy")
     second = np.load(tmp_path / "out-split" / "signal" / "S-1000000016-16.npy")
@@ -387,3 +441,20 @@ def test_a_burst_across_a_segment_boundary_is_placed_whole_by_the_orchestrator(t
     assert np.max(np.abs(first)) > 0.05 * peak
     assert "Discarding" not in split.stdout + split.stderr
     np.testing.assert_allclose(summed, whole, rtol=0.0, atol=1e-12 * peak)
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize("placement", ["before output", "after output"])
+def test_a_coa_time_outside_the_output_fails_the_orchestrated_run(tmp_path, placement):
+    """One sample outside the output: the run fails rather than writing a cropped burst.
+
+    The orchestrator treats a failed duration query as "unknown", warns, and places the event by
+    ``coa_time`` alone. Generation must then refuse the same placement, or the run completes with
+    the part of the burst before the claiming segment silently missing.
+    """
+    if not _gwmock_available():
+        pytest.skip(f"gwmock is not importable by {_GWMOCK_PYTHON}; set GWMOCK_PYTHON to an interpreter that has it")
+    (tmp_path / "one_burst.py").write_text(textwrap.dedent(_POPULATION_MODULE))
+    run = _run_gwmock(tmp_path, "split", 16, placement)
+    assert run.returncode != 0, run.stdout + run.stderr
+    assert "lies outside this burst's output" in run.stdout + run.stderr
