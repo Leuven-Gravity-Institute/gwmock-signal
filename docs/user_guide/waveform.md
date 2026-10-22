@@ -460,9 +460,69 @@ SEOBNRv5HM and SEOBNRv5PHM are not part of LALSimulation and were not checked.
   its buffer ends about 0.7 s after coalescence, with a taper.
 - **A spectrum that ends in a step** rings with a tail falling as one over time.
   TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
-  buffer above). The IMRPhenomX models carry a much weaker slowly decaying
-  component of the same kind after coalescence, 1e-05 to 5e-05 of peak in
-  IMRPhenomXHM.
+  buffer above).
+- **IMRPhenomXHM's own multibanding** (`PhenomXHMThresholdMband`, also used
+  inside IMRPhenomXPHM) leaves a much weaker component of the same kind: 1e-05
+  to 5e-05 of peak outside the buffer, and a waveform that changes with the
+  frequency grid by up to 3.5e-05 of peak (mismatch at most 2.4e-09) on a 250+5
+  solar-mass binary with spins of 0.99 aligned and two heavier aligned-spin
+  binaries. With `PhenomXHMThresholdMband = 0` the grid dependence falls to
+  below 1.5e-05 of peak and to 1e-08 once the buffer is twice as long.
+
+### Recommended: turn off IMRPhenomXPHM and IMRPhenomXHM multibanding for injection data
+
+With its default multibanding, the waveform IMRPhenomXPHM returns depends on the
+length of the buffer it is generated into — and so on the segment duration of a
+simulation — and leaves content outside any buffer, as described above. For
+injection data that must not depend on how it was segmented, set both
+`PhenomXPHMThresholdMband` and `PhenomXHMThresholdMband` to 0. IMRPhenomXHM
+alone is affected far less (up to 3.5e-05 of peak, above), but setting
+`PhenomXHMThresholdMband` to 0 makes it grid-independent too.
+
+- **Cost.** About 4.7 times the frequency-domain evaluation time, measured over
+  50 stellar- and intermediate-mass binaries at a 5 Hz cutoff: a few percent of
+  the time per event once projection onto the detectors is counted.
+- **Agreement in band.** Over the same 50 binaries the mismatch between the
+  default and the multibanding-off waveform (h+, 10 km full-cryogenic ET design
+  sensitivity, 5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised
+  over time and phase.
+
+From the Python API, pass them as `waveform_arguments`, which reach the LAL
+dictionary of every call:
+
+```python
+from gwmock_signal import CBCSimulator
+from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+simulator = CBCSimulator("IMRPhenomXPHM", waveform_backend=LALSimulationBackend(f_ref=5.0))
+params = {
+    **event,  # the source parameters
+    "waveform_arguments": {
+        "PhenomXPHMThresholdMband": 0.0,
+        "PhenomXHMThresholdMband": 0.0,
+    },
+}
+strain = simulator.simulate(params, detectors, sampling_frequency=8192.0, minimum_frequency=5.0)
+```
+
+From a gwmock configuration, put them under `signal.waveform-options`, which
+gwmock passes to gwmock-signal as `waveform_arguments`:
+
+```yaml
+signal:
+    waveform-model: IMRPhenomXPHM
+    waveform-backend: lal
+    waveform-options:
+        PhenomXPHMThresholdMband: 0.0
+        PhenomXHMThresholdMband: 0.0
+```
+
+Not under `signal.waveform-arguments`: those are merged into each event's source
+parameters, which the LAL backend rejects for these keys, so they are not
+applied. The configuration above was checked end to end: the strain gwmock
+writes equals, bit for bit, the strain `CBCSimulator.simulate` returns with the
+same `waveform_arguments`, and differs from the default by 1.2e-03 of peak on a
+precessing 111+111 solar-mass binary.
 
 Sizing for the largest harmonic the model emits, rather than for `m = 3`,
 lengthens the buffers of higher-harmonic models: on a 250+5 solar mass binary
