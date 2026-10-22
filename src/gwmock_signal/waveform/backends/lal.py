@@ -638,8 +638,9 @@ class LALSimulationBackend(WaveformBackend):
         by a raised-cosine taper that rises from zero there to one at ``minimum_frequency``. Every
         bin from ``minimum_frequency`` up is the model's own value, unchanged; the content below it
         is tapered rather than cut, which is what suppresses the ringing a hard cut leaves across
-        the buffer (on a 2302 + 248 solar-mass binary's first sample, 0.30 of peak under the hard cut
-        and 1.6e-6 tapered). The buffer is sized from the physics of the source rather than as a fixed fraction:
+        the buffer (on a 2302 + 248 solar-mass binary at a 5 Hz cutoff and 8192 Hz, the hard cut put
+        its 4 s buffer up to 0.34 of peak away from the same waveform on a buffer eight times longer,
+        with 0.26 on the first sample; tapered, 1.4e-6 and 2.6e-7). The buffer is sized from the physics of the source rather than as a fixed fraction:
 
         * **start frequency** -- as LALSimulation's frequency-domain conditioning chooses it, the
           frequency with 10% more chirp time than ``minimum_frequency``, or than the lowest Kerr

@@ -3,7 +3,7 @@
 A periodic inverse transform of a spectrum cut hard at ``minimum_frequency`` rings with a 1/t tail,
 and a buffer sized for the inspiral above the cutoff with a fixed tenth after coalescence leaves the
 ringdown of a heavy remnant no room: both wrap round the buffer. For a 2302+248 solar-mass binary
-at a 5 Hz cutoff that put 0.3 of the peak strain on the first sample of a 4 s buffer.
+at a 5 Hz cutoff and 8192 Hz that put 0.26 of the peak strain on the first sample of a 4 s buffer.
 
 The references here are built from LALSimulation directly, not from the backend: the same model,
 started where LALSimulation's own conditioning starts it and tapered with a raised cosine up to the
@@ -149,7 +149,7 @@ def test_the_buffer_matches_the_same_waveform_on_a_much_longer_one(name):
     """Nothing wraps: the buffer is the corresponding stretch of a buffer eight times longer.
 
     Measured here (256 Hz): 2.1e-06 (intermediate-mass) and 2.4e-05 (heavy stellar) of peak; at
-    8192 Hz the previous conditioning left 0.34 and 1.5e-02 on these sources.
+    8192 Hz the previous conditioning left 0.34 and 6.5e-02 on these sources.
     """
     short, merger_index = _generated(name)
     long, offset = _long_reference(name, short.size, merger_index, tapered=True)
@@ -163,7 +163,7 @@ def test_the_buffer_matches_the_same_waveform_on_a_much_longer_one(name):
 def test_the_buffer_starts_and_ends_quietly(name):
     """The first and last samples are what is injected at the buffer's edges: no step into the data.
 
-    The intermediate-mass source's first sample was 0.30 of peak under the previous conditioning.
+    The intermediate-mass source's first sample was 0.26 of peak under the previous conditioning (8192 Hz).
     """
     short, _ = _generated(name)
     peak = np.max(np.abs(short))

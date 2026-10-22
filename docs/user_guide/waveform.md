@@ -407,20 +407,20 @@ and ringdown; what lies past the buffer is measured below.
 
 Measured with a 5 Hz cutoff against the same tapered waveform on a buffer four
 times longer, at 512 to 4096 Hz (enough for each source's band; the rate does
-not change the result, checked at 8192 Hz on the worst cases), as the largest
-content outside the buffer as a fraction of peak strain, over equal and unequal
-masses (to 250+5 solar masses), aligned and anti-aligned spins of 0.99, in-plane
-spins of 0.9, and total masses to 2612 solar masses:
+not change the IMRPhenomX results, checked at 8192 Hz on the worst cases), as
+the largest content outside the buffer as a fraction of peak strain, over equal
+and unequal masses (to 250+5 solar masses), aligned and anti-aligned spins of
+0.99, in-plane spins of 0.9, and total masses to 2612 solar masses:
 
-| Approximant                                  | Worst case outside the buffer                                                                                                                                                                  |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IMRPhenomD                                   | 5e-06                                                                                                                                                                                          |
-| IMRPhenomXHM                                 | 5.3e-05 (250+5)                                                                                                                                                                                |
-| IMRPhenomXPHM                                | 1.7e-02 (250+5, spins 0.99 aligned); 5e-04 to 3e-03 at 60+30, 130+13 and 250+5 with spins of 0.99 or 0.9 in-plane; 2e-06 to 5e-06 at 2612 solar masses unless spins are 0.99 aligned (1.5e-03) |
-| IMRPhenomTPHM, SEOBNRv4PHM, SEOBNRv4HM       | 6e-06                                                                                                                                                                                          |
-| IMRPhenomNSBH                                | 4.3e-05                                                                                                                                                                                        |
-| TaylorF2 (binary neutron star)               | 3.7e-05 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                |
-| IMRPhenomPv2_NRTidalv2 (binary neutron star) | 8e-09 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                  |
+| Approximant                                  | Worst case outside the buffer                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| IMRPhenomD                                   | 5e-06                                                                                                                                                                                            |
+| IMRPhenomXHM                                 | 5.3e-05 (250+5)                                                                                                                                                                                  |
+| IMRPhenomXPHM                                | 1.7e-02 (250+5, spins 0.99 aligned); 5e-04 to 3e-03 at 60+30, 130+13 and 250+5 with spins of 0.99 or 0.9 in-plane; 2e-06 to 2.3e-05 at 2612 solar masses, and 1.5e-03 with spins of 0.99 aligned |
+| IMRPhenomTPHM, SEOBNRv4PHM, SEOBNRv4HM       | 6e-06                                                                                                                                                                                            |
+| IMRPhenomNSBH                                | 4.3e-05                                                                                                                                                                                          |
+| TaylorF2 (binary neutron star)               | 3.7e-05 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                  |
+| IMRPhenomPv2_NRTidalv2 (binary neutron star) | 8e-09 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                    |
 
 The binary neutron stars were measured at a 20 Hz cutoff, where a reference at
 8192 Hz is affordable; at a 5 Hz cutoff only a 1024 Hz reference was, and there
@@ -449,23 +449,25 @@ SEOBNRv5HM and SEOBNRv5PHM are not part of LALSimulation and were not checked.
   3e-04 to 6e-04). Lengthening the buffer helps only slowly — 126 s more after
   coalescence still leaves 1.3e-03 outside — and does not touch the grid
   dependence. Setting `waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`
-  reduces both by four orders of magnitude: the same source leaves 8.8e-07
-  outside the buffer and changes by 1.3e-06 with the grid (with
-  `PhenomXHMThresholdMband` also set to 0, as measured here). The cost is about
-  5 times the frequency-domain evaluation time, a few percent of the time per
-  event once projection is counted. In band the two agree closely: over 50
-  stellar- and intermediate-mass binaries the mismatch between the default and
-  the multibanding-off waveform (the 10 km full-cryogenic ET design sensitivity,
-  5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised over time and
-  phase, although they differ by up to 6e-03 of peak in time. LALSimulation's
-  own `SimInspiralTD` drops the content after coalescence too — its buffer ends
-  about 0.7 s after coalescence, with a taper.
+  with `PhenomXHMThresholdMband` also set to 0, reduces both by four orders of
+  magnitude or more: on this source with the buffer as sized here, the content
+  outside the buffer falls from 8.8e-03 to 8.8e-07 of peak, and the change with
+  the grid from 2e-02 to 3e-02 to 8.8e-07 at the planned buffer and 4e-11 once
+  it is twice as long. The cost is about 5 times the frequency-domain evaluation
+  time, a few percent of the time per event once projection is counted. In band
+  the two agree closely: over 50 stellar- and intermediate-mass binaries the
+  mismatch between the default and the multibanding-off waveform (the 10 km
+  full-cryogenic ET design sensitivity, 5 Hz cutoff) is 5e-08 at the median and
+  at most 5e-06 maximised over time and phase, although they differ by up to
+  6e-03 of peak in time. LALSimulation's own `SimInspiralTD` drops the content
+  after coalescence too — its buffer ends about 0.7 s after coalescence, with a
+  taper.
 - **A spectrum that ends in a step** rings with a tail falling as one over time.
   TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
   buffer above).
 - **IMRPhenomXHM's own multibanding** (`PhenomXHMThresholdMband`, also used
-  inside IMRPhenomXPHM) leaves a much weaker component of the same kind: 1e-05
-  to 5e-05 of peak outside the buffer, and a waveform that changes with the
+  inside IMRPhenomXPHM) leaves a much weaker component of the same kind: up to
+  5e-05 of peak outside the buffer, and a waveform that changes with the
   frequency grid by up to 3.5e-05 of peak (mismatch at most 2.4e-09) on a 250+5
   solar-mass binary with spins of 0.99 aligned and two heavier aligned-spin
   binaries. With `PhenomXHMThresholdMband = 0` the grid dependence falls to
@@ -532,8 +534,10 @@ Sizing for the largest harmonic the model emits, rather than for `m = 3`,
 lengthens the buffers of higher-harmonic models: on a 250+5 solar mass binary
 the earlier sizing left 6.7e-03 of peak before the buffer, and 5.3e-05 is left
 now. The previous conditioning — a hard cut at the cutoff and a buffer sized for
-the inspiral above it with a fixed tenth after coalescence — left up to 0.34 of
-peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
+the inspiral above it with a fixed tenth after coalescence — put a 2302+248
+solar mass binary's 4 s buffer up to 0.34 of peak away from the same waveform on
+a buffer eight times longer, with 0.26 of peak on its first sample; tapered, its
+512 s buffer is within 1.4e-06, with 2.6e-07 on the first sample.
 
 Buffers are longer as a result, most for heavy binaries and for models with
 higher harmonics: at a 5 Hz cutoff and 8192 Hz, a set of IMRPhenomXPHM binary
