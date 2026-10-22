@@ -241,3 +241,82 @@ def test_an_approximant_that_fails_from_the_cutoff_too_raises_the_original_error
     source = {"detector_frame_mass_1": 30.0, "detector_frame_mass_2": 25.0, "luminosity_distance": 400.0}
     with pytest.raises(RuntimeError, match=r"refused at [0-4]\."):
         LALSimulationBackend().generate_td_waveform("IMRPhenomD", 0.0, _FS, _F_MIN, **source)
+
+
+# ---------------------------------------------------------------------------
+# Sizing for the largest harmonic the model emits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize(
+    ("approximant", "largest_m"),
+    [
+        ("IMRPhenomXPHM", 4),
+        ("IMRPhenomXHM", 4),
+        ("IMRPhenomHM", 4),
+        ("IMRPhenomTPHM", 5),
+        ("IMRPhenomD", 2),
+        ("TaylorF2", 2),
+        ("IMRPhenomPv2_NRTidalv2", 2),
+        ("IMRPhenomNSBH", 2),
+    ],
+)
+def test_the_buffer_is_sized_for_the_largest_harmonic_lal_reports(approximant, largest_m):
+    """The sized harmonic is the largest ``|m|`` LALSimulation lists for the model, not a fixed one."""
+    from gwmock_signal.waveform.backends import lal as lal_backend
+
+    assert lal_backend._sizing_harmonic(approximant, {}) == largest_m
+    # An explicit mode array is the caller's statement of what is generated.
+    assert lal_backend._sizing_harmonic(approximant, {"ModeArray": [(2, 2), (2, -2), (3, 3)]}) == 3
+
+
+@pytest.mark.requires_lalsuite
+def test_a_higher_mode_model_whose_modes_lal_cannot_list_is_sized_for_the_largest_lal_harmonic(monkeypatch):
+    """When the mode interface refuses, a higher-mode model is over-sized, never under-sized."""
+    from gwmock_signal.waveform.backends import lal as lal_backend
+
+    monkeypatch.setattr(lal_backend, "_reported_largest_m", lambda approximant, arguments: None)
+    monkeypatch.setattr(lal_backend, "_DEFAULT_LARGEST_M", {})
+    assert lal_backend._sizing_harmonic("SEOBNRv4HM_ROM", {}) == lal_backend._UNREPORTED_HIGHER_MODE_M == 5
+    assert lal_backend._sizing_harmonic("IMRPhenomD", {}) == 2
+
+
+@pytest.mark.requires_lalsuite
+def test_an_unequal_mass_binary_with_higher_harmonics_keeps_its_early_m4_content():
+    """A 250 + 5 solar-mass binary's (4, 4) harmonic enters the band long before the quadrupole.
+
+    Sized for ``m = 3`` its buffer dropped 6.7e-3 of peak there, which then wrapped round; sized for
+    the ``m = 4`` LALSimulation reports, what lies outside is 5e-5, the post-merger tail.
+    """
+    fs, approximant = 512.0, "IMRPhenomXHM"
+    source = {
+        "detector_frame_mass_1": 250.0,
+        "detector_frame_mass_2": 5.0,
+        "luminosity_distance": 1000.0,
+        "inclination": 1.0,
+        "coa_phase": 0.7,
+    }
+    plus = LALSimulationBackend(f_ref=_F_MIN).generate_td_waveform(approximant, 0.0, fs, _F_MIN, **source)["plus"]
+    n_samples, merger_index = plus.n_samples, round(-plus.t0 * fs)
+
+    m1, m2 = source["detector_frame_mass_1"], source["detector_frame_mass_2"]
+    lowest_isco = 1.0 / (27.0 * math.pi * (m1 + m2) * lal.MTSUN_SI)
+    chirp = lalsimulation.SimInspiralChirpTimeBound(min(_F_MIN, lowest_isco), m1 * lal.MSUN_SI, m2 * lal.MSUN_SI, 0, 0)
+    start = lalsimulation.SimInspiralChirpStartFrequencyBound(1.1 * chirp, m1 * lal.MSUN_SI, m2 * lal.MSUN_SI)
+    long_samples = 4 * n_samples
+    hp, _ = lalsimulation.SimInspiralChooseFDWaveform(
+        m1 * lal.MSUN_SI, m2 * lal.MSUN_SI, 0, 0, 0, 0, 0, 0, source["luminosity_distance"] * 1e6 * lal.PC_SI,
+        source["inclination"], source["coa_phase"], 0.0, 0.0, 0.0, fs / long_samples, start, fs / 2.0, _F_MIN,
+        lal.CreateDict(), lalsimulation.GetApproximantFromString(approximant),
+    )  # fmt: skip
+    spectrum = np.zeros(long_samples // 2 + 1, dtype=complex)
+    data = np.asarray(hp.data.data)[: spectrum.size]
+    spectrum[: data.size] = data
+    frequencies = np.arange(spectrum.size) * fs / long_samples
+    ramp = np.clip((frequencies - start) / (_F_MIN - start), 0.0, 1.0)
+    spectrum *= np.where(frequencies < start, 0.0, 0.5 - 0.5 * np.cos(np.pi * ramp))
+    offset = long_samples // 2 - n_samples // 2
+    long = np.roll(np.fft.irfft(spectrum, n=long_samples) * fs, offset + merger_index)
+    outside = np.concatenate([long[:offset], long[offset + n_samples :]])
+    assert np.max(np.abs(outside)) < 1e-3 * np.max(np.abs(long))

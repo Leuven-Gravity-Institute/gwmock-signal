@@ -63,16 +63,25 @@ EXTRA_CYCLES = 3.0
 _HIGHER_MODE_APPROXIMANTS = frozenset({"IMRPhenomXO4a", "NRSur7dq4", "NRHybSur3dq8", "NRHybSur3dq8Tidal"})
 # typos:on
 
-#: The azimuthal number the buffer is sized for in a model with higher harmonics by default.
+#: The largest ``|m|`` assumed for a model that carries higher harmonics by default but whose mode
+#: content LALSimulation cannot report (``SimInspiralChooseFDModes`` / ``SimInspiralChooseTDModes``
+#: refuse it, or its data files are missing). It is the largest ``|m|`` any LALSimulation model
+#: emits by default among those whose modes it reports -- the ``(5, 5)`` harmonic of SEOBNRv4PHM
+#: and IMRPhenomTPHM -- so the fallback over-sizes such a model rather than under-sizing it.
+_UNREPORTED_HIGHER_MODE_M = 5
+
+#: Time reserved at both ends of the buffer for the taper's own time response, in units of
+#: ``1 / (minimum_frequency - start_frequency)``.
 #:
-#: A harmonic ``m`` passes a given frequency when the quadrupole is at ``2 / m`` of it, so it enters
-#: the generated band earlier and the buffer must reach back to the quadrupole's chirp time from
-#: ``2 f_start / m``. ``m = 3`` rather than the largest ``m = 4``: sized for ``m = 3``, the
-#: earlier onset of the weaker ``m = 4`` harmonics left at most 2e-4 of peak outside the buffer
-#: across the heavy precessing binaries measured (IMRPhenomXPHM, 340 to 2600 solar masses at a
-#: 5 Hz cutoff), where sizing for ``m = 4`` doubles every such buffer again. An explicit
-#: ``ModeArray`` is sized for its own largest ``m``.
-_HIGHER_MODE_SIZING_HARMONIC = 3
+#: An estimate, not a bound. The window's transition is a raised cosine of width ``W``; its time
+#: kernel has a main lobe ``~1 / W`` long and a tail falling as ``1 / (W^2 t^3)``, which is what
+#: spreads content that does not chirp through the transition band (the merger of a binary whose
+#: band starts in it). Checked at the edges of the parameter space in use: halving this changes
+#: the content outside the buffer by under a factor of two, in the way a ``1 / t`` tail from the
+#: model's own spectrum does and not as the ``1 / t^3`` kernel would, so the taper's response is
+#: not what is left outside at this value -- a factor of two of margin over the value where it
+#: still is not.
+_TAPER_RESPONSE_WIDTHS = 1.0
 
 #: Largest lighter-component mass, in solar masses, that LAL accepts for an approximant.
 #:
@@ -153,11 +162,13 @@ class _ConditioningPlan:
 
 
 def _sizing_harmonic(approximant: str, waveform_arguments: dict[str, object]) -> int:
-    """Return the azimuthal number ``m`` whose early entry into the band the buffer must hold.
+    """Return the largest azimuthal number ``|m|`` the waveform carries, which the buffer is sized for.
 
-    The quadrupole (``m = 2``) for a model without higher harmonics; the largest ``|m|`` of an
-    explicit ``ModeArray``; otherwise :data:`_HIGHER_MODE_SIZING_HARMONIC` for a model that
-    carries higher harmonics by default.
+    A harmonic ``m`` passes a given frequency when the quadrupole is at ``2 / m`` of it, so the
+    largest ``|m|`` is the one that enters the generated band first. It is the largest ``|m|`` of an
+    explicit ``ModeArray`` when one is given, and otherwise the largest ``|m|`` of the modes
+    LALSimulation itself reports the model emits by default (:func:`_default_largest_m`). Never
+    below 2, the quadrupole.
     """
     modes = waveform_arguments.get("ModeArray")
     if modes is not None:
@@ -166,9 +177,100 @@ def _sizing_harmonic(approximant: str, waveform_arguments: dict[str, object]) ->
         except (TypeError, ValueError) as exc:
             raise ValueError(f"ModeArray must be an iterable of (l, m) pairs, got {modes!r}") from exc
         return max([2, *orders])
-    if "HM" in approximant or approximant in _HIGHER_MODE_APPROXIMANTS:
-        return _HIGHER_MODE_SIZING_HARMONIC
-    return 2
+    options = tuple(sorted((key, repr(value)) for key, value in waveform_arguments.items()))
+    return _default_largest_m(approximant, options, waveform_arguments)
+
+
+_DEFAULT_LARGEST_M: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+
+
+def _default_largest_m(
+    approximant: str, options: tuple[tuple[str, str], ...], waveform_arguments: dict[str, object]
+) -> int:
+    """Return the largest ``|m|`` of the modes LALSimulation reports *approximant* emits by default.
+
+    Asked of LALSimulation's mode interface -- ``SimInspiralChooseFDModes`` for a frequency-domain
+    model, ``SimInspiralChooseTDModes`` for a time-domain one -- with the caller's own extra
+    options, for a short, cheap binary; the mode content is a property of the model and its
+    options, not of the source, so the answer is remembered per approximant and options. The
+    largest ``|m|`` of a precessing model's inertial-frame modes is its largest ``l``, the largest
+    co-precessing ``|m|`` as well.
+
+    A model whose modes LALSimulation cannot report is a quadrupole-only model, which has no mode
+    interface (``m = 2``), unless it is known to carry higher harmonics -- ``HM`` in its name or
+    listed in :data:`_HIGHER_MODE_APPROXIMANTS` -- in which case :data:`_UNREPORTED_HIGHER_MODE_M`
+    is assumed.
+    """
+    key = (approximant, options)
+    if key in _DEFAULT_LARGEST_M:
+        return _DEFAULT_LARGEST_M[key]
+    largest = _reported_largest_m(approximant, waveform_arguments)
+    if largest is None:
+        known = "HM" in approximant or approximant in _HIGHER_MODE_APPROXIMANTS
+        largest = _UNREPORTED_HIGHER_MODE_M if known else 2
+    _DEFAULT_LARGEST_M[key] = max(2, largest)
+    return _DEFAULT_LARGEST_M[key]
+
+
+def _reported_largest_m(approximant: str, waveform_arguments: dict[str, object]) -> int | None:
+    """Return the largest ``|m|`` LALSimulation's mode interface lists for *approximant*, or ``None``."""
+    lal = _lalsuite.require("lal", LALSimulationBackend.LAL_FEATURE)
+    lalsimulation = _lalsuite.require("lalsimulation", LALSimulationBackend.LAL_FEATURE)
+    try:
+        approx_enum = lalsimulation.GetApproximantFromString(approximant)
+    except RuntimeError:
+        return None
+    lal_params = lal.CreateDict()
+    _apply_waveform_arguments(lal_params, waveform_arguments)
+    # A 30 + 20 solar-mass binary from 20 Hz: short and inside every model's calibration.
+    mass1, mass2, f_low = 30.0 * MSUN, 20.0 * MSUN, 20.0
+    try:
+        if lalsimulation.SimInspiralImplementedFDApproximants(approx_enum):
+            modes = lalsimulation.SimInspiralChooseFDModes(
+                mass1,
+                mass2,
+                0.0,
+                0.0,
+                0.3,
+                0.0,
+                0.0,
+                0.2,
+                0.25,
+                f_low,
+                1024.0,
+                f_low,
+                0.0,
+                MPC,
+                0.0,
+                lal_params,
+                approx_enum,
+            )
+        else:
+            modes = lalsimulation.SimInspiralChooseTDModes(
+                0.0,
+                1.0 / 2048.0,
+                mass1,
+                mass2,
+                0.0,
+                0.0,
+                0.3,
+                0.0,
+                0.0,
+                0.2,
+                f_low,
+                f_low,
+                MPC,
+                lal_params,
+                8,
+                approx_enum,
+            )
+    except RuntimeError:
+        return None
+    largest = 0
+    while modes is not None:
+        largest = max(largest, abs(int(modes.m)))
+        modes = modes.next
+    return largest or None
 
 
 def _to_onesided(data: object, n_freq: int) -> np.ndarray:
@@ -462,11 +564,13 @@ class LALSimulationBackend(WaveformBackend):
         )
         # The taper's own time response: a raised cosine of width W in frequency is a pulse whose
         # main lobe is ~1 / W long in time. It spreads whatever does not chirp through the taper
-        # band -- the merger of a binary whose cutoff lies above its ISCO -- to both sides.
-        taper_seconds = 1.0 / (minimum_frequency - start_frequency)
+        # band -- the merger of a binary whose cutoff lies above its ISCO -- to both sides. An
+        # estimate; see _TAPER_RESPONSE_WIDTHS.
+        taper_seconds = _TAPER_RESPONSE_WIDTHS / (minimum_frequency - start_frequency)
         extra_seconds = EXTRA_CYCLES / chirp_frequency
-        # Inspiral: the quadrupole's chirp time from where the highest sized harmonic enters the
-        # generated band, the larger of LALSimulation's bound and this package's own estimate.
+        # Inspiral: the quadrupole's chirp time from where the largest harmonic the model emits
+        # enters the generated band, the larger of LALSimulation's bound and this package's own
+        # estimate.
         harmonic = _sizing_harmonic(approximant, p.waveform_arguments)
         onset = 2.0 * start_frequency / harmonic
         eta = p.mass1 * p.mass2 / total_mass**2
@@ -523,8 +627,10 @@ class LALSimulationBackend(WaveformBackend):
         * **start frequency** -- as LALSimulation's frequency-domain conditioning chooses it, the
           frequency with 10% more chirp time than ``minimum_frequency``, or than the lowest Kerr
           ISCO frequency when the cutoff lies above it (heavy binaries);
-        * **before coalescence** -- the quadrupole's chirp time from where the highest sized
-          harmonic enters the generated band, plus three cycles and the taper's time response;
+        * **before coalescence** -- the quadrupole's chirp time from where the largest harmonic the
+          model emits (the largest ``|m|`` LALSimulation lists for it, or of an explicit
+          ``ModeArray``) enters the generated band, plus three cycles and the taper's time
+          response;
         * **after coalescence** -- LALSimulation's merger and ringdown time bounds for the remnant,
           plus three cycles and the taper's time response; at least ``ringdown_fraction`` of the
           buffer when one is set.

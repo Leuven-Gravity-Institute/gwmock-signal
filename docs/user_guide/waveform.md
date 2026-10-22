@@ -355,11 +355,16 @@ spectrum must not end in a step.
   hole of the binary's mass (heavy binaries, whose band starts in the merger),
   than that frequency instead.
 - **Before coalescence**, the buffer holds the quadrupole's chirp time from
-  where the highest sized harmonic enters the generated band (`m = 2` for a
-  quadrupole-only model, `m = 3` for a model with higher harmonics, the largest
-  `|m|` of an explicit `ModeArray`), the larger of LALSimulation's bound and
-  this package's 1PN estimate, plus three cycles and the taper's time response
-  (one over its width).
+  where the largest harmonic the model emits enters the generated band, the
+  larger of LALSimulation's bound and this package's 1PN estimate, plus three
+  cycles and the taper's time response (one over its width). A harmonic `m`
+  reaches a frequency when the quadrupole is at `2 / m` of it, so the largest
+  `|m|` enters first. It is the largest `|m|` of an explicit `ModeArray`, and
+  otherwise of the modes LALSimulation's mode interface lists for the model by
+  default: 4 for IMRPhenomXHM, XPHM and HM, 5 for IMRPhenomTPHM and SEOBNRv4PHM,
+  2 for a quadrupole-only model such as IMRPhenomD, TaylorF2, NRTidalv2 or
+  IMRPhenomNSBH. A model known to carry higher harmonics whose modes
+  LALSimulation cannot list is sized for 5, the largest any of its models emits.
 - **After coalescence**, LALSimulation's merger and ringdown time bounds for the
   remnant (eleven e-folds of the fundamental quasi-normal mode at the largest
   spin the components allow), plus three cycles and the taper's time response.
@@ -378,19 +383,66 @@ below it and the buffer is made long enough that its ends are already quiet. And
 the buffer reaches back for higher harmonics, which enter the band before the
 quadrupole does.
 
-Measured at 8192 Hz with a 5 Hz cutoff against the same waveform on a buffer
-eight times longer, the buffer differs by at most 2.0e-04 of peak (a 201+138
-solar mass binary with higher harmonics), 2.2e-05 for a 451+438 one, 1e-06 to
-4e-06 for intermediate-mass and neutron-star–black-hole binaries and 1e-10 for a
-long binary neutron star, with mismatches below 1e-08 and first samples below
-2e-05 of peak. The previous conditioning — a hard cut at the cutoff and a buffer
-sized for the inspiral above it with a fixed tenth after coalescence — left up
-to 0.34 of peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
+**What is bounded and what is estimated.** The chirp time from the onset of the
+largest harmonic and the merger and ringdown times are LALSimulation's own
+bounds (`SimInspiralChirpTimeBound`, `SimInspiralMergeTimeBound`,
+`SimInspiralRingdownTimeBound` at `SimInspiralFinalBlackHoleSpinBound`). The
+three extra cycles and the taper's time response are estimates: the window's
+time kernel has a main lobe about one over its width long and a tail falling as
+the cube of time, and one width at each end was checked at the parameter-space
+edges below, where halving it changed the content outside the buffer by under a
+factor of two. What none of these terms bounds is a model spectrum that ends in
+a step or a kink — TaylorF2 stops at its innermost stable orbit, and the
+IMRPhenomX models end at their own maximum frequency — whose inverse transform
+has a tail falling only as one over time. No finite buffer contains such a tail;
+what lies past the buffer is measured below.
 
-Buffers are longer as a result, most for heavy binaries: at a 5 Hz cutoff, a
-2302+248 solar mass binary goes from 4 s to 256 s, heavy stellar-mass binaries
-with higher harmonics typically from 8 s to 32 s, and long binary-neutron-star
-buffers are mostly unchanged.
+Measured with a 5 Hz cutoff against the same tapered waveform on a buffer four
+times longer, at 512 to 4096 Hz (enough for each source's band; the rate does
+not change the result, checked at 8192 Hz on the worst cases), as the largest
+content outside the buffer as a fraction of peak strain, over equal and unequal
+masses (to 250+5 solar masses), aligned and anti-aligned spins of 0.99, in-plane
+spins of 0.9, and total masses to 2612 solar masses (the heaviest in the
+populations this was checked for):
+
+| Approximant                                  | Worst case outside the buffer                                                                                                                                                                  |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IMRPhenomD                                   | 5e-06                                                                                                                                                                                          |
+| IMRPhenomXHM                                 | 5.3e-05 (250+5)                                                                                                                                                                                |
+| IMRPhenomXPHM                                | 1.7e-02 (250+5, spins 0.99 aligned); 5e-04 to 3e-03 at 60+30, 130+13 and 250+5 with spins of 0.99 or 0.9 in-plane; 2e-06 to 5e-06 at 2612 solar masses unless spins are 0.99 aligned (1.5e-03) |
+| IMRPhenomTPHM, SEOBNRv4PHM, SEOBNRv4HM       | 6e-06                                                                                                                                                                                          |
+| IMRPhenomNSBH                                | 4.3e-05                                                                                                                                                                                        |
+| TaylorF2 (binary neutron star)               | 3.7e-05 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                |
+| IMRPhenomPv2_NRTidalv2 (binary neutron star) | 8e-09 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                  |
+
+The binary neutron stars were measured at a 20 Hz cutoff, where a reference at
+8192 Hz is affordable; at a 5 Hz cutoff only a 1024 Hz reference was, and there
+the 2.5e-04 left after coalescence is the spectrum cut at that rate's Nyquist
+frequency (the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192
+Hz).
+
+In every case the largest residue lies after coalescence and falls as one over
+time, the signature of the model's own spectral end rather than of the sizing:
+it does not change with the sample rate, and doubling the time reserved for the
+taper reduces it by under a factor of two. IMRPhenomXPHM's large values come
+from content its precessing construction places seconds after coalescence at
+these extreme spins and mass ratios; IMRPhenomXHM, the same model without
+precession, leaves 2e-05 to 5e-05 on the same sources. SEOBNRv5HM and
+SEOBNRv5PHM are not part of LALSimulation and were not checked.
+
+Sizing for the largest harmonic the model emits, rather than for `m = 3`,
+lengthens the buffers of higher-harmonic models: on a 250+5 solar mass binary
+the earlier sizing left 6.7e-03 of peak before the buffer, and 5.3e-05 is left
+now. The previous conditioning — a hard cut at the cutoff and a buffer sized for
+the inspiral above it with a fixed tenth after coalescence — left up to 0.34 of
+peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
+
+Buffers are longer as a result, most for heavy binaries and for models with
+higher harmonics: at a 5 Hz cutoff and 8192 Hz, the IMRPhenomXPHM binary black
+holes of one test population need 6.5 times the strain of the previous
+conditioning (twice what `m = 3` needed), measured at 2.5 times the generation
+and projection time per event; binary-neutron-star and neutron-star–black-hole
+buffers grow by 3% and 6%.
 
 If LALSimulation refuses to start an approximant below the cutoff, the backend
 generates it from the cutoff and places the same taper _above_ it instead, which
