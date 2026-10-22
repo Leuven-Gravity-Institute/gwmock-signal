@@ -70,26 +70,46 @@ polarization angle, inclination and model — under this package's canonical
 names, so a burst injection follows the same route as any other transient:
 polarizations, then projection onto each detector, then injection.
 
-| Key                  | Meaning                                                                       | Used by         |
-| -------------------- | ----------------------------------------------------------------------------- | --------------- |
-| `burst_model`        | morphology: `sine_gaussian`, `gaussian`, `white_noise_burst`, or a file model | all             |
-| `peak_time`          | GPS time of the waveform's centre at the geocentre, s                         | all             |
-| `right_ascension`    | rad                                                                           | all             |
-| `declination`        | rad                                                                           | all             |
-| `polarization_angle` | rad                                                                           | all             |
-| `hrss`               | $\sqrt{\int (h_+^2 + h_\times^2)\,dt}$ at the Earth                           | ad hoc families |
-| `inclination`        | rad; sets the polarization ellipse, or the file waveform's angular factor     | SG, WNB, files  |
-| `frequency`          | central frequency $f_0$, Hz                                                   | SG              |
-| `quality_factor`     | $Q$                                                                           | SG              |
-| `duration`           | GA: standard deviation $\tau$ of $h_+(t)$; WNB: time envelope, s              | GA, WNB         |
-| `low_frequency`      | lower edge of the band, Hz                                                    | WNB             |
-| `bandwidth`          | width of the band, Hz                                                         | WNB             |
-| `seed`               | integer fixing the noise realisation                                          | WNB             |
-| `distance`           | source distance, Mpc                                                          | file models     |
-| `injection_set`      | `"test"` for every event of the test set                                      | label, not used |
+| Key                  | Meaning                                                                                | Used by         |
+| -------------------- | -------------------------------------------------------------------------------------- | --------------- |
+| `burst_model`        | morphology: `sine_gaussian`, `gaussian`, `white_noise_burst`, or a file model          | all             |
+| `peak_time`          | GPS time of the waveform's centre at the geocentre, s                                  | all             |
+| `coa_time`           | optional placement time for segmented output, s; see [Reference time](#reference-time) | placement only  |
+| `right_ascension`    | rad                                                                                    | all             |
+| `declination`        | rad                                                                                    | all             |
+| `polarization_angle` | rad                                                                                    | all             |
+| `hrss`               | $\sqrt{\int (h_+^2 + h_\times^2)\,dt}$ at the Earth                                    | ad hoc families |
+| `inclination`        | rad; sets the polarization ellipse, or the file waveform's angular factor              | SG, WNB, files  |
+| `frequency`          | central frequency $f_0$, Hz                                                            | SG              |
+| `quality_factor`     | $Q$                                                                                    | SG              |
+| `duration`           | GA: standard deviation $\tau$ of $h_+(t)$; WNB: time envelope, s                       | GA, WNB         |
+| `low_frequency`      | lower edge of the band, Hz                                                             | WNB             |
+| `bandwidth`          | width of the band, Hz                                                                  | WNB             |
+| `seed`               | integer fixing the noise realisation                                                   | WNB             |
+| `distance`           | source distance, Mpc                                                                   | file models     |
+| `injection_set`      | `"test"` for every event of the test set                                               | label, not used |
 
 Keys a model does not use are ignored, which is what lets an event carry a
 label.
+
+### Reference time
+
+A burst event has two times with different meanings.
+
+- **`peak_time`** is the burst's physical reference, the centre of its envelope
+  at the geocentre. It alone positions the waveform, and every event needs it.
+- **`coa_time`** is optional: the key a caller writing segmented data places
+  every transient by. It has no physics for a burst and is never used to
+  generate one, so `simulate` returns the same strain whatever `coa_time` is.
+
+`coa_time = peak_time` is the simple choice. Any `coa_time` inside the event's
+output is equally valid, such as the start of the polarization buffer, which
+some populations use: the [placement queries](#placing-bursts-in-segmented-data)
+measure from `coa_time`, so the output's start and end come out the same either
+way. A `coa_time` outside the output is refused by those queries, because no
+segment claimed from it could hold the event as placed. An event with `coa_time`
+but no `peak_time` is refused too: `coa_time` may lie anywhere in the buffer, so
+it does not say where the peak is. A `coa_time` of `None` counts as absent.
 
 ### Waveform families
 
@@ -137,6 +157,42 @@ the signals well separated — the longest draft waveform lasts about a second �
 so each injection is recovered or missed on its own. Sky positions are
 **isotropic** (uniform in right ascension and $\sin\delta$), and polarization
 angles uniform in $[0, \pi)$.
+
+### Placing bursts in segmented data
+
+A caller writing data in segments places each event by its `coa_time` and asks
+how far the event's output reaches either side of it, so that the segment
+claiming the event is the one its waveform _starts_ in and the remainder is
+carried into the next. `BurstSimulator` answers the same two queries as the
+compact-binary simulator, with the same signature:
+
+```python
+simulator = resolve_simulator_backend("burst")()
+pre = simulator.pre_coalescence_duration(event, 8192.0, 5.0)
+post = simulator.post_coalescence_duration(event, 8192.0, 5.0)
+```
+
+Both are measured from the placement time: `coa_time` when the event gives one,
+else `peak_time`. `pre` is the time from the first sample `simulate` returns to
+it, and `post` the time from it to one sample past the last, so `coa_time - pre`
+and `coa_time + post` are where the output starts and ends, whichever valid
+`coa_time` the event carries. Both include the padding detector projection adds
+at each end of the polarizations. A burst's buffer is centred on its peak but
+can be long: a $Q = 100$ sine-Gaussian at 30 Hz starts 5.6 s before it, so a
+peak just after a segment boundary has seconds of waveform in the segment
+before.
+
+The extent is **measured, not modelled**: the simulator generates the event's
+polarizations at the requested rate and reads where the buffer starts and ends.
+It is therefore exact for every family, including numerical waveforms, and
+cannot drift from LALSimulation's own buffer sizing. The cost is one generation
+of the polarizations (no projection) per event, measured at 8192 Hz at about 7
+ms for a draft white-noise burst, 2.8 ms for that sine-Gaussian, the longest
+buffer, and under 0.3 ms for every other draft family. The last few events'
+buffers are remembered, so asking for both ends of an event, asking again, or
+asking under another `coa_time` does not generate it twice. The low-frequency
+cutoff argument is accepted for symmetry with the compact-binary simulator and
+unused, as in generation.
 
 ### Choosing the strength range and the interval
 
