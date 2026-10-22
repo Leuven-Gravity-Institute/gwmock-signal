@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -775,7 +775,7 @@ wheels = [
 
 [[package]]
 name = "gwmock-noise"
-version = "0.18.0"
+version = "0.18.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gwmock-data" },
@@ -785,9 +785,9 @@ dependencies = [
     { name = "scipy" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/13/8de6fe183c5e8940a8abf90e4e38de9ea6201656dc5b26d4628f5348096a/gwmock_noise-0.18.0.tar.gz", hash = "sha256:a51e6298e97cc89ad65398c710276ea2510de98665064b0b3be4d461fff1a0cb", size = 1712145, upload-time = "2026-10-18T16:33:41.526Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/3c/4b9360cfe78e359de77b0ac5b08a80973483ed15c81478b7a2498961ca19/gwmock_noise-0.18.2.tar.gz", hash = "sha256:91de6b50a181d69a69219baf309f7cc34809ddb7b7519c8c4eb852943cdb59aa", size = 1715304, upload-time = "2026-10-20T03:09:58.508Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/b0/57f57b25de00f60fa7a4df0134253cb31daa2093b07305953ed20e73ac2f/gwmock_noise-0.18.0-py3-none-any.whl", hash = "sha256:ceb61619d0a50cc9aa0697bc0a7006d93b80dca59cd2a4c24838a10228aa3a15", size = 1302887, upload-time = "2026-10-18T16:33:40.171Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/87/473e4895bc69b2733ba890afd88132388c24f42cac480516599be1abdd27/gwmock_noise-0.18.2-py3-none-any.whl", hash = "sha256:bc200bf2821999cec8d79bc7021273b65072c4897c817a9cea01a3c02b2d6d9c", size = 1304410, upload-time = "2026-10-20T03:09:56.961Z" },
 ]
 
 [[package]]
@@ -846,7 +846,7 @@ release = [
 requires-dist = [
     { name = "astropy", specifier = ">=7.0" },
     { name = "gwmock-data", specifier = ">=0.3.0" },
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.16.1" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.18.1" },
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.12" },
     { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
