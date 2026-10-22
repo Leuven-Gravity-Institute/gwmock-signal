@@ -79,8 +79,10 @@ def test_the_two_backends_disagree_and_that_is_the_point():
 
     assert lal != ripple
     # Same order, though: a factor beyond this would mean one of them is wrong rather than merely
-    # conditioning differently.
-    assert 0.5 < lal / ripple < 2.0
+    # conditioning differently. LAL also reserves five widths of its taper band at each end for the
+    # taper's time response (2 s each here), which carries this buffer over a power of two whose
+    # slack lands before coalescence; hence the wider upper limit.
+    assert 0.5 < lal / ripple < 4.0
 
 
 def test_a_backend_that_cannot_say_returns_none_rather_than_zero():

@@ -320,3 +320,57 @@ def test_an_unequal_mass_binary_with_higher_harmonics_keeps_its_early_m4_content
     long = np.roll(np.fft.irfft(spectrum, n=long_samples) * fs, offset + merger_index)
     outside = np.concatenate([long[:offset], long[offset + n_samples :]])
     assert np.max(np.abs(outside)) < 1e-3 * np.max(np.abs(long))
+
+
+@pytest.mark.requires_lalsuite
+def test_a_heavy_precessing_binary_keeps_the_tapers_ringing_after_coalescence():
+    """A 170 + 130 solar-mass precessing binary rings for seconds at the taper band after coalescence.
+
+    Its merger is not a chirp through the taper band [f_start, f_min], so the window's time response spreads it
+    out for several times one over the band's width. Reserving one width left 2.2e-4 of peak past the buffer's
+    end; the reservation now holds it to below 1e-4. Multibanding is switched off so that what is measured is the
+    taper's response, not the multibanded precession angles' grid-dependent content.
+    """
+    fs, approximant = 1024.0, "IMRPhenomXPHM"
+    arguments = {"PhenomXPHMThresholdMband": 0.0, "PhenomXHMThresholdMband": 0.0}
+    source = {
+        "detector_frame_mass_1": 170.0,
+        "detector_frame_mass_2": 130.0,
+        "spin_1x": 0.1,
+        "spin_1y": 0.0,
+        "spin_1z": -0.05,
+        "spin_2x": 0.0,
+        "spin_2y": 0.15,
+        "spin_2z": 0.05,
+        "luminosity_distance": 2000.0,
+        "inclination": 1.53,
+        "coa_phase": 0.5,
+    }
+    plus = LALSimulationBackend(f_ref=_F_MIN).generate_td_waveform(
+        approximant, 0.0, fs, _F_MIN, waveform_arguments=arguments, **source
+    )["plus"]
+    n_samples, merger_index = plus.n_samples, round(-plus.t0 * fs)
+
+    m1, m2 = source["detector_frame_mass_1"] * lal.MSUN_SI, source["detector_frame_mass_2"] * lal.MSUN_SI
+    lowest_isco = 1.0 / (27.0 * math.pi * (170.0 + 130.0) * lal.MTSUN_SI)
+    chirp = lalsimulation.SimInspiralChirpTimeBound(min(_F_MIN, lowest_isco), m1, m2, -0.05, 0.05)
+    start = lalsimulation.SimInspiralChirpStartFrequencyBound(1.1 * chirp, m1, m2)
+    long_samples = 8 * n_samples
+    params = lal.CreateDict()
+    lalsimulation.SimInspiralWaveformParamsInsertPhenomXPHMThresholdMband(params, 0.0)
+    lalsimulation.SimInspiralWaveformParamsInsertPhenomXHMThresholdMband(params, 0.0)
+    hp, _ = lalsimulation.SimInspiralChooseFDWaveform(
+        m1, m2, 0.1, 0.0, -0.05, 0.0, 0.15, 0.05, source["luminosity_distance"] * 1e6 * lal.PC_SI,
+        source["inclination"], source["coa_phase"], 0.0, 0.0, 0.0, fs / long_samples, start, fs / 2.0, _F_MIN,
+        params, lalsimulation.GetApproximantFromString(approximant),
+    )  # fmt: skip
+    spectrum = np.zeros(long_samples // 2 + 1, dtype=complex)
+    data = np.asarray(hp.data.data)[: spectrum.size]
+    spectrum[: data.size] = data
+    frequencies = np.arange(spectrum.size) * fs / long_samples
+    ramp = np.clip((frequencies - start) / (_F_MIN - start), 0.0, 1.0)
+    spectrum *= np.where(frequencies < start, 0.0, 0.5 - 0.5 * np.cos(np.pi * ramp))
+    offset = long_samples // 2 - n_samples // 2
+    long = np.roll(np.fft.irfft(spectrum, n=long_samples) * fs, offset + merger_index)
+    after = long[offset + n_samples :]
+    assert np.max(np.abs(after)) < 1e-4 * np.max(np.abs(long))

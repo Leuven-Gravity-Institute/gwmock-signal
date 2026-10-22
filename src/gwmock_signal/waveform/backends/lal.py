@@ -71,17 +71,20 @@ _HIGHER_MODE_APPROXIMANTS = frozenset({"IMRPhenomXO4a", "NRSur7dq4", "NRHybSur3d
 _UNREPORTED_HIGHER_MODE_M = 5
 
 #: Time reserved at both ends of the buffer for the taper's own time response, in units of
-#: ``1 / (minimum_frequency - start_frequency)``.
+#: ``1 / (minimum_frequency - start_frequency)``, the width of the taper band.
 #:
-#: An estimate, not a bound. The window's transition is a raised cosine of width ``W``; its time
-#: kernel has a main lobe ``~1 / W`` long and a tail falling as ``1 / (W^2 t^3)``, which is what
-#: spreads content that does not chirp through the transition band (the merger of a binary whose
-#: band starts in it). Checked at the edges of the parameter space in use: halving this changes
-#: the content outside the buffer by under a factor of two, in the way a ``1 / t`` tail from the
-#: model's own spectrum does and not as the ``1 / t^3`` kernel would, so the taper's response is
-#: not what is left outside at this value -- a factor of two of margin over the value where it
-#: still is not.
-_TAPER_RESPONSE_WIDTHS = 1.0
+#: An estimate checked by measurement, not a bound. The window's transition is a raised cosine of
+#: width ``W``; its time kernel spreads content that does not chirp through the transition band --
+#: the merger of a heavy, precessing binary, whose band starts there -- for several times ``1 / W``
+#: on both sides. Heavy precessing binaries (200 to 360 solar masses at a 5 Hz cutoff, ``W`` 0.7 to
+#: 0.8 Hz) ring at 4.5 to 5 Hz for about ten seconds after coalescence. Measured against references
+#: holding at least 1024 s on each side of coalescence, on IMRPhenomXPHM with multibanding off over a
+#: test set of 259 binaries from 19 to 2612 solar masses, as the largest content outside the buffer
+#: relative to each polarization's peak: one width left up to 5.1e-3, three 1.6e-4, four 1.0e-4 and
+#: five 7.3e-5, the smallest number meeting 1e-4 everywhere. Before coalescence one width already left
+#: under 1.5e-5; the reservation is kept symmetric because the window's response is. Cost over that
+#: set: 3.4% (intermediate-mass) to 4.8% (stellar-mass) more generated strain than one width.
+_TAPER_RESPONSE_WIDTHS = 5.0
 
 #: Largest lighter-component mass, in solar masses, that LAL accepts for an approximant.
 #:
@@ -328,9 +331,9 @@ class LALSimulationBackend(WaveformBackend):
         segment_duration: Optional fixed analysis-segment length in seconds. When
             ``None`` (default) the length is estimated from the chirp time below the
             cutoff, the ringdown and the taper, so the inspiral, merger and ringdown fit
-            without wraparound. Content a model places beyond them -- IMRPhenomXPHM's
-            post-coalescence component with the MSA precession angles, for one -- is not held;
-            see the user guide's *Content the buffer does not hold*.
+            without wraparound. Content a model places beyond them -- the grid-dependent content of
+            IMRPhenomXPHM's multibanded precession angles, for one -- is not held; see the user
+            guide's *Content the buffer does not hold*.
 
     Raises:
         ImportError: On construction, if ``lalsuite`` is not installed.
@@ -639,12 +642,11 @@ class LALSimulationBackend(WaveformBackend):
           buffer when one is set.
 
         The buffer holds the inspiral, merger and ringdown so sized, not content a model places
-        beyond them: IMRPhenomXPHM with the MSA precession angles (``PhenomXPrecVersion`` 220 to
-        224, and the default 300 when it falls back to MSA) adds a component after coalescence
-        that decays roughly as ``1 / t``, even with zero in-plane spin -- 1.7e-2 of peak at
-        250 + 5 solar masses with spins of 0.99 aligned, where the NNLO and SpinTaylor angle
-        versions do not carry it. It falls outside the buffer, as it falls outside
-        LALSimulation's own ``SimInspiralTD``, whose buffer ends about 0.7 s after coalescence.
+        beyond them. IMRPhenomXPHM's default multibanding of its precession angles leaves its
+        spectrum with content at every delay, on both sides of coalescence and changing with the
+        frequency grid -- up to 1.6e-2 of peak at 250 + 5 solar masses with spins of 0.99 aligned
+        -- which no buffer holds; ``waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`` removes
+        it. See the user guide's *Content the buffer does not hold*.
 
         If LALSimulation refuses to start below ``minimum_frequency`` for an approximant, the
         waveform is generated from ``minimum_frequency`` and the taper is placed *above* it instead,

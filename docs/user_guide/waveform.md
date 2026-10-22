@@ -390,13 +390,20 @@ quadrupole does.
 largest harmonic and the merger and ringdown times are LALSimulation's own
 bounds (`SimInspiralChirpTimeBound`, `SimInspiralMergeTimeBound`,
 `SimInspiralRingdownTimeBound` at `SimInspiralFinalBlackHoleSpinBound`). The
-three extra cycles and the taper's time response are estimates: the window's
-time kernel has a main lobe about one over its width long and a tail falling as
-the cube of time, and one width at each end was checked at the parameter-space
-edges below, where halving it changed the content outside the buffer by under a
-factor of two. None of these terms bounds content a model places outside the
-inspiral, merger and ringdown, which decays slowly after coalescence; what lies
-past the buffer is measured below.
+three extra cycles and the taper's time response are estimates, sized by
+measurement. The taper's window spreads content that does not chirp through the
+taper band — the merger of a heavy, precessing binary, whose band starts there —
+for several times one over the band's width on both sides: binaries of 200 to
+360 solar masses at a 5 Hz cutoff ring at 4.5 to 5 Hz for about ten seconds
+after coalescence. Five widths are reserved at each end. Over a test set of 259
+binaries from 19 to 2612 solar masses (IMRPhenomXPHM with multibanding off,
+against references holding at least 1024 s on each side), one width left up to
+5.1e-03 of a polarization's peak outside the buffer, four 1.0e-04 and five
+7.3e-05, the smallest number meeting 1e-04 everywhere; the cost is 3% to 5% more
+generated strain than one width. Before coalescence one width already sufficed
+(under 1.5e-05); the reservation is symmetric because the window's response is.
+None of these terms bounds content a model places outside the inspiral, merger
+and ringdown; what lies past the buffer is measured below.
 
 Measured with a 5 Hz cutoff against the same tapered waveform on a buffer four
 times longer, at 512 to 4096 Hz (enough for each source's band; the rate does
@@ -421,29 +428,36 @@ the 2.5e-04 left after coalescence is the spectrum cut at that rate's Nyquist
 frequency (the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192
 Hz).
 
-In every case the largest residue lies after coalescence and decays slowly: it
-does not change with the sample rate, and doubling the time reserved for the
-taper reduces it by under a factor of two, so it is a property of the model's
-spectrum rather than of the sizing. SEOBNRv5HM and SEOBNRv5PHM are not part of
-LALSimulation and were not checked.
+These were measured with one taper width at each end; five only lengthen the
+buffer. The IMRPhenomXPHM row is the default model, whose multibanded precession
+angles put content outside any buffer (below). With multibanding off, the same
+sources and a test set of 259 binaries leave at most 7.3e-05 outside the buffer.
+SEOBNRv5HM and SEOBNRv5PHM are not part of LALSimulation and were not checked.
 
 ### Content the buffer does not hold
 
-- **IMRPhenomXPHM with the MSA precession angles** — `PhenomXPrecVersion` 220 to
-  224, and the default 300 when it falls back to MSA — places content after
-  coalescence: a component whose frequency falls with time, from tens of hertz
-  seconds after coalescence down to the cutoff minutes later, with an amplitude
-  decaying roughly as one over time. It appears even with zero in-plane spin,
-  where nothing precesses. At 250+5 solar masses with spins of 0.99 aligned and
-  a 5 Hz cutoff it reaches 1.7e-02 of peak strain 5 s after coalescence, and is
-  still 1.3e-03 two minutes after the buffer's end. In that case the NNLO angles
-  (`PhenomXPrecVersion` 101 to 104) and the SpinTaylor angles (310 to 330) do
-  not carry it: they leave 2.6e-05, the same as IMRPhenomXHM. Choose the angle
-  version in `waveform_arguments` if this matters for an analysis.
-- **The buffer does not hold this content**, and lengthening it does not help:
-  it lies after coalescence, and decays too slowly for any finite allowance
-  there. LALSimulation's own `SimInspiralTD` drops the same content — its buffer
-  ends about 0.7 s after coalescence, with a taper.
+- **IMRPhenomXPHM's multibanded precession angles.** By default IMRPhenomXPHM
+  evaluates its precession angles on a coarse frequency grid and interpolates
+  them (`PhenomXPHMThresholdMband`). The interpolation leaves the spectral phase
+  slightly non-smooth, which in time puts content at every delay, on both sides
+  of coalescence: at 250+5 solar masses with spins of 0.99 aligned and a 5 Hz
+  cutoff, 1.6e-02 of peak strain 5 s after coalescence, still 1e-04 two to four
+  thousand seconds away, and 3e-05 out to ±30000 s. It is an artefact of the
+  interpolation, not of precession — it appears with zero in-plane spin — and it
+  depends on the frequency grid: the same source generated into buffers 1, 2 and
+  4 times as long differs inside the buffer by 2e-02 to 3e-02 of peak (mismatch
+  3e-04 to 6e-04). No buffer holds it, and lengthening one does not help.
+  Setting `waveform_arguments={"PhenomXPHMThresholdMband": 0.0}` removes it: the
+  same source leaves 8.8e-07 outside the buffer and changes by 1.3e-06 with the
+  grid (with `PhenomXHMThresholdMband` also set to 0, as measured here). The
+  cost is about 5 times the frequency-domain evaluation time, a few percent of
+  the time per event once projection is counted. In band the two agree closely:
+  over 50 stellar- and intermediate-mass binaries the mismatch between the
+  default and the multibanding-off waveform (the 10 km full-cryogenic ET design
+  sensitivity, 5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised
+  over time and phase, although they differ by up to 6e-03 of peak in time.
+  LALSimulation's own `SimInspiralTD` drops the content after coalescence too —
+  its buffer ends about 0.7 s after coalescence, with a taper.
 - **A spectrum that ends in a step** rings with a tail falling as one over time.
   TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
   buffer above). The IMRPhenomX models carry a much weaker slowly decaying
@@ -459,10 +473,12 @@ peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
 
 Buffers are longer as a result, most for heavy binaries and for models with
 higher harmonics: at a 5 Hz cutoff and 8192 Hz, a set of IMRPhenomXPHM binary
-black holes spanning 14 to 1665 solar masses needs 6.5 times the strain of the
-previous conditioning (twice what `m = 3` needed), measured at 2.5 times the
-generation and projection time per event; binary-neutron-star and
-neutron-star–black-hole buffers grow by 3% and 6%.
+black holes spanning 14 to 1665 solar masses needs about 6.8 times the strain of
+the previous conditioning: twice what `m = 3` needed, and 5% more for five taper
+widths rather than one. With one taper width this was measured at 2.5 times the
+generation and projection time per event. Binary-neutron-star and
+neutron-star–black-hole buffers grew by 3% and 6% before the taper reservation,
+which was not re-measured on them.
 
 If LALSimulation refuses to start an approximant below the cutoff, the backend
 generates it from the cutoff and places the same taper _above_ it instead, which
