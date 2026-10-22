@@ -214,9 +214,28 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
     assert mock_antenna_pattern.call_count == len(names)
 
 
+def _zero_padded(series: TimeSeries, pad: int) -> TimeSeries:
+    """Return *series* with *pad* zeros at each end, on the same sample lattice."""
+    dt = float(series.dt.value)
+    return TimeSeries(
+        np.pad(np.asarray(series.value, dtype=float), (pad, pad)),
+        t0=float(series.t0.value) - pad * dt,
+        sample_rate=float(series.sample_rate.value),
+    )
+
+
 @pytest.mark.requires_gwpy
 def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
-    """The direct-LAL projection path matches the previous PyCBC detector result."""
+    """The direct-LAL projection path matches PyCBC's detector response over the padded span.
+
+    The projection returns each detector over the input's span extended by ``edge_padding`` samples
+    at each end, starting that many samples before the input, so the delay cannot move signal out
+    of the buffer. The reference is PyCBC's delay and antenna pattern applied to the input
+    zero-padded to that same span: with the padding wider than any delay, PyCBC's circular shift of
+    the padded input is the linear shift the delay physically makes, so it has data in the padding
+    too and every output sample -- inside the input span and in the padding the delay spills into --
+    is compared, aligned by the documented start rather than by search.
+    """
     n = 1024
     fs = 4096.0
     t0 = 1126259462.4 - 0.125
@@ -237,10 +256,18 @@ def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
         earth_rotation=False,
         **kwargs,
     )
-    expected = _project_with_pycbc_reference(hp, hc, detector_names, **kwargs)
+    pad = edge_padding(fs)
+    expected = _project_with_pycbc_reference(_zero_padded(hp, pad), _zero_padded(hc, pad), detector_names, **kwargs)
 
+    # Earth's radius over c is the largest delay any ground-based detector has; the padding must
+    # exceed it, or the padded reference would wrap the delayed signal round as the old one did.
+    assert pad > 6.4e6 / 299792458.0 * fs
     for name in detector_names:
-        np.testing.assert_allclose(projected[name].value, expected[name], rtol=1e-10, atol=1e-12)
+        output = projected[name]
+        # The documented placement: the input start minus the padding, the input length plus both.
+        assert float(output.t0) == pytest.approx(t0 - pad / fs, abs=1e-3 / fs)
+        assert len(output.value) == n + 2 * pad
+        np.testing.assert_allclose(output.value, expected[name], rtol=1e-10, atol=1e-12)
 
 
 @pytest.mark.requires_gwpy
