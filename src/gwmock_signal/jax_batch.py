@@ -639,6 +639,11 @@ def simulate_cbc_batch(  # noqa: PLR0913
     per_detector = []
     for key in lookup_keys:
         response, location = reconstructed_geometry(key)
+        # The same precondition the rotating path checks: the padding is sized for a terrestrial
+        # delay, and this phase shift is circular on the padded buffer, so a detector further out
+        # would move signal past an edge and wrap it round. Checked here, where the location is
+        # still a concrete host array.
+        require_terrestrial_location(location, name=f"location of {key}")
         f_plus, f_cross = antenna_pattern(
             response,
             gmst,

@@ -825,3 +825,34 @@ def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool)
         assert np.array_equal(native[name].value, gwpy[name].value)
         assert native[name].t0 == gwpy[name].t0
         assert native[name].name == name
+
+
+@pytest.mark.requires_gwpy
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_a_detector_beyond_the_padding_bound_is_refused_on_both_branches(earth_rotation: bool) -> None:
+    """A custom detector 90 km up lies outside the delay bound the padding is sized for.
+
+    Both branches project onto a buffer padded for a terrestrial delay; past it the rotating branch's
+    resampling would read past the padding, and the fixed-pattern branch's circular phase shift would
+    wrap signal round from one end to the other. Only the rotating branch refused it before.
+    """
+    from gwmock_signal.detector import CustomDetector
+
+    high = CustomDetector(
+        name="X1",
+        latitude_rad=0.0,
+        longitude_rad=0.0,
+        elevation_m=90_000.0,
+        xarm_azimuth_rad=0.0,
+        yarm_azimuth_rad=1.5708,
+    )
+    series = _uniform_series()
+    with pytest.raises(ValueError, match="beyond Earth's equatorial radius"):
+        project_polarizations_to_network(
+            {"plus": series, "cross": series},
+            [high],
+            right_ascension=0.1,
+            declination=0.2,
+            polarization_angle=0.3,
+            earth_rotation=earth_rotation,
+        )

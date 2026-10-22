@@ -681,6 +681,10 @@ def _project(  # noqa: PLR0913
             hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
             hc_shifted = resample_uniform_sinc(np.pad(hc_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
         else:
+            # The same precondition as the rotating branch: the padding is sized for a terrestrial
+            # delay, and the phase shift below is circular on the padded buffer, so a detector
+            # further out would move signal past an edge and wrap it round to the other.
+            require_terrestrial_location(reconstructed_geometry(prefix)[1], name=f"location of {prefix}")
             time_delay = _time_delay_from_earth_center_lal(
                 prefix,
                 right_ascension=right_ascension,
