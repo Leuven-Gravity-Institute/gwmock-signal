@@ -148,12 +148,20 @@ segments = assemble_segments(
   an aligned batch, `start_index` describe the padded row, so a consumer that
   places rows by either needs no change; one that assumed the waveform segment's
   length must read it from the strain's shape.
-- **Sidereal time.** Sidereal time uses an on-device IAU model with default leap
-  seconds and `dut1 = 0`, accurate to ~1e-4 rad; this is the small difference
-  from the Astropy-based CPU path.
+- **Sidereal time.** Both paths take sidereal time from Astropy, IERS UT1-UTC
+  included. The batched path evaluates it on the host: once per event at the
+  segment midpoint with `earth_rotation=False`; with `earth_rotation=True`, as
+  an anchor at each event's first sample plus a sidereal rate, which the device
+  extends linearly across the segment. Over segments up to 8192 s that line
+  departs from Astropy by less than 1e-13 rad (see
+  `gwmock_signal.projection.sidereal`).
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,
   simulate in chirp-mass groups to bound memory.
-- **Validation.** Every event/detector of the device path is cross-checked
-  against the CPU pipeline (white overlap > 0.999); the small gap is the
-  sidereal-time default above.
+- **Validation.** The tests compare the batched path with
+  `project_polarizations_to_network` on the same polarizations, for each event
+  and detector of their catalogues and sample by sample over the padded span.
+  Measured relative to each series' peak, the largest difference is about 1e-12
+  on the rotating branch (2e-14 RMS) and below 1e-14 on the phase-shift branch
+  (1e-16 RMS): rounding, from the two paths ordering the same arithmetic
+  differently.
