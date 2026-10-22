@@ -209,7 +209,7 @@ def test_a_coa_time_at_the_edge_of_the_output_is_accepted_everywhere(edge):
     tail = simulator.post_coalescence_duration(event, 4096.0, 5.0)
     hp, _ = simulator.generate_polarizations(event, 4096.0, 5.0)
     coa_time = {
-        "first sample": PEAK - lead + 1e-6,
+        "first sample": PEAK - lead,
         "polarization start": float(hp.t0),
         "last sample": PEAK + tail - 1.0 / 4096.0,
     }[edge]
@@ -220,6 +220,41 @@ def test_a_coa_time_at_the_edge_of_the_output_is_accepted_everywhere(edge):
     strain = simulator.simulate(placed, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)["H1"]
     assert strain.t0 == expected.t0
     np.testing.assert_array_equal(np.asarray(strain.value), np.asarray(expected.value))
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize("rate", [4000.0, 6000.0, 8192.0, 16000.0])
+@pytest.mark.parametrize("epoch", [1.4e9, 2.0e9])
+@pytest.mark.parametrize("edge", ["start", "end"])
+def test_a_coa_time_on_the_returned_strains_own_edges_is_accepted(edge, epoch, rate):
+    """A caller places ``coa_time`` on the strain's first sample, or one sample past its last, exactly.
+
+    Computed the way a caller would -- ``t0`` of the strain ``simulate`` returned, and ``t0 + n / rate``
+    -- at GPS epochs where one float64 step is 2.4e-7 s. At a rate whose sample spacing is not a power
+    of two the check's own arithmetic rounds, and an exact edge comes out up to 1.3e-7 s outside
+    (measured at 4000, 6000 and 16000 Hz); such a placement must be accepted, over a spread of peak
+    times, and must leave the strain unchanged. 8192 Hz, where nothing rounds, is kept as a control.
+    """
+    simulator = BurstSimulator()
+    refused = []
+    for offset in np.linspace(0.0, 1.0, 9):
+        event = _event("sg-q9", peak_time=epoch + 17.0 + offset * 0.987654321)
+        strain = simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+        coa_time = strain.t0 if edge == "start" else strain.t0 + strain.n_samples / rate
+        placed = {**event, "coa_time": coa_time}
+        try:
+            pre = simulator.pre_coalescence_duration(placed, rate, 5.0)
+            post = simulator.post_coalescence_duration(placed, rate, 5.0)
+            again = simulator.simulate(placed, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+        except ValueError:
+            refused.append(offset)
+            continue
+        assert pre >= 0
+        assert post >= 0
+        assert (pre if edge == "start" else post) < 1e-5
+        assert again.t0 == strain.t0
+        np.testing.assert_array_equal(np.asarray(again.value), np.asarray(strain.value))
+    assert not refused, f"placements on the output's own {edge} refused for peak offsets {refused}"
 
 
 @pytest.mark.requires_lalsuite

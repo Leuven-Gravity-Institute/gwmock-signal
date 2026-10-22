@@ -83,6 +83,11 @@ def _span_key(params: Mapping[str, Any], sampling_frequency: float) -> Any:
     return key
 
 
+#: Float64 steps, of the largest time involved, by which a placement may round outside the output
+#: and still count as on its edge; see :func:`_placement_extent`.
+_ROUNDING_STEPS = 16
+
+
 def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float]) -> tuple[float, float]:
     """Return ``(pre, post)`` of the projected output around the placement time, or refuse it.
 
@@ -102,6 +107,19 @@ def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float
     start, end, rate = span
     pre = _projected_duration(placement - start, rate)
     post = _projected_duration(end - placement, rate)
+    # A placement on the output's own first sample, or one sample past its last, is valid, but a
+    # caller computes those instants with its own float arithmetic, and so does this check: at GPS
+    # times of 1e9 to 2e9 s one float64 step is 1.2e-7 to 2.4e-7 s, so either side can come out a
+    # few steps negative for an exact edge. Steps of that size are rounding, not a placement outside
+    # the output, and are clamped to zero. The slack is sized from the operands' own spacing, so it
+    # stays a few float steps however large the times are: _ROUNDING_STEPS steps of the largest time
+    # involved, 3.8e-6 s at 2e9 s, four times below one sample even at 65536 Hz (1.5e-5 s) and
+    # far below it at the rates in use. Anything a sample or more outside is still refused.
+    slack = _ROUNDING_STEPS * math.ulp(max(abs(placement), abs(start), abs(end)))
+    if -slack <= pre < 0:
+        pre = 0.0
+    if -slack <= post < 0:
+        post = 0.0
     if pre < 0 or post < 0:
         key = "coa_time" if params.get("coa_time") is not None else "peak_time"
         raise ValueError(
