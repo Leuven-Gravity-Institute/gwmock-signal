@@ -395,7 +395,7 @@ class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
         assert seen["n_samples"] == n_samples + 2 * margin
         # And it starts before the background's epoch, by the same margin.
         assert seen["epoch"] < _EPOCH
-        assert seen["epoch"] == pytest.approx(_EPOCH - margin / _FS)
+        assert seen["epoch"] == pytest.approx(_EPOCH - margin / _FS, rel=0, abs=1e-6)
 
     @pytest.mark.requires_gwpy
     def test_the_jax_guard_refuses_between_the_nominal_and_padded_spans(self, monkeypatch):

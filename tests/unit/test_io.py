@@ -70,7 +70,7 @@ class TestHDF5RoundTrip:
         stack.write(path, format="hdf5")
         restored = DetectorStrainStack.read(path, format="hdf5")
 
-        assert restored.t0 == pytest.approx(_T0)
+        assert restored.t0 == pytest.approx(_T0, rel=0, abs=1e-6)
 
     @pytest.mark.requires_gwpy
     def test_dt_preserved(self, tmp_path):
@@ -193,7 +193,7 @@ class TestNpyRoundTrip:
         stack.write(path, format="npy")
         restored = DetectorStrainStack.read(path, format="npy")
 
-        assert restored.t0 == pytest.approx(_T0)
+        assert restored.t0 == pytest.approx(_T0, rel=0, abs=1e-6)
 
     @pytest.mark.requires_gwpy
     def test_dt_preserved(self, tmp_path):

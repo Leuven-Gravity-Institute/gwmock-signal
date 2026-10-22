@@ -112,7 +112,7 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
                 earth_rotation=False,
             )[detector]
             # Both are padded at each end against the geocentre delay, by the same amount.
-            assert host.t0 == pytest.approx(float(_CATALOGUE["coa_time"][i]) + result.epoch, abs=1e-6)
+            assert host.t0 == pytest.approx(float(_CATALOGUE["coa_time"][i]) + result.epoch, rel=0, abs=1e-6)
             a, b = host.value, device[i, j]
             overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
             assert overlap > 0.999, f"event {i} {detector} overlap {overlap:.5f}"
