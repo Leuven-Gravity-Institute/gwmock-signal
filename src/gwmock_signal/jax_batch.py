@@ -43,6 +43,7 @@ from gwmock_signal.projection.jax_projection import (
     time_delay_from_geocenter,
 )
 from gwmock_signal.projection.resampling import (
+    edge_padding,
     require_shift_within_padding,
     require_terrestrial_location,
 )
@@ -63,7 +64,11 @@ class BatchedDetectorStrain:
     ``strain`` has shape ``(n_events, n_detectors, n_samples)`` and is a JAX array
     (on device). Each event/detector row is a time series with sample spacing
     ``1 / sampling_frequency``; coalescence sits ``-epoch`` seconds from the start of the
-    buffer, near its end.
+    buffer, near its end. The row is the waveform segment zero-padded by
+    :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end before
+    projection, as :func:`~gwmock_signal.projection.network.project_polarizations_to_network`
+    pads, so ``n_samples`` here is the waveform's length plus twice that padding and ``epoch``
+    (and ``start_index``) describe the padded row.
 
     Where the buffer *begins* depends on whether it was aligned to an output lattice:
 
@@ -162,23 +167,23 @@ def _resolve_detector_specs(
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
-def _static_projection_kernel(n_samples: int, sampling_frequency: float, merger_index: int) -> Callable[..., Array]:
+def _static_projection_kernel(n_samples: int, sampling_frequency: float) -> Callable[..., Array]:
     """Return a cached jitted kernel for the midpoint-only (``earth_rotation=False``) path.
 
-    The frequency grid is taken as an argument rather than rebuilt here: it already exists on
-    the ripple output, and recomputing it would be the same quantity derived in two places.
+    Takes the spectra of the *padded* time-domain polarizations (see :func:`_time_domain_kernel`),
+    so the phase shift that applies the geocentre delay moves the signal into the zero padding
+    rather than wrapping it round to the other end of the buffer, as the host projection does. The
+    frequency grid is an argument, computed once per call rather than once per event.
 
     Args:
-        n_samples: Samples per event segment.
+        n_samples: Samples in the padded buffer the kernel returns.
         sampling_frequency: Sample rate in Hz.
-        merger_index: Sample index coalescence is rolled to.
 
     Returns:
         A callable over ``(frequencies, plus, cross, f_plus, f_cross, time_delay)``, batched
         over events and unmapped over the shared frequency grid.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
-    import jax.numpy as jnp  # noqa: PLC0415
 
     def _project_event(  # noqa: PLR0913, PLR0917 - one vmapped argument per projection input
         frequencies: Array,
@@ -188,7 +193,7 @@ def _static_projection_kernel(n_samples: int, sampling_frequency: float, merger_
         f_cross: Array,
         time_delay: Array,
     ) -> Array:
-        strain = project_polarizations_fd(
+        return project_polarizations_fd(
             frequencies,
             plus,
             cross,
@@ -198,21 +203,38 @@ def _static_projection_kernel(n_samples: int, sampling_frequency: float, merger_
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
         )
-        return jnp.roll(strain, merger_index)  # place coalescence near the segment end
 
     return jax.jit(jax.vmap(_project_event, in_axes=(None, 0, 0, 0, 0, 0)))
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
-def _time_domain_kernel(n_samples: int, sampling_frequency: float, merger_index: int) -> Callable[[Array], Array]:
-    """Return a cached jitted inverse FFT that also places coalescence in the segment."""
+def _time_domain_kernel(
+    n_samples: int, sampling_frequency: float, merger_index: int, padding: int
+) -> Callable[[Array], Array]:
+    """Return a cached jitted inverse FFT that places coalescence in the segment and pads it.
+
+    The buffer is zero-padded by ``padding`` samples at each end, as
+    :func:`~gwmock_signal.projection.network.project_polarizations_to_network` pads the
+    polarizations, so the geocentre-to-detector delay applied afterwards has somewhere to move the
+    signal to. Shared by both branches, which then differ only in how the detector response is
+    applied.
+
+    Args:
+        n_samples: Samples per event segment, before padding.
+        sampling_frequency: Sample rate in Hz.
+        merger_index: Sample index coalescence is rolled to, before padding.
+        padding: Zero samples added at each end.
+
+    Returns:
+        A callable mapping a batch of spectra to time-domain buffers of
+        ``n_samples + 2 * padding`` samples.
+    """
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
 
     def _to_time_domain(spectrum: Array) -> Array:
-        # Same scaling and placement as the static path, so the two differ only in how the
-        # detector response is applied.
-        return jnp.roll(jnp.fft.irfft(spectrum, n=n_samples) * sampling_frequency, merger_index)
+        placed = jnp.roll(jnp.fft.irfft(spectrum, n=n_samples) * sampling_frequency, merger_index)
+        return jnp.pad(placed, (padding, padding))
 
     return jax.jit(jax.vmap(_to_time_domain))
 
@@ -227,7 +249,7 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
     key -- reintroducing exactly the per-call recompilation this cache removes.
 
     Args:
-        n_samples: Samples per event segment.
+        n_samples: Samples in the padded buffer the kernel projects and returns.
         sampling_frequency: Sample rate in Hz.
 
     Returns:
@@ -453,6 +475,14 @@ def simulate_cbc_batch(  # noqa: PLR0913
     ``earth_rotation=False``, matching the two branches of
     :func:`gwmock_signal.projection.network.project_polarizations_to_network`.
 
+    Like that function, the batch pads each waveform segment by
+    :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end before projecting,
+    so the geocentre-to-detector delay cannot move signal past either end. Each row is therefore
+    ``2 * edge_padding(sampling_frequency)`` samples longer than the waveform segment and starts
+    ``edge_padding(sampling_frequency)`` samples earlier, with the same start and length as the host
+    projection of the same waveform; ``epoch`` and ``start_index`` in the result describe that
+    padded row.
+
     Args:
         approximant: A supported ripple approximant name.
         detector_names: Built-in LAL interferometer codes (e.g. ``"H1"``, ``"L1"``) and/or
@@ -486,7 +516,8 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
     Returns:
         A :class:`BatchedDetectorStrain` with the ``(n_events, n_detectors,
-        n_samples)`` strain and per-event timing metadata.
+        n_samples + 2 * edge_padding(sampling_frequency))`` strain, ``n_samples`` being the
+        waveform segment's length, and per-event timing metadata describing the padded rows.
     """
     import jax.numpy as jnp  # noqa: PLC0415
 
@@ -501,11 +532,13 @@ def simulate_cbc_batch(  # noqa: PLR0913
     # check placed after generation could never fire for a batch that exhausts memory *during*
     # generation -- which is most of the estimate. The grid length does not need the waveform, only
     # the masses (or a pinned segment duration, which _segment_samples handles), so it can be sized
-    # up front.
+    # up front. Sized with the projection's padding included, which counts it against generation
+    # too: pessimistic by a few hundred samples, in the direction the estimate is meant to err.
     _check_batch_fits(
         len(np.atleast_1d(np.asarray(_required(parameters, "coa_time")))),
         len(lookup_keys),
-        _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency),
+        _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency)
+        + 2 * edge_padding(sampling_frequency),
         earth_rotation=earth_rotation,
     )
 
@@ -517,7 +550,15 @@ def simulate_cbc_batch(  # noqa: PLR0913
     )
     n_samples = fd.n_samples
     dt = 1.0 / sampling_frequency
-    merger_index, epoch = backend.coalescence_placement(n_samples, sampling_frequency)
+    merger_index, waveform_epoch = backend.coalescence_placement(n_samples, sampling_frequency)
+    # Padded as project_polarizations_to_network pads, so the geocentre delay cannot move signal
+    # past either end: dropped on the rotating branch, wrapped round to the other end on the
+    # phase-shift branch. Every event and detector gets the same padding, start and length as the
+    # host projection of the same waveform, and the returned epoch and start indices describe the
+    # padded buffer, so a consumer placing it by either needs no change.
+    padding = edge_padding(sampling_frequency)
+    projected_samples = n_samples + 2 * padding
+    epoch = waveform_epoch - padding * dt
 
     right_ascension = jnp.asarray(_required(parameters, "right_ascension"), dtype=jnp.float64)
     declination = jnp.asarray(_required(parameters, "declination"), dtype=jnp.float64)
@@ -536,12 +577,15 @@ def simulate_cbc_batch(  # noqa: PLR0913
                 f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal "
                 f"sampling_frequency ({sampling_frequency})."
             )
-        start_index, alignment_shift = output_grid.split_index(coa_time + epoch)
+        start_index, alignment_shift = output_grid.split_index(coa_time + waveform_epoch)
+        # Whole samples, so the padded buffer stays on the lattice the unpadded one was put on.
+        start_index = start_index - padding
 
     if earth_rotation:
         # The aligned buffer starts one fractional sample earlier than requested, so the
         # sidereal anchor must move with it or F(t) and tau(t) are evaluated up to a full
-        # sample after the samples they multiply.
+        # sample after the samples they multiply. `epoch` is the padded buffer's, so the anchor is
+        # its first padded sample, where the kernel's sample offsets count from.
         segment_start_gps = coa_time + epoch - alignment_shift / sampling_frequency
         # No precession, and explicit zero rates rather than an omission. This is the batched
         # *compact-binary* path, so it follows the convention CBC searches use -- `gha = gmst - ra`
@@ -552,6 +596,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
             fd,
             lookup_keys,
             n_samples=n_samples,
+            padding=padding,
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
             segment_start_gps=segment_start_gps,
@@ -572,15 +617,24 @@ def simulate_cbc_batch(  # noqa: PLR0913
             grid=output_grid,
         )
 
-    # earth_rotation=False reference time: the midpoint of each event's placed segment.
-    midpoint_offset = epoch + 0.5 * (n_samples - 1) * dt
+    # earth_rotation=False reference time: the midpoint of each event's placed segment. The padding
+    # is symmetric, so this is also the midpoint of the padded buffer, which is where the host
+    # projection evaluates it.
+    midpoint_offset = epoch + 0.5 * (projected_samples - 1) * dt
     # Astropy is the single implementation of the sidereal model for both branches and
     # both projection paths; see gwmock_signal.projection.sidereal. The alignment shift moves
     # the buffer, so the midpoint reference time moves with it, as in the rotating branch.
     aligned_midpoint = coa_time + midpoint_offset - alignment_shift / sampling_frequency
     gmst = jnp.asarray(gmst_rad_astropy(aligned_midpoint), dtype=jnp.float64)
 
-    project_batch = _static_projection_kernel(n_samples, sampling_frequency, merger_index)
+    # The phase shift is applied to the padded buffer, not to the waveform's own spectrum: on the
+    # waveform's grid it is circular, and wraps whatever the delay moves past an end round to the
+    # other. Padding first, as the host does, is what moves that signal into the padding instead.
+    to_time_domain = _time_domain_kernel(n_samples, sampling_frequency, merger_index, padding)
+    padded_plus = jnp.fft.rfft(to_time_domain(fd.plus), axis=-1) * dt
+    padded_cross = jnp.fft.rfft(to_time_domain(fd.cross), axis=-1) * dt
+    padded_frequencies = jnp.asarray(np.fft.rfftfreq(projected_samples, d=dt), dtype=jnp.float64)
+    project_batch = _static_projection_kernel(projected_samples, sampling_frequency)
 
     per_detector = []
     for key in lookup_keys:
@@ -597,16 +651,16 @@ def simulate_cbc_batch(  # noqa: PLR0913
         # factor as the geocenter delay: no interpolation is involved on this branch at all.
         per_detector.append(
             project_batch(
-                fd.frequencies,
-                fd.plus,
-                fd.cross,
+                padded_frequencies,
+                padded_plus,
+                padded_cross,
                 f_plus,
                 f_cross,
                 time_delay + jnp.asarray(alignment_shift, dtype=jnp.float64) / sampling_frequency,
             )
         )
 
-    strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples)
+    strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples + 2 * padding)
     return BatchedDetectorStrain(
         strain=strain,
         detector_names=output_names,
@@ -623,6 +677,7 @@ def _project_rotating(  # noqa: PLR0913
     lookup_keys: Sequence[DetectorKey],
     *,
     n_samples: int,
+    padding: int,
     sampling_frequency: float,
     merger_index: int,
     segment_start_gps: np.ndarray,
@@ -637,18 +692,21 @@ def _project_rotating(  # noqa: PLR0913
 
     A time-varying response is not a frequency-domain multiply, so unlike the static
     path this one inverse-FFTs the polarizations first, places coalescence in the
-    segment, and then applies the per-sample response in the time domain via
-    :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating`.
+    segment, zero-pads it by ``padding`` samples at each end, and then applies the per-sample
+    response in the time domain via
+    :func:`~gwmock_signal.projection.jax_projection.project_polarizations_td_rotating` across the
+    padded buffer, so no delayed sample falls outside it.
 
     Args:
         fd: Frequency-domain polarizations from the ripple backend.
         lookup_keys: Lookup keys from :func:`~gwmock_signal.projection.geometry.resolve_detectors`,
             one per detector -- a detector code, or a ``CustomDetector``'s defining fields. Not the
             output channel names, which for a custom detector differ.
-        n_samples: Samples per event segment.
+        n_samples: Samples per event segment, before padding.
+        padding: Zero samples added at each end of the segment before projecting.
         sampling_frequency: Sample rate in Hz.
-        merger_index: Sample index coalescence is rolled to.
-        segment_start_gps: GPS time of each event segment's first sample, shape
+        merger_index: Sample index coalescence is rolled to, before padding.
+        segment_start_gps: GPS time of each event's first *padded* sample, shape
             ``(n_events,)``. Used on the host to anchor sidereal time per event.
         right_ascension: Per-event right ascension in radians.
         declination: Per-event declination in radians.
@@ -663,11 +721,11 @@ def _project_rotating(  # noqa: PLR0913
             performs, so it is one exact operation rather than two.
 
     Returns:
-        Strain of shape ``(n_events, n_detectors, n_samples)``.
+        Strain of shape ``(n_events, n_detectors, n_samples + 2 * padding)``.
     """
     import jax.numpy as jnp  # noqa: PLC0415
 
-    to_time_domain = _time_domain_kernel(n_samples, sampling_frequency, merger_index)
+    to_time_domain = _time_domain_kernel(n_samples, sampling_frequency, merger_index, padding)
     plus_td = to_time_domain(fd.plus)
     cross_td = to_time_domain(fd.cross)
 
@@ -687,7 +745,7 @@ def _project_rotating(  # noqa: PLR0913
     # compilation. Pinning it removes that possibility.
     gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
 
-    project_batch = _rotating_projection_kernel(n_samples, sampling_frequency)
+    project_batch = _rotating_projection_kernel(n_samples + 2 * padding, sampling_frequency)
 
     per_detector = []
     for key in lookup_keys:
@@ -1177,7 +1235,10 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         # single catalogue-wide chunk size would be wrong for all but one of them.
         effective_chunk = chunk_size
         if effective_chunk is None:
-            bin_samples = _bin_n_samples(bin_backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
+            # Plus the projection's padding, which every returned row carries; see simulate_cbc_batch.
+            bin_samples = _bin_n_samples(
+                bin_backend, parameters, bin_indices, minimum_frequency, sampling_frequency
+            ) + 2 * edge_padding(sampling_frequency)
             effective_chunk = recommend_chunk_size(
                 len(tuple(detector_names)),
                 bin_samples,

@@ -95,7 +95,9 @@ use them directly when you need non-zero backgrounds or your own segment tiling.
 a `BatchedDetectorStrain`: a `(n_events, n_detectors, n_samples)` JAX array (on
 device) plus per-event timing metadata (`coa_time`, `epoch`,
 `sampling_frequency`). Each event/detector row is a signal with coalescence near
-the segment end; its first sample is at `epoch + coa_time[event]`.
+the segment end; its first sample is at `epoch + coa_time[event]`. The rows are
+the waveform segment padded at each end, as described under "Segment length"
+below, and `epoch` describes the padded row.
 
 **`assemble_segments`** — host-side scatter of those signals onto a tiling of
 fixed-duration segments. Each signal is injected into every segment it overlaps
@@ -131,11 +133,19 @@ segments = assemble_segments(
   [`project_polarizations_to_network`](detector-projection.md). The
   time-dependent (`earth_rotation=True`) response is **not** available on
   device.
-- **Segment length.** Each event's strain keeps the length of its waveform
-  segment. Unlike [`project_polarizations_to_network`](detector-projection.md),
-  which pads its output so the geocentre-to-detector delay (up to about 21 ms)
-  cannot move signal past either end, the batched path relies on the segment's
-  own margins before the inspiral and after the ringdown to hold that delay.
+- **Segment length.** Each event's strain is longer than its waveform segment
+  and starts earlier. As in
+  [`project_polarizations_to_network`](detector-projection.md), the segment is
+  zero-padded by `edge_padding(sampling_frequency)` samples at each end before
+  it is projected, so the geocentre-to-detector delay (up to about 21 ms) cannot
+  move signal past either end: without it the rotating branch dropped that
+  signal and the phase-shift branch wrapped it round to the other end. Each row
+  has `2 * edge_padding(sampling_frequency)` more samples than the waveform
+  segment (240 at each end, or 29.3 ms, at 8192 Hz) and holds what the host
+  projection returns for the same waveform, start time included. `epoch` and, on
+  an aligned batch, `start_index` describe the padded row, so a consumer that
+  places rows by either needs no change; one that assumed the waveform segment's
+  length must read it from the strain's shape.
 - **Sidereal time.** Sidereal time uses an on-device IAU model with default leap
   seconds and `dut1 = 0`, accurate to ~1e-4 rad; this is the small difference
   from the Astropy-based CPU path.

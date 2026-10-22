@@ -46,12 +46,17 @@ def test_simulate_cbc_batch_shapes_and_metadata() -> None:
         backend=backend,
     )
     assert isinstance(result, BatchedDetectorStrain)
-    n_samples = np.asarray(result.strain).shape[-1]
-    assert np.asarray(result.strain).shape == (_N_EVENTS, len(_DETECTORS), n_samples)
+    from gwmock_signal.projection.resampling import edge_padding
+
+    padding = edge_padding(_FS)
+    n_samples = round(8.0 * _FS)  # the pinned waveform buffer
+    # The waveform buffer padded at each end against the geocentre delay, as the host projection is.
+    assert np.asarray(result.strain).shape == (_N_EVENTS, len(_DETECTORS), n_samples + 2 * padding)
     assert result.detector_names == tuple(_DETECTORS)
     np.testing.assert_array_equal(result.coa_time, _CATALOGUE["coa_time"])
-    _, expected_epoch = backend.coalescence_placement(n_samples, _FS)
-    assert result.epoch == pytest.approx(expected_epoch)
+    # The epoch describes the buffer returned, so it starts the padding earlier than the waveform's.
+    _, waveform_epoch = backend.coalescence_placement(n_samples, _FS)
+    assert result.epoch == pytest.approx(waveform_epoch - padding / _FS)
     assert np.all(np.isfinite(np.asarray(result.strain)))
 
 
@@ -68,7 +73,6 @@ def test_simulate_cbc_batch_missing_sky_parameter_raises() -> None:
 def test_simulate_cbc_batch_matches_host_pipeline() -> None:
     """Each batched event/detector matches the host NumPy pipeline (overlap > 0.999)."""
     from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.projection.resampling import edge_padding
 
     backend = RippleBackend(segment_duration=8.0)  # fixed grid shared with the host path
     result = simulate_cbc_batch(
@@ -107,11 +111,9 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
                 polarization_angle=float(_CATALOGUE["polarization_angle"][i]),
                 earth_rotation=False,
             )[detector]
-            # The host output is padded at each end against the geocentre delay; the batch keeps
-            # the segment's own length, so the two are compared on that segment.
-            pad = edge_padding(_FS)
-            b = device[i, j]
-            a = host.value[pad : pad + len(b)]
+            # Both are padded at each end against the geocentre delay, by the same amount.
+            assert host.t0 == pytest.approx(float(_CATALOGUE["coa_time"][i]) + result.epoch, abs=1e-6)
+            a, b = host.value, device[i, j]
             overlap = float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
             assert overlap > 0.999, f"event {i} {detector} overlap {overlap:.5f}"
 
@@ -294,70 +296,81 @@ _EQUIVALENCE_CATALOGUE = {
 }
 
 
-def _numpy_reference_strain(*, earth_rotation: bool):
-    """Yield ``(event, detector_index, name, expected)`` from the per-event NumPy projection.
+def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None):
+    """Yield ``(event, detector_index, name, expected)`` from the per-event host projection.
 
     Rebuilds the same time-domain polarizations the device path projects -- one shared frequency
-    grid, inverse-FFT, roll to place coalescence -- then runs the host projection on them, at the
-    segment's own length. Shared by
-    both branches so neither can be compared against a different waveform than the other.
+    grid, inverse-FFT, roll to place coalescence -- then runs
+    :func:`~gwmock_signal.projection.network.project_polarizations_to_network` on them, which pads
+    each detector series against the geocentre delay. ``expected`` is that padded
+    :class:`~gwmock_signal.timeseries.TimeSeries`, start time included, so a comparison checks where
+    the batch says its buffer starts as well as what it holds. Shared by both branches so neither
+    can be compared against a different waveform than the other.
     """
     from gwpy.timeseries import TimeSeries as GWpyTimeSeries
 
-    from gwmock_signal.projection.network import _project
-    from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
+    from gwmock_signal.projection.network import project_polarizations_to_network
     from gwmock_signal.waveform.backends.ripple import RippleBackend
 
-    backend = RippleBackend()
+    backend = backend or RippleBackend()
+    catalogue = _EQUIVALENCE_CATALOGUE if catalogue is None else catalogue
     fd = backend.generate_fd_polarizations_batch(
         "IMRPhenomD",
         sampling_frequency=_EQUIVALENCE_FS,
         minimum_frequency=_EQUIVALENCE_F_MIN,
-        parameters=_EQUIVALENCE_CATALOGUE,
+        parameters=catalogue,
     )
     n_samples = fd.n_samples
     merger_index, epoch = backend.coalescence_placement(n_samples, _EQUIVALENCE_FS)
 
-    for event in range(len(_EQUIVALENCE_CATALOGUE["coa_time"])):
-        start = epoch + _EQUIVALENCE_CATALOGUE["coa_time"][event]
+    for event in range(len(catalogue["coa_time"])):
+        start = epoch + catalogue["coa_time"][event]
         hp = np.roll(np.fft.irfft(np.asarray(fd.plus[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
         hc = np.roll(np.fft.irfft(np.asarray(fd.cross[event]), n=n_samples) * _EQUIVALENCE_FS, merger_index)
-        # Same-length projection, which is what the batch computes: it returns the segment it was
-        # given rather than one padded against the geocentre delay, and its phase-shift branch
-        # wraps what the delay moves past an end, as the host's same-length projection does.
-        reference = _project(
+        reference = project_polarizations_to_network(
             {
                 "plus": GWpyTimeSeries(hp, t0=start, sample_rate=_EQUIVALENCE_FS),
                 "cross": GWpyTimeSeries(hc, t0=start, sample_rate=_EQUIVALENCE_FS),
             },
             _EQUIVALENCE_DETECTORS,
-            right_ascension=float(_EQUIVALENCE_CATALOGUE["right_ascension"][event]),
-            declination=float(_EQUIVALENCE_CATALOGUE["declination"][event]),
-            polarization_angle=float(_EQUIVALENCE_CATALOGUE["polarization_angle"][event]),
+            right_ascension=float(catalogue["right_ascension"][event]),
+            declination=float(catalogue["declination"][event]),
+            polarization_angle=float(catalogue["polarization_angle"][event]),
             earth_rotation=earth_rotation,
-            precess_source_direction=False,
-            backend="numpy",
-            sinc_taps=DEFAULT_SINC_TAPS,
-            kaiser_beta=DEFAULT_KAISER_BETA,
-            keep_delayed_samples=False,
         )
         for index, name in enumerate(_EQUIVALENCE_DETECTORS):
-            yield event, index, name, reference[name].value
+            yield event, index, name, reference[name]
 
 
-def _batched_strain(*, earth_rotation: bool):
-    """Return the batched device strain for the shared catalogue."""
+def _batched(*, earth_rotation: bool, backend=None, catalogue=None):
+    """Return the batched device result for the shared catalogue."""
     from gwmock_signal.jax_batch import simulate_cbc_batch
 
-    batch = simulate_cbc_batch(
+    return simulate_cbc_batch(
         "IMRPhenomD",
         _EQUIVALENCE_DETECTORS,
         sampling_frequency=_EQUIVALENCE_FS,
         minimum_frequency=_EQUIVALENCE_F_MIN,
-        parameters=_EQUIVALENCE_CATALOGUE,
+        parameters=_EQUIVALENCE_CATALOGUE if catalogue is None else catalogue,
         earth_rotation=earth_rotation,
+        backend=backend,
     )
-    return np.asarray(batch.strain)
+
+
+def _placed_on(expected, batch, event: int, detector: int) -> np.ndarray:
+    """Return the batch's strain for one event and detector, placed on ``expected``'s samples.
+
+    Placed by the start time the batch reports for its own buffer (``epoch + coa_time``), not by
+    assuming the two arrays line up, and zero wherever the batch holds no sample. A batch that is
+    shorter than the host projection, or reports a different start, therefore differs from it by
+    the signal it is missing rather than failing on a shape before any value is compared.
+    """
+    strain = np.asarray(batch.strain)[event, detector]
+    offset = round((batch.epoch + float(batch.coa_time[event]) - float(expected.t0)) * _EQUIVALENCE_FS)
+    placed = np.zeros(expected.n_samples)
+    first, last = max(offset, 0), min(offset + strain.size, expected.n_samples)
+    placed[first:last] = strain[first - offset : last - offset]
+    return placed
 
 
 @pytest.mark.requires_gwpy
@@ -365,23 +378,25 @@ def test_simulate_cbc_batch_earth_rotation_matches_numpy_path():
     """The batched rotating path agrees with the per-event NumPy projection.
 
     Anchors the device path against ``project_polarizations_to_network`` on the same
-    polarizations, so the two implementations of Earth rotation cannot drift apart.
+    polarizations, so the two implementations of Earth rotation cannot drift apart -- including
+    the padding that keeps the geocentre delay from moving signal out of the buffer.
     """
     pytest.importorskip("jax", reason="jax not installed")
     pytest.importorskip("ripplegw", reason="ripple not installed")
 
-    device = _batched_strain(earth_rotation=True)
+    batch = _batched(earth_rotation=True)
 
-    for event, index, name, expected in _numpy_reference_strain(earth_rotation=True):
-        scale = np.max(np.abs(expected))
+    for event, index, name, expected in _host_reference(earth_rotation=True):
+        scale = np.max(np.abs(expected.value))
         # Relative tolerances are meaningless at an antenna null; the sky positions
         # are fixed, but assert the premise rather than assume it.
         assert scale > 0.0, f"event {event} {name} has a null response"
-        difference = np.abs(device[event, index] - expected)
+        difference = np.abs(_placed_on(expected, batch, event, index) - expected.value)
         # Round-off: one resampling kernel and one sidereal implementation across
         # both paths. See test_jax_projection.py for the history of this tolerance.
         assert np.sqrt(np.mean(difference**2)) < 1e-11 * scale
         assert np.max(difference) < 1e-10 * scale
+        assert np.asarray(batch.strain).shape[-1] == expected.n_samples
 
 
 @pytest.mark.requires_gwpy
@@ -401,14 +416,69 @@ def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
     pytest.importorskip("jax", reason="jax not installed")
     pytest.importorskip("ripplegw", reason="ripple not installed")
 
-    device = _batched_strain(earth_rotation=False)
+    batch = _batched(earth_rotation=False)
 
-    for event, index, name, expected in _numpy_reference_strain(earth_rotation=False):
-        scale = np.max(np.abs(expected))
+    for event, index, name, expected in _host_reference(earth_rotation=False):
+        scale = np.max(np.abs(expected.value))
         assert scale > 0.0, f"event {event} {name} has a null response"
-        difference = np.abs(device[event, index] - expected)
-        # Measured at 7.7e-12 to 1.3e-11 of peak across the four event/detector pairs, so the
-        # bound sits just above that rather than at a round number. It is round-off from the two
-        # paths associating the same arithmetic differently, the same size the rotating branch
-        # shows, and eight orders below the 4.4e-03 a wrong sky frame costs.
-        assert np.sqrt(np.mean(difference**2)) < 3e-11 * scale
+        difference = np.abs(_placed_on(expected, batch, event, index) - expected.value)
+        # Measured at 9e-17 to 1e-16 of peak (RMS) across the four event/detector pairs: both paths
+        # pad the same buffer and phase-shift it through a real FFT of the same length, so they
+        # differ only in the last bits. The bound leaves three orders of magnitude for other FFT
+        # implementations, and is far below both the 4.4e-03 a wrong sky frame costs and the
+        # 2.9e-05 by which an unpadded phase shift -- wrapping the delayed edges round the buffer --
+        # differed from the host here.
+        assert np.sqrt(np.mean(difference**2)) < 1e-13 * scale
+        assert np.max(difference) < 1e-12 * scale
+        assert np.asarray(batch.strain).shape[-1] == expected.n_samples
+
+
+#: Two sky positions on opposite sides of the Earth from the Einstein Telescope site, so the
+#: geocentre delay moves the signal later at one and earlier at the other.
+_ANTIPODAL_CATALOGUE = {
+    key: np.array([value[0], value[0]]) for key, value in _EQUIVALENCE_CATALOGUE.items() if key not in {"coa_time"}
+} | {
+    "right_ascension": np.array([1.3, 1.3 + np.pi]),
+    "declination": np.array([0.7, -0.7]),
+    "coa_time": np.array([1.4e9, 1.4e9 + 300.0]),
+}
+
+
+@pytest.mark.requires_gwpy
+@pytest.mark.parametrize("earth_rotation", [True, False])
+@pytest.mark.parametrize("merger_at", ["end", "start"])
+def test_simulate_cbc_batch_keeps_signal_the_delay_moves_past_an_end(earth_rotation: bool, merger_at: str):
+    """The batch keeps what the geocentre delay moves past either end of the waveform buffer.
+
+    The merger is placed two samples from one end of the buffer, so on whichever of the two sky
+    positions the delay points outwards the peak itself leaves the buffer. Before the batch was
+    padded, the rotating branch dropped it and the phase-shift branch wrapped it round to the other
+    end, while the host projection, padded since, keeps it beyond the end. The host is the
+    reference; the batch is placed on the host's samples by its own reported start time.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.waveform.backends.ripple import RippleBackend
+
+    # A fixed buffer, because a ringdown fraction this close to 0 or 1 would otherwise size it for
+    # an inspiral occupying a sliver of it. The merger is then two samples from the chosen end.
+    ringdown_fraction = 0.0001 if merger_at == "end" else 0.9999
+    backend = RippleBackend(segment_duration=4.0, ringdown_fraction=ringdown_fraction)
+    batch = _batched(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE)
+    reference = list(_host_reference(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE))
+
+    padding = edge_padding(_EQUIVALENCE_FS)
+    beyond = slice(-padding, None) if merger_at == "end" else slice(0, padding)
+    # The premise: on at least one event the host keeps a large part of the signal beyond that end.
+    # Without it the comparison below would pass whatever the batch did there.
+    assert (
+        max(np.max(np.abs(expected.value[beyond])) / np.max(np.abs(expected.value)) for *_, expected in reference) > 0.5
+    )
+
+    for event, index, name, expected in reference:
+        scale = np.max(np.abs(expected.value))
+        difference = np.abs(_placed_on(expected, batch, event, index) - expected.value)
+        assert np.max(difference) < 1e-10 * scale, (
+            f"event {event} {name}: {np.max(difference) / scale:.3e} of peak from the host projection"
+        )
