@@ -637,8 +637,9 @@ class LALSimulationBackend(WaveformBackend):
         The waveform is generated from a start frequency below ``minimum_frequency`` and multiplied
         by a raised-cosine taper that rises from zero there to one at ``minimum_frequency``. Every
         bin from ``minimum_frequency`` up is the model's own value, unchanged; the content below it
-        is tapered rather than cut, which is what removes the ringing a hard cut leaves across the
-        buffer. The buffer is sized from the physics of the source rather than as a fixed fraction:
+        is tapered rather than cut, which is what suppresses the ringing a hard cut leaves across
+        the buffer (on a 2302 + 248 solar-mass binary's first sample, 0.30 of peak under the hard cut
+        and 1.6e-6 tapered). The buffer is sized from the physics of the source rather than as a fixed fraction:
 
         * **start frequency** -- as LALSimulation's frequency-domain conditioning chooses it, the
           frequency with 10% more chirp time than ``minimum_frequency``, or than the lowest Kerr
@@ -655,8 +656,8 @@ class LALSimulationBackend(WaveformBackend):
         beyond them. IMRPhenomXPHM's default multibanding of its precession angles leaves its
         spectrum with content at every delay, on both sides of coalescence and changing with the
         frequency grid -- up to 1.6e-2 of peak at 250 + 5 solar masses with spins of 0.99 aligned
-        -- which no buffer holds; ``waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`` removes
-        it. See the user guide's *Content the buffer does not hold*.
+        -- which no buffer holds; ``waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`` reduces
+        it to below 1e-6 there. See the user guide's *Content the buffer does not hold*.
 
         If LALSimulation refuses to start below ``minimum_frequency`` for an approximant, the
         waveform is generated from ``minimum_frequency`` and the taper is placed *above* it instead,

@@ -446,18 +446,20 @@ SEOBNRv5HM and SEOBNRv5PHM are not part of LALSimulation and were not checked.
   interpolation, not of precession — it appears with zero in-plane spin — and it
   depends on the frequency grid: the same source generated into buffers 1, 2 and
   4 times as long differs inside the buffer by 2e-02 to 3e-02 of peak (mismatch
-  3e-04 to 6e-04). No buffer holds it, and lengthening one does not help.
-  Setting `waveform_arguments={"PhenomXPHMThresholdMband": 0.0}` removes it: the
-  same source leaves 8.8e-07 outside the buffer and changes by 1.3e-06 with the
-  grid (with `PhenomXHMThresholdMband` also set to 0, as measured here). The
-  cost is about 5 times the frequency-domain evaluation time, a few percent of
-  the time per event once projection is counted. In band the two agree closely:
-  over 50 stellar- and intermediate-mass binaries the mismatch between the
-  default and the multibanding-off waveform (the 10 km full-cryogenic ET design
-  sensitivity, 5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised
-  over time and phase, although they differ by up to 6e-03 of peak in time.
-  LALSimulation's own `SimInspiralTD` drops the content after coalescence too —
-  its buffer ends about 0.7 s after coalescence, with a taper.
+  3e-04 to 6e-04). Lengthening the buffer helps only slowly — 126 s more after
+  coalescence still leaves 1.3e-03 outside — and does not touch the grid
+  dependence. Setting `waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`
+  reduces both by four orders of magnitude: the same source leaves 8.8e-07
+  outside the buffer and changes by 1.3e-06 with the grid (with
+  `PhenomXHMThresholdMband` also set to 0, as measured here). The cost is about
+  5 times the frequency-domain evaluation time, a few percent of the time per
+  event once projection is counted. In band the two agree closely: over 50
+  stellar- and intermediate-mass binaries the mismatch between the default and
+  the multibanding-off waveform (the 10 km full-cryogenic ET design sensitivity,
+  5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised over time and
+  phase, although they differ by up to 6e-03 of peak in time. LALSimulation's
+  own `SimInspiralTD` drops the content after coalescence too — its buffer ends
+  about 0.7 s after coalescence, with a taper.
 - **A spectrum that ends in a step** rings with a tail falling as one over time.
   TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
   buffer above).
@@ -476,8 +478,10 @@ length of the buffer it is generated into — and so on the segment duration of 
 simulation — and leaves content outside any buffer, as described above. For
 injection data that must not depend on how it was segmented, set both
 `PhenomXPHMThresholdMband` and `PhenomXHMThresholdMband` to 0. IMRPhenomXHM
-alone is affected far less (up to 3.5e-05 of peak, above), but setting
-`PhenomXHMThresholdMband` to 0 makes it grid-independent too.
+alone is affected far less (up to 3.5e-05 of peak, above), and setting
+`PhenomXHMThresholdMband` to 0 reduces its grid dependence too: to at most
+1.5e-05 of peak at the planned buffer and 1e-08 once the buffer is twice as
+long, on the same three binaries.
 
 - **Cost.** About 4.7 times the frequency-domain evaluation time, measured over
   50 stellar- and intermediate-mass binaries at a 5 Hz cutoff: a few percent of
