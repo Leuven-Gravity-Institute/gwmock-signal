@@ -493,3 +493,37 @@ def test_a_coa_time_outside_the_output_fails_the_orchestrated_run(tmp_path, plac
     run = _run_gwmock(tmp_path, "split", 16, placement)
     assert run.returncode != 0, run.stdout + run.stderr
     assert "lies outside this burst's output" in run.stdout + run.stderr
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.parametrize("edge", ["start", "end"])
+def test_at_a_megahertz_an_exact_edge_is_accepted_and_one_sample_outside_is_refused(edge):
+    """At 1 MHz and GPS 2e9 s one sample (1e-6 s) is about four float64 steps.
+
+    Sixteen float steps of rounding slack would span almost four samples there, and accepted a
+    placement three samples outside the output. The slack is capped at half a sample, so the exact
+    edge -- computed as a caller would, from the returned strain -- is still accepted and a placement a
+    whole sample outside is refused.
+    """
+    rate = 1.0e6
+    simulator = BurstSimulator()
+    for offset in (0.0, 0.123456789, 0.987654321):
+        event = _event("ga-2.5ms", peak_time=2.0e9 + 17.0 + offset)
+        strain = simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+        exact = strain.t0 if edge == "start" else strain.t0 + strain.n_samples / rate
+        outside = exact - 1.0 / rate if edge == "start" else exact + 1.0 / rate
+        simulator.pre_coalescence_duration({**event, "coa_time": exact}, rate, 5.0)
+        again = simulator.simulate({**event, "coa_time": exact}, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)
+        np.testing.assert_array_equal(np.asarray(again["H1"].value), np.asarray(strain.value))
+        for call in _calls(simulator, rate).values():
+            with pytest.raises(ValueError, match="lies outside this burst's output"):
+                call({**event, "coa_time": outside})
+
+
+@pytest.mark.requires_lalsuite
+def test_a_rate_too_fine_for_the_gps_time_is_refused_rather_than_judged():
+    """At 4 MHz and GPS 2e9 s one sample is about one float64 step: no placement can be judged to a sample."""
+    simulator = BurstSimulator()
+    event = _event("ga-0.1ms", peak_time=2.0e9 + 17.0, coa_time=2.0e9 + 17.0)
+    with pytest.raises(ValueError, match="cannot be resolved to within a sample"):
+        simulator.pre_coalescence_duration(event, 4.0e6, 5.0)

@@ -87,6 +87,14 @@ def _span_key(params: Mapping[str, Any], sampling_frequency: float) -> Any:
 #: and still count as on its edge; see :func:`_placement_extent`.
 _ROUNDING_STEPS = 16
 
+#: Fraction of a sample interval the edge slack never exceeds, so a placement a whole sample outside
+#: is refused at any rate; see :func:`_placement_extent`.
+_EDGE_SLACK_SAMPLES = 0.5
+
+#: Fewest float64 steps of the placement's GPS time a sample interval must span for an edge placement
+#: to be judged at all: below it, rounding alone can move an exact edge by half a sample.
+_MIN_STEPS_PER_SAMPLE = 4
+
 
 def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float]) -> tuple[float, float]:
     """Return ``(pre, post)`` of the projected output around the placement time, or refuse it.
@@ -109,13 +117,25 @@ def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float
     post = _projected_duration(end - placement, rate)
     # A placement on the output's own first sample, or one sample past its last, is valid, but a
     # caller computes those instants with its own float arithmetic, and so does this check: at GPS
-    # times of 1e9 to 2e9 s one float64 step is 1.2e-7 to 2.4e-7 s, so either side can come out a
-    # few steps negative for an exact edge. Steps of that size are rounding, not a placement outside
-    # the output, and are clamped to zero. The slack is sized from the operands' own spacing, so it
-    # stays a few float steps however large the times are: _ROUNDING_STEPS steps of the largest time
-    # involved, 3.8e-6 s at 2e9 s, four times below one sample even at 65536 Hz (1.5e-5 s) and
-    # far below it at the rates in use. Anything a sample or more outside is still refused.
-    slack = _ROUNDING_STEPS * math.ulp(max(abs(placement), abs(start), abs(end)))
+    # times of 1e9 to 2e9 s one float64 step is 1.2e-7 to 2.4e-7 s, and an exact edge comes out up to
+    # about 0.5 step outside (measured at 4000, 6000 and 16000 Hz). Differences of that size are
+    # rounding, not a placement outside the output, and are clamped to zero. The slack is
+    # _ROUNDING_STEPS steps of the largest time involved, so it stays a few float steps however large
+    # the times are, but never more than _EDGE_SLACK_SAMPLES of a sample: at a high rate 16 steps would
+    # otherwise span several samples (3.8e-6 s at 2e9 s is almost four samples at 1 MHz), and a
+    # placement that far outside would be accepted. With the cap, anything a whole sample outside is
+    # refused at every rate. The two bounds only conflict when a sample spans so few float steps that
+    # rounding alone could move an exact edge by half a sample; such a rate cannot place by GPS time to
+    # sub-sample precision, and is refused below -- under _MIN_STEPS_PER_SAMPLE steps per sample, which
+    # at 2e9 s is any rate above about 1.05 MHz, and at 1e9 s above about 2.1 MHz.
+    step = math.ulp(max(abs(placement), abs(start), abs(end)))
+    if 1.0 / rate < _MIN_STEPS_PER_SAMPLE * step:
+        raise ValueError(
+            f"At {rate:g} Hz one sample ({1.0 / rate:.3g} s) spans fewer than {_MIN_STEPS_PER_SAMPLE} float64 "
+            f"steps ({step:.3g} s each) of the GPS time {placement!r}, so a placement cannot be resolved to "
+            "within a sample; use a lower sampling rate or times measured from a nearer epoch."
+        )
+    slack = min(_ROUNDING_STEPS * step, _EDGE_SLACK_SAMPLES / rate)
     if -slack <= pre < 0:
         pre = 0.0
     if -slack <= post < 0:

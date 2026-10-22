@@ -108,7 +108,12 @@ polarization buffer, which some populations use: the
 [placement queries](#placing-bursts-in-segmented-data) measure from `coa_time`,
 so the output's start and end come out the same either way. "Inside the output"
 means from the first sample `simulate` returns to one sample past its last, the
-projection's padding included.
+projection's padding included. A placement computed exactly on either edge is
+accepted even when float64 rounding puts it a fraction of a sample outside; one
+a whole sample outside is refused at every rate. Placement is judged only where
+a sample spans at least four float64 steps of the GPS time — up to about 1.05
+MHz at GPS 2e9 s and 2.1 MHz at 1e9 s; above that the check refuses the rate,
+since no placement could be resolved to within a sample.
 
 A `coa_time` that is not a finite number, or that lies outside the output, is
 refused with a `ValueError` naming the output's span — by the two placement
