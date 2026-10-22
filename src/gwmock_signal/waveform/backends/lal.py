@@ -388,7 +388,17 @@ class LALSimulationBackend(WaveformBackend):
                 raise ValueError(
                     f"Pass tidal deformabilities as lambda_1/lambda_2, not waveform_arguments[{reserved!r}]"
                 )
-        return dict(value)
+        resolved = dict(value)
+        if resolved.get("ModeArray") is not None:
+            # Read once, here, into the copy both buffer sizing and generation use: the pairs may come
+            # as a one-shot iterable, which a second reader would find empty -- sizing read it first,
+            # and generation then activated no modes at all.
+            modes = resolved["ModeArray"]
+            try:
+                resolved["ModeArray"] = tuple((int(ell), int(m)) for ell, m in modes)  # type: ignore[attr-defined]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"ModeArray must be an iterable of (l, m) pairs, got {modes!r}") from exc
+        return resolved
 
     @staticmethod
     def _resolve_parameters(

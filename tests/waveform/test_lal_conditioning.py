@@ -374,3 +374,29 @@ def test_a_heavy_precessing_binary_keeps_the_tapers_ringing_after_coalescence():
     long = np.roll(np.fft.irfft(spectrum, n=long_samples) * fs, offset + merger_index)
     after = long[offset + n_samples :]
     assert np.max(np.abs(after)) < 1e-4 * np.max(np.abs(long))
+
+
+@pytest.mark.requires_lalsuite
+def test_a_mode_array_given_as_a_generator_selects_the_same_modes_as_a_list():
+    """A one-shot iterable of (l, m) pairs must not be used up by sizing before generation reads it.
+
+    Sizing reads the pairs for their largest ``|m|``; generation then activates them in the LAL
+    dictionary. Read from the same generator twice, the second read found nothing and no mode was
+    activated.
+    """
+    source = {
+        "detector_frame_mass_1": 30.0,
+        "detector_frame_mass_2": 25.0,
+        "luminosity_distance": 400.0,
+        "inclination": 1.0,
+    }
+    backend = LALSimulationBackend(f_ref=20.0)
+    pairs = [(2, 2), (2, -2), (3, 3), (3, -3)]
+    from_list = backend.generate_td_waveform(
+        "IMRPhenomXHM", 0.0, 1024.0, 20.0, waveform_arguments={"ModeArray": list(pairs)}, **source
+    )["plus"]
+    from_generator = backend.generate_td_waveform(
+        "IMRPhenomXHM", 0.0, 1024.0, 20.0, waveform_arguments={"ModeArray": (pair for pair in pairs)}, **source
+    )["plus"]
+    assert from_generator.t0 == from_list.t0
+    np.testing.assert_array_equal(np.asarray(from_generator.data), np.asarray(from_list.data))
