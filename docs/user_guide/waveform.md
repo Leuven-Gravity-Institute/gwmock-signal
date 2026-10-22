@@ -341,8 +341,11 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
 The LAL and gwsignal backends evaluate the model in the frequency domain, with
 coalescence at the frequency-domain phase reference, and inverse-transform it
 into a buffer. A periodic transform folds whatever extends past either end of
-that buffer back into it, so the buffer has to hold the whole signal and the
-spectrum must not end in a step.
+that buffer back into it, so the buffer is sized to hold the inspiral, merger
+and ringdown, and the spectrum must not end in a step. Content a model places
+outside those — described under
+[content the buffer does not hold](#content-the-buffer-does-not-hold) — is not
+held.
 
 - **Tapered, not cut, below `minimum_frequency`.** The model is generated from a
   start frequency below the cutoff and multiplied by a raised cosine that rises
@@ -391,19 +394,16 @@ three extra cycles and the taper's time response are estimates: the window's
 time kernel has a main lobe about one over its width long and a tail falling as
 the cube of time, and one width at each end was checked at the parameter-space
 edges below, where halving it changed the content outside the buffer by under a
-factor of two. What none of these terms bounds is a model spectrum that ends in
-a step or a kink — TaylorF2 stops at its innermost stable orbit, and the
-IMRPhenomX models end at their own maximum frequency — whose inverse transform
-has a tail falling only as one over time. No finite buffer contains such a tail;
-what lies past the buffer is measured below.
+factor of two. None of these terms bounds content a model places outside the
+inspiral, merger and ringdown, which decays slowly after coalescence; what lies
+past the buffer is measured below.
 
 Measured with a 5 Hz cutoff against the same tapered waveform on a buffer four
 times longer, at 512 to 4096 Hz (enough for each source's band; the rate does
 not change the result, checked at 8192 Hz on the worst cases), as the largest
 content outside the buffer as a fraction of peak strain, over equal and unequal
 masses (to 250+5 solar masses), aligned and anti-aligned spins of 0.99, in-plane
-spins of 0.9, and total masses to 2612 solar masses (the heaviest in the
-populations this was checked for):
+spins of 0.9, and total masses to 2612 solar masses:
 
 | Approximant                                  | Worst case outside the buffer                                                                                                                                                                  |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -421,14 +421,34 @@ the 2.5e-04 left after coalescence is the spectrum cut at that rate's Nyquist
 frequency (the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192
 Hz).
 
-In every case the largest residue lies after coalescence and falls as one over
-time, the signature of the model's own spectral end rather than of the sizing:
-it does not change with the sample rate, and doubling the time reserved for the
-taper reduces it by under a factor of two. IMRPhenomXPHM's large values come
-from content its precessing construction places seconds after coalescence at
-these extreme spins and mass ratios; IMRPhenomXHM, the same model without
-precession, leaves 2e-05 to 5e-05 on the same sources. SEOBNRv5HM and
-SEOBNRv5PHM are not part of LALSimulation and were not checked.
+In every case the largest residue lies after coalescence and decays slowly: it
+does not change with the sample rate, and doubling the time reserved for the
+taper reduces it by under a factor of two, so it is a property of the model's
+spectrum rather than of the sizing. SEOBNRv5HM and SEOBNRv5PHM are not part of
+LALSimulation and were not checked.
+
+### Content the buffer does not hold
+
+- **IMRPhenomXPHM with the MSA precession angles** — `PhenomXPrecVersion` 220 to
+  224, and the default 300 when it falls back to MSA — places content after
+  coalescence: a component whose frequency falls with time, from tens of hertz
+  seconds after coalescence down to the cutoff minutes later, with an amplitude
+  decaying roughly as one over time. It appears even with zero in-plane spin,
+  where nothing precesses. At 250+5 solar masses with spins of 0.99 aligned and
+  a 5 Hz cutoff it reaches 1.7e-02 of peak strain 5 s after coalescence, and is
+  still 1.3e-03 two minutes after the buffer's end. In that case the NNLO angles
+  (`PhenomXPrecVersion` 101 to 104) and the SpinTaylor angles (310 to 330) do
+  not carry it: they leave 2.6e-05, the same as IMRPhenomXHM. Choose the angle
+  version in `waveform_arguments` if this matters for an analysis.
+- **The buffer does not hold this content**, and lengthening it does not help:
+  it lies after coalescence, and decays too slowly for any finite allowance
+  there. LALSimulation's own `SimInspiralTD` drops the same content — its buffer
+  ends about 0.7 s after coalescence, with a taper.
+- **A spectrum that ends in a step** rings with a tail falling as one over time.
+  TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
+  buffer above). The IMRPhenomX models carry a much weaker slowly decaying
+  component of the same kind after coalescence, 1e-05 to 5e-05 of peak in
+  IMRPhenomXHM.
 
 Sizing for the largest harmonic the model emits, rather than for `m = 3`,
 lengthens the buffers of higher-harmonic models: on a 250+5 solar mass binary
@@ -438,11 +458,11 @@ the inspiral above it with a fixed tenth after coalescence — left up to 0.34 o
 peak at the start of a 4 s buffer for a 2302+248 solar mass binary.
 
 Buffers are longer as a result, most for heavy binaries and for models with
-higher harmonics: at a 5 Hz cutoff and 8192 Hz, the IMRPhenomXPHM binary black
-holes of one test population need 6.5 times the strain of the previous
-conditioning (twice what `m = 3` needed), measured at 2.5 times the generation
-and projection time per event; binary-neutron-star and neutron-star–black-hole
-buffers grow by 3% and 6%.
+higher harmonics: at a 5 Hz cutoff and 8192 Hz, a set of IMRPhenomXPHM binary
+black holes spanning 14 to 1665 solar masses needs 6.5 times the strain of the
+previous conditioning (twice what `m = 3` needed), measured at 2.5 times the
+generation and projection time per event; binary-neutron-star and
+neutron-star–black-hole buffers grow by 3% and 6%.
 
 If LALSimulation refuses to start an approximant below the cutoff, the backend
 generates it from the cutoff and places the same taper _above_ it instead, which

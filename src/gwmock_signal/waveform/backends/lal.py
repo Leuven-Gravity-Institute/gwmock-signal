@@ -327,7 +327,10 @@ class LALSimulationBackend(WaveformBackend):
             taper's time response. See :meth:`generate_td_waveform`.
         segment_duration: Optional fixed analysis-segment length in seconds. When
             ``None`` (default) the length is estimated from the chirp time below the
-            cutoff, the ringdown and the taper, so the waveform fits without wraparound.
+            cutoff, the ringdown and the taper, so the inspiral, merger and ringdown fit
+            without wraparound. Content a model places beyond them -- IMRPhenomXPHM's
+            post-coalescence component with the MSA precession angles, for one -- is not held;
+            see the user guide's *Content the buffer does not hold*.
 
     Raises:
         ImportError: On construction, if ``lalsuite`` is not installed.
@@ -634,6 +637,14 @@ class LALSimulationBackend(WaveformBackend):
         * **after coalescence** -- LALSimulation's merger and ringdown time bounds for the remnant,
           plus three cycles and the taper's time response; at least ``ringdown_fraction`` of the
           buffer when one is set.
+
+        The buffer holds the inspiral, merger and ringdown so sized, not content a model places
+        beyond them: IMRPhenomXPHM with the MSA precession angles (``PhenomXPrecVersion`` 220 to
+        224, and the default 300 when it falls back to MSA) adds a component after coalescence
+        that decays roughly as ``1 / t``, even with zero in-plane spin -- 1.7e-2 of peak at
+        250 + 5 solar masses with spins of 0.99 aligned, where the NNLO and SpinTaylor angle
+        versions do not carry it. It falls outside the buffer, as it falls outside
+        LALSimulation's own ``SimInspiralTD``, whose buffer ends about 0.7 s after coalescence.
 
         If LALSimulation refuses to start below ``minimum_frequency`` for an approximant, the
         waveform is generated from ``minimum_frequency`` and the taper is placed *above* it instead,
