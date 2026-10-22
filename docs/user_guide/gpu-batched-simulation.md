@@ -127,12 +127,14 @@ segments = assemble_segments(
 
 ## Conventions and current limitations
 
-- **Earth rotation.** The device path evaluates the antenna pattern and
-  geocenter delay **once per event at the segment midpoint**
-  (`earth_rotation=False`), matching
-  [`project_polarizations_to_network`](detector-projection.md). The
-  time-dependent (`earth_rotation=True`) response is **not** available on
-  device.
+- **Earth rotation.** Both branches of
+  [`project_polarizations_to_network`](detector-projection.md) run on device. By
+  default (`earth_rotation=True`) the antenna pattern and geocenter delay are
+  evaluated **per sample**, and the polarizations are resampled at the delayed
+  times. With `earth_rotation=False` they are evaluated **once per event at the
+  segment midpoint** and the delay is applied as an exact frequency-domain phase
+  shift, which is cheaper but valid only for signals short compared with an
+  hour.
 - **Segment length.** Each event's strain is longer than its waveform segment
   and starts earlier. As in
   [`project_polarizations_to_network`](detector-projection.md), the segment is
