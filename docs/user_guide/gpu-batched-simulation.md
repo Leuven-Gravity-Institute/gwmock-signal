@@ -95,7 +95,9 @@ use them directly when you need non-zero backgrounds or your own segment tiling.
 a `BatchedDetectorStrain`: a `(n_events, n_detectors, n_samples)` JAX array (on
 device) plus per-event timing metadata (`coa_time`, `epoch`,
 `sampling_frequency`). Each event/detector row is a signal with coalescence near
-the segment end; its first sample is at `epoch + coa_time[event]`.
+the segment end; its first sample is at `epoch + coa_time[event]`. The rows are
+the waveform segment padded at each end, as described under "Segment length"
+below, and `epoch` describes the padded row.
 
 **`assemble_segments`** — host-side scatter of those signals onto a tiling of
 fixed-duration segments. Each signal is injected into every segment it overlaps
@@ -125,18 +127,41 @@ segments = assemble_segments(
 
 ## Conventions and current limitations
 
-- **Earth rotation.** The device path evaluates the antenna pattern and
-  geocenter delay **once per event at the segment midpoint**
-  (`earth_rotation=False`), matching
-  [`project_polarizations_to_network`](detector-projection.md). The
-  time-dependent (`earth_rotation=True`) response is **not** available on
-  device.
-- **Sidereal time.** Sidereal time uses an on-device IAU model with default leap
-  seconds and `dut1 = 0`, accurate to ~1e-4 rad; this is the small difference
-  from the Astropy-based CPU path.
+- **Earth rotation.** Both branches of
+  [`project_polarizations_to_network`](detector-projection.md) run on device. By
+  default (`earth_rotation=True`) the antenna pattern and geocenter delay are
+  evaluated **per sample**, and the polarizations are resampled at the delayed
+  times. With `earth_rotation=False` they are evaluated **once per event at the
+  segment midpoint** and the delay is applied as an exact frequency-domain phase
+  shift, which is cheaper but valid only for signals short compared with an
+  hour.
+- **Segment length.** Each event's strain is longer than its waveform segment
+  and starts earlier. As in
+  [`project_polarizations_to_network`](detector-projection.md), the segment is
+  zero-padded by `edge_padding(sampling_frequency)` samples at each end before
+  it is projected, so the geocentre-to-detector delay (up to about 21 ms) cannot
+  move signal past either end: without it the rotating branch dropped that
+  signal and the phase-shift branch wrapped it round to the other end. Each row
+  has `2 * edge_padding(sampling_frequency)` more samples than the waveform
+  segment (240 at each end, or 29.3 ms, at 8192 Hz) and holds what the host
+  projection returns for the same waveform, start time included. `epoch` and, on
+  an aligned batch, `start_index` describe the padded row, so a consumer that
+  places rows by either needs no change; one that assumed the waveform segment's
+  length must read it from the strain's shape.
+- **Sidereal time.** Both paths take sidereal time from Astropy, IERS UT1-UTC
+  included. The batched path evaluates it on the host: once per event at the
+  segment midpoint with `earth_rotation=False`; with `earth_rotation=True`, as
+  an anchor at each event's first sample plus a sidereal rate, which the device
+  extends linearly across the segment. Over segments up to 8192 s that line
+  departs from Astropy by less than 1e-13 rad (see
+  `gwmock_signal.projection.sidereal`).
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,
   simulate in chirp-mass groups to bound memory.
-- **Validation.** Every event/detector of the device path is cross-checked
-  against the CPU pipeline (white overlap > 0.999); the small gap is the
-  sidereal-time default above.
+- **Validation.** The tests compare the batched path with
+  `project_polarizations_to_network` on the same polarizations, for each event
+  and detector of their catalogues and sample by sample over the padded span.
+  Measured relative to each series' peak, the largest difference is about 1e-12
+  on the rotating branch (2e-14 RMS) and below 1e-14 on the phase-shift branch
+  (1e-16 RMS): rounding, from the two paths ordering the same arithmetic
+  differently.

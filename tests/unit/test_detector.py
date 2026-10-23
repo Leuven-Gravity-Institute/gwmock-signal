@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from gwmock_signal.detector import CustomDetector
+from gwmock_signal.projection.resampling import edge_padding
 from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
 # Exact H1 geodetic parameters from LAL CachedDetectors
@@ -271,7 +272,8 @@ class TestMixedNetworkProjection:
         assert set(result.keys()) == {"H1", "L1_custom"}
         for key, ts in result.items():
             assert isinstance(ts, NativeTimeSeries), f"{key}: expected TimeSeries"
-            assert ts.n_samples == n
+            # Padded at each end against the geocentre delay.
+            assert ts.n_samples == n + 2 * edge_padding(sample_rate)
 
 
 @pytest.mark.requires_lalsuite

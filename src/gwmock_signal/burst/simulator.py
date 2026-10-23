@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,7 @@ import numpy as np
 from gwmock_data.resampling import resample_uniform_sinc
 
 from gwmock_signal.burst.waveforms import PARAMETRIC_MODELS, read_waveform_file
-from gwmock_signal.simulator import TransientSimulator
+from gwmock_signal.simulator import TransientSimulator, _projected_duration
 from gwmock_signal.timeseries import TimeSeries
 
 #: Keys every burst event carries, whatever its model. The model-specific ones are checked when the
@@ -33,6 +34,122 @@ from gwmock_signal.timeseries import TimeSeries
 _REQUIRED: frozenset[str] = frozenset(
     {"burst_model", "peak_time", "right_ascension", "declination", "polarization_angle"}
 )
+
+#: How many events' buffer extents a simulator remembers. A caller placing an event asks for its
+#: start and its end, often more than once, before generating it; remembering the last few
+#: answers makes every repeat free without holding on to a catalogue's worth of entries.
+_EXTENT_CACHE_SIZE = 64
+
+
+def _finite_time(params: Mapping[str, Any], key: str) -> float:
+    """Return ``params[key]`` as a float, refusing a missing, non-numeric or non-finite value."""
+    value = params.get(key)
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{key} must be a finite number, got {value!r}.") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{key} must be a finite number, got {value!r}.")
+    return number
+
+
+def _placement_time(params: Mapping[str, Any]) -> float:
+    """Return the instant a segmenting caller places the event by: ``coa_time``, else ``peak_time``.
+
+    ``peak_time`` is required either way: it alone positions the waveform, and a ``coa_time`` may
+    lie anywhere inside the buffer, so it cannot stand in for the peak. ``None`` counts as absent,
+    as it does for a population that leaves unused columns empty.
+
+    Raises:
+        ValueError: If ``peak_time`` is missing or not a finite number, or ``coa_time`` is given
+            and is not a finite number.
+    """
+    peak_time = _finite_time(params, "peak_time")
+    return peak_time if params.get("coa_time") is None else _finite_time(params, "coa_time")
+
+
+def _span_key(params: Mapping[str, Any], sampling_frequency: float) -> Any:
+    """Return the cache key of an event's polarization span, or ``None`` when it cannot be hashed.
+
+    ``coa_time`` is left out: generation never reads it, so every placement of one event shares
+    one entry.
+    """
+    try:
+        key = (float(sampling_frequency), tuple(sorted((k, v) for k, v in params.items() if k != "coa_time")))
+        hash(key)
+    except (TypeError, ValueError):
+        # An unhashable or unorderable parameter: measure without remembering.
+        return None
+    return key
+
+
+#: Float64 steps, of the largest time involved, by which a placement may round outside the output
+#: and still count as on its edge; see :func:`_placement_extent`.
+_ROUNDING_STEPS = 16
+
+#: Fraction of a sample interval the edge slack never exceeds, so a placement a whole sample outside
+#: is refused at any rate; see :func:`_placement_extent`.
+_EDGE_SLACK_SAMPLES = 0.5
+
+#: Fewest float64 steps of the placement's GPS time a sample interval must span for an edge placement
+#: to be judged at all: below it, rounding alone can move an exact edge by half a sample.
+_MIN_STEPS_PER_SAMPLE = 4
+
+
+def _placement_extent(params: Mapping[str, Any], span: tuple[float, float, float]) -> tuple[float, float]:
+    """Return ``(pre, post)`` of the projected output around the placement time, or refuse it.
+
+    The single check behind the duration queries, :meth:`BurstSimulator.generate_polarizations`
+    and so :meth:`BurstSimulator.simulate`: they refuse exactly the same placements, with the same
+    message.
+
+    Args:
+        params: One burst event.
+        span: ``(start, end, sample_rate)`` of its polarization buffer.
+
+    Raises:
+        ValueError: If ``peak_time`` or a given ``coa_time`` is not a finite number, or the placement
+            time lies before the projected output's first sample or after its end.
+    """
+    placement = _placement_time(params)
+    start, end, rate = span
+    pre = _projected_duration(placement - start, rate)
+    post = _projected_duration(end - placement, rate)
+    # A placement on the output's own first sample, or one sample past its last, is valid, but a
+    # caller computes those instants with its own float arithmetic, and so does this check: at GPS
+    # times of 1e9 to 2e9 s one float64 step is 1.2e-7 to 2.4e-7 s, and an exact edge comes out up to
+    # about 0.5 step outside (measured at 4000, 6000 and 16000 Hz). Differences of that size are
+    # rounding, not a placement outside the output, and are clamped to zero. The slack is
+    # _ROUNDING_STEPS steps of the largest time involved, so it stays a few float steps however large
+    # the times are, but never more than _EDGE_SLACK_SAMPLES of a sample: at a high rate 16 steps would
+    # otherwise span several samples (3.8e-6 s at 2e9 s is almost four samples at 1 MHz), and a
+    # placement that far outside would be accepted. With the cap, anything a whole sample outside is
+    # refused at every rate. The two bounds only conflict when a sample spans so few float steps that
+    # rounding alone could move an exact edge by half a sample; such a rate cannot place by GPS time to
+    # sub-sample precision, and is refused below -- under _MIN_STEPS_PER_SAMPLE steps per sample, which
+    # at 2e9 s is any rate above about 1.05 MHz, and at 1e9 s above about 2.1 MHz.
+    step = math.ulp(max(abs(placement), abs(start), abs(end)))
+    if 1.0 / rate < _MIN_STEPS_PER_SAMPLE * step:
+        raise ValueError(
+            f"At {rate:g} Hz one sample ({1.0 / rate:.3g} s) spans fewer than {_MIN_STEPS_PER_SAMPLE} float64 "
+            f"steps ({step:.3g} s each) of the GPS time {placement!r}, so a placement cannot be resolved to "
+            "within a sample; use a lower sampling rate or times measured from a nearer epoch."
+        )
+    slack = min(_ROUNDING_STEPS * step, _EDGE_SLACK_SAMPLES / rate)
+    if -slack <= pre < 0:
+        pre = 0.0
+    if -slack <= post < 0:
+        post = 0.0
+    if pre < 0 or post < 0:
+        key = "coa_time" if params.get("coa_time") is not None else "peak_time"
+        raise ValueError(
+            f"{key}={placement!r} lies outside this burst's output, which runs from {placement - pre!r} "
+            f"to {placement + post!r} s (peak_time={params.get('peak_time')!r}); no segment placed by it "
+            "could hold the burst. Set coa_time inside the output -- coa_time = peak_time is the simple "
+            "choice -- or omit it."
+        )
+    return pre, post
+
 
 InclinationDependence = Literal["none", "axisymmetric", "rotating"]
 
@@ -133,6 +250,7 @@ class BurstSimulator(TransientSimulator):
     ``burst_model``           ``"sine_gaussian"``, ``"gaussian"``, ``"white_noise_burst"``, or a
                               name given in ``waveform_files``
     ``peak_time``             GPS time of the waveform's centre at the geocentre, s
+    ``coa_time``              optional placement time for segmented output, s; see below
     ``right_ascension``       rad
     ``declination``           rad
     ``polarization_angle``    rad
@@ -148,6 +266,18 @@ class BurstSimulator(TransientSimulator):
 
     A file waveform is scaled by its ``reference_distance / distance`` and by the inclination
     factors of its :class:`WaveformFile`.
+
+    **Two times, two meanings.** ``peak_time`` is the burst's physical reference, and it alone
+    positions the waveform. ``coa_time`` is the key a caller writing segmented data places every
+    transient by; it carries no physics for a burst and never moves or changes the waveform.
+    :meth:`pre_coalescence_duration` and :meth:`post_coalescence_duration` measure from it -- from
+    ``peak_time`` when it is absent -- so ``coa_time - pre`` and ``coa_time + post`` are where the
+    output starts and ends. ``coa_time = peak_time`` is the simple choice; the start of the
+    polarization buffer, or any other instant inside the output, is equally valid and gives the
+    same strain. A ``coa_time`` that is not a finite number, or that lies outside the output -- before
+    its first sample or after its end, padding included -- cannot place the event, and is refused
+    with the same ``ValueError`` by the two queries, :meth:`generate_polarizations` and
+    :meth:`simulate`, so a caller that ignores a failed query still cannot inject a cropped burst.
 
     Args:
         waveform_files: Model name -> :class:`WaveformFile`. Each file is read once, on first use.
@@ -168,11 +298,117 @@ class BurstSimulator(TransientSimulator):
             raise ValueError(f"waveform_files values must be WaveformFile instances; {wrong} are not.")
         self._waveform_files: dict[str, WaveformFile] = files
         self._file_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        self._extent_cache: OrderedDict[Any, tuple[float, float, float]] = OrderedDict()
 
     @property
     def required_params(self) -> frozenset[str]:
         """Return the keys every burst event must carry."""
         return _REQUIRED
+
+    def pre_coalescence_duration(
+        self,
+        params: Mapping[str, Any],
+        sampling_frequency: float,
+        minimum_frequency: float,
+    ) -> float:
+        """Return how long before the placement time this simulator's output starts, in seconds.
+
+        The burst counterpart of :meth:`CBCSimulator.pre_coalescence_duration
+        <gwmock_signal.simulator.CBCSimulator.pre_coalescence_duration>`, with the same call, so a
+        caller placing transients into segmented data can ask either simulator alike. For a burst
+        "coalescence" is the placement time: ``coa_time`` when the event gives one, else
+        ``peak_time``. A burst's buffer is centred on its peak, so a peak just past a segment
+        boundary has content belonging to the segment before -- up to 5.6 s of it for a
+        ``Q = 100`` sine-Gaussian at 30 Hz -- and the caller needs this answer to claim it there.
+
+        **Measured, not modelled.** The answer is read off the polarization buffer
+        :meth:`generate_polarizations` returns for this very event and sample rate, so it is exact
+        by construction for every family, including the numerical ones, and cannot drift from the
+        generator: no copy of LALSimulation's buffer-sizing rules is kept here. The cost is one
+        generation of the polarizations -- no projection -- per distinct event. At 8192 Hz that was
+        measured at about 7 ms for a draft white-noise burst, 2.8 ms for the longest buffer (a
+        91,265-sample ``Q = 100`` sine-Gaussian at 30 Hz) and under 0.3 ms for every other draft
+        family, small beside the projection :meth:`simulate` then pays. The extent is remembered
+        for the last few events, so the start and end queries and repeats for the same event share
+        one generation.
+
+        Args:
+            params: One burst event, as :meth:`simulate` takes it.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Unused, as in :meth:`generate_polarizations`; accepted so the call
+                matches the compact-binary simulator's.
+
+        Returns:
+            Seconds from the first sample :meth:`simulate` returns to the placement time,
+            including the padding the projection adds before the polarizations (see
+            :func:`~gwmock_signal.simulator._projected_duration`). Never ``None``: a burst's
+            buffer is always known, and never negative.
+
+        Raises:
+            ValueError: As :meth:`generate_polarizations`, for an event it would refuse; if
+                ``coa_time`` is given and is not a finite number; or if the placement time lies
+                outside the output (before its first sample or past its end), where no segment
+                claimed from it could hold the event as placed.
+        """
+        del minimum_frequency
+        lead, _ = self._buffer_extent(params, sampling_frequency)
+        return lead
+
+    def post_coalescence_duration(
+        self,
+        params: Mapping[str, Any],
+        sampling_frequency: float,
+        minimum_frequency: float,
+    ) -> float:
+        """Return how long after the placement time this simulator's output runs, in seconds.
+
+        The complement of :meth:`pre_coalescence_duration`, measured the same way from the same
+        buffer and remembered with it.
+
+        Args:
+            params: One burst event, as :meth:`simulate` takes it.
+            sampling_frequency: Sample rate in Hz.
+            minimum_frequency: Unused; accepted so the call matches the compact-binary simulator's.
+
+        Returns:
+            Seconds from the placement time to one sample past the last sample :meth:`simulate`
+            returns, including the projection's padding after the polarizations; never negative.
+
+        Raises:
+            ValueError: As :meth:`pre_coalescence_duration`.
+        """
+        del minimum_frequency
+        _, tail = self._buffer_extent(params, sampling_frequency)
+        return tail
+
+    def _buffer_extent(self, params: Mapping[str, Any], sampling_frequency: float) -> tuple[float, float]:
+        """Return ``(lead, tail)`` of the projected output around the placement time, in seconds."""
+        _placement_time(params)  # Refuse unusable times before paying for a generation.
+        key = _span_key(params, sampling_frequency)
+        span = self._extent_cache.get(key) if key is not None else None
+        if span is None:
+            span = self._remember(key, *self._generate(params, sampling_frequency))
+        elif key is not None:
+            self._extent_cache.move_to_end(key)
+        return _placement_extent(params, span)
+
+    def _remember(self, key: Any, hp: TimeSeries, hc: TimeSeries) -> tuple[float, float, float]:
+        """Return the polarization buffer's ``(start, end, sample_rate)``, remembering it under *key*.
+
+        Remembered per event without ``coa_time``, which generation never reads, so an event asked
+        about under several placement times, and then generated, is generated once per query run.
+        """
+        span = (
+            min(hp.t0, hc.t0),
+            max(hp.t0 + hp.n_samples / hp.sample_rate, hc.t0 + hc.n_samples / hc.sample_rate),
+            hp.sample_rate,
+        )
+        if key is not None:
+            self._extent_cache[key] = span
+            self._extent_cache.move_to_end(key)
+            if len(self._extent_cache) > _EXTENT_CACHE_SIZE:
+                self._extent_cache.popitem(last=False)
+        return span
 
     @property
     def burst_models(self) -> tuple[str, ...]:
@@ -197,8 +433,22 @@ class BurstSimulator(TransientSimulator):
             Tuple of ``(hp, hc)`` series.
 
         Raises:
-            ValueError: If ``burst_model`` is unknown or the event lacks one of its parameters.
+            ValueError: If ``burst_model`` is unknown or the event lacks one of its parameters; or
+                if the event gives a ``coa_time`` the duration queries refuse -- not a finite
+                number, or outside the projected output. The check is the queries' own, made on the
+                buffer just generated, so it costs no second generation. Without ``coa_time`` the
+                event is generated as before.
         """
+        placed = params.get("coa_time") is not None
+        if placed:
+            _placement_time(params)  # Refuse an unusable time before paying for a generation.
+        hp, hc = self._generate(params, sampling_frequency)
+        if placed:
+            _placement_extent(params, self._remember(_span_key(params, sampling_frequency), hp, hc))
+        return hp, hc
+
+    def _generate(self, params: Mapping[str, Any], sampling_frequency: float) -> tuple[TimeSeries, TimeSeries]:
+        """Return the polarizations for *params*, centred on ``peak_time``; ``coa_time`` is not read."""
         model = params["burst_model"]
         if model in PARAMETRIC_MODELS:
             return PARAMETRIC_MODELS[model](params, sampling_frequency)

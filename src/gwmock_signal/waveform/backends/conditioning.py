@@ -15,12 +15,13 @@
 
 Backends that evaluate a waveform in the *frequency domain* (with coalescence at
 the FD phase reference, ``t = 0``) use these helpers to size the analysis segment
-and place coalescence in the returned time series. Keeping the inspiral-duration
-estimate and coalescence placement here means the LAL, gwsignal and ripple backends
-promise the same inspiral headroom and use the same placement convention, so
-``FFT(TD) == FD`` holds in each. They differ only in how a duration is rounded up
-to a transform length: :func:`segment_sample_count` rounds to a power of two
-seconds, ripple to a 5-smooth sample count.
+and place coalescence in the returned time series. The inspiral-duration estimate
+and the placement convention live here so every backend shares them and
+``FFT(TD) == FD`` holds in each. The LAL and gwsignal backends apply the estimate
+from below their cutoff, taper with :func:`raised_cosine_taper`, and keep the
+remnant's merger and ringdown after coalescence; ripple applies it from its own
+taper's start and reserves a fraction of the buffer. :func:`segment_sample_count`
+rounds a duration to a power of two seconds, ripple to a 5-smooth sample count.
 """
 
 from __future__ import annotations
@@ -243,12 +244,14 @@ def coalescence_placement(
     return merger_index, -merger_index / sampling_frequency
 
 
-def condition_fd_to_td(
+def condition_fd_to_td(  # noqa: PLR0913
     hp_f: np.ndarray,
     hc_f: np.ndarray,
     n_samples: int,
     sampling_frequency: float,
     ringdown_fraction: float = DEFAULT_RINGDOWN_FRACTION,
+    *,
+    merger_index: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Inverse-FFT one-sided FD polarizations and place coalescence in the segment.
 
@@ -256,6 +259,9 @@ def condition_fd_to_td(
     ``t = 0``). Returns ``(hp_t, hc_t, epoch)`` where ``epoch`` is the time of the
     first sample relative to coalescence (negative), so the caller places
     coalescence at ``epoch + tc``.
+
+    Coalescence is placed at ``merger_index`` when given, otherwise where
+    :func:`coalescence_placement` puts it for ``ringdown_fraction``.
     """
     dt = 1.0 / sampling_frequency
     # Inverse real FFT: h(t) = irfft(h(f)) / dt (continuous-transform normalization).
@@ -265,5 +271,40 @@ def condition_fd_to_td(
     # With tc=0 coalescence lands at sample 0 and the inspiral wraps to the tail.
     # Roll it forward so coalescence sits near the segment end, leaving the inspiral
     # contiguous before it and a small ringdown pad after.
-    merger_index, epoch = coalescence_placement(n_samples, sampling_frequency, ringdown_fraction)
+    if merger_index is None:
+        merger_index, epoch = coalescence_placement(n_samples, sampling_frequency, ringdown_fraction)
+    else:
+        epoch = -merger_index / sampling_frequency
     return np.roll(hp_t, merger_index), np.roll(hc_t, merger_index), epoch
+
+
+def raised_cosine_taper(frequencies: np.ndarray, start_frequency: float, full_frequency: float) -> np.ndarray:
+    """Return a window rising from 0 at *start_frequency* to 1 at *full_frequency*, as a raised cosine.
+
+    Zero below *start_frequency* and one from *full_frequency* up, so every bin at or above
+    *full_frequency* keeps its value exactly. A raised cosine (Hann edge) rather than a step or a
+    linear ramp because its value and first derivative are continuous at both ends: a step's inverse
+    transform rings with a 1/t tail that the periodic transform folds back across the whole buffer.
+    LALSimulation conditions frequency-domain waveforms with the same window
+    (``0.5 - 0.5 cos(pi (f - f_start) / (f_min - f_start))``).
+
+    Args:
+        frequencies: Frequencies to evaluate the window at, in Hz.
+        start_frequency: Where the window starts rising from zero, in Hz.
+        full_frequency: Where it reaches one, in Hz; must exceed *start_frequency*.
+
+    Returns:
+        The window, with the shape of *frequencies*.
+
+    Raises:
+        ValueError: If *full_frequency* does not exceed *start_frequency*, or *start_frequency* is
+            negative.
+    """
+    if not 0.0 <= start_frequency < full_frequency:
+        raise ValueError(
+            f"the taper must rise over a non-empty band starting at or above 0 Hz; got "
+            f"[{start_frequency}, {full_frequency}] Hz."
+        )
+    frequencies = np.asarray(frequencies, dtype=float)
+    ramp = np.clip((frequencies - start_frequency) / (full_frequency - start_frequency), 0.0, 1.0)
+    return np.where(frequencies < start_frequency, 0.0, 0.5 - 0.5 * np.cos(np.pi * ramp))

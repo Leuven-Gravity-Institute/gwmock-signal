@@ -248,3 +248,15 @@ def test_et_preset_geometry_matches_lal_and_the_published_design() -> None:
     scale = max(float(np.max(np.abs(response))) for response in responses)
     residual = float(np.max(np.abs(sum(responses)))) / scale
     assert residual < 2e-2, f"null-stream residual {residual:.2e} is too large for a closed triangle"
+
+
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_a_detector_beyond_the_padding_bound_is_refused_by_both_branches(earth_rotation: bool) -> None:
+    """A custom detector 90 km up needs more padding than either device branch allocates.
+
+    The static branch's circular phase shift would wrap the delayed signal round the padded buffer;
+    only the rotating branch refused it before.
+    """
+    high = dataclasses.replace(_et_like(), latitude_rad=0.0, elevation_m=90_000.0)
+    with pytest.raises(ValueError, match="beyond Earth's equatorial radius"):
+        _batch([high], earth_rotation=earth_rotation)

@@ -21,6 +21,7 @@ from gwmock_signal.projection.network import (
     _CONSTANT_PATTERN_WARN_SECONDS,
     project_polarizations_to_network,
 )
+from gwmock_signal.projection.resampling import edge_padding
 
 
 def _uniform_series(n: int = 128, fs: float = 4096.0, t0: float = 100.0) -> TimeSeries:
@@ -213,9 +214,28 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
     assert mock_antenna_pattern.call_count == len(names)
 
 
+def _zero_padded(series: TimeSeries, pad: int) -> TimeSeries:
+    """Return *series* with *pad* zeros at each end, on the same sample lattice."""
+    dt = float(series.dt.value)
+    return TimeSeries(
+        np.pad(np.asarray(series.value, dtype=float), (pad, pad)),
+        t0=float(series.t0.value) - pad * dt,
+        sample_rate=float(series.sample_rate.value),
+    )
+
+
 @pytest.mark.requires_gwpy
 def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
-    """The direct-LAL projection path matches the previous PyCBC detector result."""
+    """The direct-LAL projection path matches PyCBC's detector response over the padded span.
+
+    The projection returns each detector over the input's span extended by ``edge_padding`` samples
+    at each end, starting that many samples before the input, so the delay cannot move signal out
+    of the buffer. The reference is PyCBC's delay and antenna pattern applied to the input
+    zero-padded to that same span: with the padding wider than any delay, PyCBC's circular shift of
+    the padded input is the linear shift the delay physically makes, so it has data in the padding
+    too and every output sample -- inside the input span and in the padding the delay spills into --
+    is compared, aligned by the documented start rather than by search.
+    """
     n = 1024
     fs = 4096.0
     t0 = 1126259462.4 - 0.125
@@ -236,10 +256,18 @@ def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
         earth_rotation=False,
         **kwargs,
     )
-    expected = _project_with_pycbc_reference(hp, hc, detector_names, **kwargs)
+    pad = edge_padding(fs)
+    expected = _project_with_pycbc_reference(_zero_padded(hp, pad), _zero_padded(hc, pad), detector_names, **kwargs)
 
+    # Earth's radius over c is the largest delay any ground-based detector has; the padding must
+    # exceed it, or the padded reference would wrap the delayed signal round as the old one did.
+    assert pad > 6.4e6 / 299792458.0 * fs
     for name in detector_names:
-        np.testing.assert_allclose(projected[name].value, expected[name], rtol=1e-10, atol=1e-12)
+        output = projected[name]
+        # The documented placement: the input start minus the padding, the input length plus both.
+        assert float(output.t0) == pytest.approx(t0 - pad / fs, abs=1e-3 / fs)
+        assert len(output.value) == n + 2 * pad
+        np.testing.assert_allclose(output.value, expected[name], rtol=1e-10, atol=1e-12)
 
 
 @pytest.mark.requires_gwpy
@@ -263,8 +291,10 @@ def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
             polarization_angle=0.0,
             earth_rotation=False,
         )
-    rms_out = float(np.sqrt(np.mean(out["H1"].value ** 2)))
-    rms_in = float(np.sqrt(np.mean(signal**2)))
+    # Summed rather than averaged: the output is padded at both ends, so a mean over it would be
+    # diluted by the padding rather than measuring what the shift retained.
+    rms_out = float(np.sqrt(np.sum(out["H1"].value ** 2)))
+    rms_in = float(np.sqrt(np.sum(signal**2)))
     assert abs(rms_out / rms_in - 1.0) < 1e-4
 
 
@@ -290,9 +320,12 @@ def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
             polarization_angle=0.0,
             earth_rotation=False,
         )
-    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    # The projection shifts the zero-padded series, so the reference does too.
+    pad = edge_padding(fs)
+    padded = np.pad(signal, (pad, pad))
+    freqs = np.fft.rfftfreq(n + 2 * pad, d=1.0 / fs)
     phase = np.exp(-2j * np.pi * freqs * delay)
-    ref = np.fft.irfft(np.fft.rfft(signal) * phase, n=n)
+    ref = np.fft.irfft(np.fft.rfft(padded) * phase, n=n + 2 * pad)
     np.testing.assert_allclose(out["H1"].value, ref, rtol=1e-10, atol=1e-12)
 
 
@@ -569,9 +602,10 @@ class TestTheDeviceBackend:
             "H1"
         ]
 
-        assert device.t0 == 1.4e9
+        pad = edge_padding(512.0)
+        assert device.t0 == 1.4e9 - pad / 512.0
         assert device.sample_rate == 512.0
-        assert len(device.value) == len(polarizations["plus"].value)
+        assert len(device.value) == len(polarizations["plus"].value) + 2 * pad
 
     @pytest.mark.requires_gwpy
     def test_the_device_kernel_is_what_runs(self):
@@ -755,8 +789,11 @@ class TestTheDeviceBackend:
             )
         )
 
-        peak = float(np.max(np.abs(reference.value)))
-        worst = float(np.max(np.abs(degraded - reference.value))) / peak
+        # The primitive is called on the unpadded input, so it is compared on the input's span.
+        pad = edge_padding(512.0)
+        within = reference.value[pad : pad + len(plus)]
+        peak = float(np.max(np.abs(within)))
+        worst = float(np.max(np.abs(degraded - within))) / peak
         assert worst > 1e-4, (
             f"32-bit output differed from the 64-bit host path by only {worst:.3e} of peak, so the "
             f"guard is refusing something harmless and its message overstates the hazard"
@@ -788,3 +825,34 @@ def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool)
         assert np.array_equal(native[name].value, gwpy[name].value)
         assert native[name].t0 == gwpy[name].t0
         assert native[name].name == name
+
+
+@pytest.mark.requires_gwpy
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_a_detector_beyond_the_padding_bound_is_refused_on_both_branches(earth_rotation: bool) -> None:
+    """A custom detector 90 km up lies outside the delay bound the padding is sized for.
+
+    Both branches project onto a buffer padded for a terrestrial delay; past it the rotating branch's
+    resampling would read past the padding, and the fixed-pattern branch's circular phase shift would
+    wrap signal round from one end to the other. Only the rotating branch refused it before.
+    """
+    from gwmock_signal.detector import CustomDetector
+
+    high = CustomDetector(
+        name="X1",
+        latitude_rad=0.0,
+        longitude_rad=0.0,
+        elevation_m=90_000.0,
+        xarm_azimuth_rad=0.0,
+        yarm_azimuth_rad=1.5708,
+    )
+    series = _uniform_series()
+    with pytest.raises(ValueError, match="beyond Earth's equatorial radius"):
+        project_polarizations_to_network(
+            {"plus": series, "cross": series},
+            [high],
+            right_ascension=0.1,
+            declination=0.2,
+            polarization_angle=0.3,
+            earth_rotation=earth_rotation,
+        )

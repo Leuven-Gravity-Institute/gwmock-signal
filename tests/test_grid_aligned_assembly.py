@@ -111,11 +111,12 @@ def test_off_lattice_paths_agree_away_from_buffer_edges() -> None:
     )
     near_edge = np.zeros(aligned.size, dtype=bool)
     # Either kernel can see a cut-off edge from up to the projection's own edge padding away:
-    # its half-width plus the largest geocentre delay the device shift adds to it.
+    # its half-width plus the largest geocentre delay the device shift adds to it. The cut-off
+    # edges are the waveform's, which sit that same padding inside each end of the batch's buffer.
     half_width = edge_padding(_FS)
     n_samples = batch.strain.shape[-1]
     for start in batch.start_index:
-        for edge in (start, start + n_samples - 1):
+        for edge in (start + half_width, start + n_samples - 1 - half_width):
             near_edge[max(edge - half_width, 0) : edge + half_width + 1] = True
     scale = np.max(np.abs(aligned))
     assert scale > 0.0

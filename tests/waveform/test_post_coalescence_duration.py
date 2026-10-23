@@ -96,24 +96,31 @@ def test_the_two_sides_account_for_the_whole_buffer(params):
 
 
 @pytest.mark.requires_lalsuite
-def test_the_tail_is_large_enough_that_no_caller_should_guess_it():
-    """A constant would be wrong by orders of magnitude -- a magnitude pin, nothing more.
+def test_the_lal_tail_holds_the_remnant_ringdown_not_a_fraction_of_the_buffer():
+    """The LAL tail is set by the remnant, so it does not grow with a long inspiral.
 
-    **This does not discriminate a post/pre swap**, and its earlier docstring implied it did: the
-    ratio is roughly the same on both sides (~64 here, ~64 for pre), so returning the pre value
-    would satisfy it unchanged. What actually catches that is the end-match test above, which
-    compares the promise against generation. Kept because it pins the *scale* -- a caller
-    substituting a small constant truncates the BNS case by tens of seconds -- and because the
-    scale is the reason the query exists at all.
+    It used to be a fixed tenth of the buffer -- 0.4 s for a 4 s binary-black-hole buffer and tens
+    of seconds for a binary neutron star -- so a heavy remnant's ringdown, which is longer while its
+    buffer is shorter, was the case it served worst. Checked against LALSimulation's own merger and
+    ringdown bounds, and against a binary neutron star whose buffer is hundreds of times longer.
     """
+    lal = pytest.importorskip("lal")
+    lalsimulation = pytest.importorskip("lalsimulation")
     backend = _lal_backend()
 
     bbh = backend.post_coalescence_duration("IMRPhenomD", 2048.0, 20.0, **_BBH)
     bns = backend.post_coalescence_duration("IMRPhenomD", 2048.0, 20.0, **_BNS)
+    bns_lead = backend.pre_coalescence_duration("IMRPhenomD", 2048.0, 20.0, **_BNS)
 
     assert bbh is not None
     assert bns is not None
-    assert bns > 10.0 * bbh, (bbh, bns)
+    assert bns_lead is not None
+    m1, m2 = _BBH["mass1"] * lal.MSUN_SI, _BBH["mass2"] * lal.MSUN_SI
+    remnant = lalsimulation.SimInspiralMergeTimeBound(m1, m2) + lalsimulation.SimInspiralRingdownTimeBound(
+        m1 + m2, lalsimulation.SimInspiralFinalBlackHoleSpinBound(0.0, 0.0)
+    )
+    assert bbh > remnant
+    assert bns < 0.05 * bns_lead, (bns, bns_lead)
 
 
 def test_a_backend_that_cannot_say_returns_none_rather_than_zero():

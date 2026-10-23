@@ -26,22 +26,27 @@ name them, and so should anything that cites the tables.
     The LAL figures on this page were measured when the LAL and gwsignal backends
     sized their buffer from the 0PN chirp time plus a flat 2 s. They now use the
     1PN chirp time with a proportional margin, the estimate the ripple backend
-    uses, so some of these buffers are one power of two longer. At 1024 Hz:
+    uses, so some of these buffers are one power of two longer. They have since
+    been sized from below the cutoff, where the waveform is now tapered rather
+    than cut, and keep the merger and ringdown time the remnant needs rather than
+    a fixed tenth of the buffer, and they reserve five widths of the taper band
+    at each end for the taper's time response, so the leads below moved again
+    and the two heavier binaries' buffers doubled. At 1024 Hz:
 
     | binary   | cutoff | lead, then | lead, now | buffer, then | buffer, now |
     | -------- | ------ | ---------- | --------- | ------------ | ----------- |
-    | 30+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
-    | 25+25    | 20 Hz  | 3.600 s    | 7.200 s   | 4 s          | 8 s         |
-    | 1.4+1.35 | 30 Hz  | 57.6 s     | 115.2 s   | 64 s         | 128 s       |
-    | 2.0+1.5  | 20 Hz  | 115.2 s    | 230.4 s   | 128 s        | 256 s       |
+    | 30+25    | 20 Hz  | 3.600 s    | 13.758 s  | 4 s          | 16 s        |
+    | 25+25    | 20 Hz  | 3.600 s    | 13.679 s  | 4 s          | 16 s        |
+    | 1.4+1.35 | 30 Hz  | 57.6 s     | 124.7 s   | 64 s         | 128 s       |
+    | 2.0+1.5  | 20 Hz  | 115.2 s    | 250.8 s   | 128 s        | 256 s       |
 
-    With `ringdown_fraction` 0.2, 30+25 at 20 Hz now leads by 6.400 s. Every
+    With `ringdown_fraction` 0.2, 30+25 at 20 Hz now leads by 12.800 s. Every
     other LAL buffer quoted below is unchanged, so for 30+25 and 25+25 the
     20-to-30 Hz difference now moves the geometry as well as the content.
 
     The h² fractions below were not re-measured. The one check made is for
-    30+25 at 20 Hz with `coa_time` 0.5 s past the boundary: the current 8 s
-    buffer drops 0.33 to 0.41 percentage points less than the previous 4 s one,
+    30+25 at 20 Hz with `coa_time` 0.5 s past the boundary, made when its buffer
+    was 8 s: that buffer dropped 0.33 to 0.41 percentage points less than the previous 4 s one,
     across a 6×3×3 grid in right ascension, declination and polarization.
     Nothing on this page bounds the shift for the other binaries or offsets, so
     read their figures as measured under the previous sizing.

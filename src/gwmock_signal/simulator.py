@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.network import _project, validate_projection_backend
-from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
+from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform import WaveformBackend, WaveformFactory
 
@@ -304,7 +304,10 @@ class TransientSimulator(GWSimulator):
             detector_names: IFO codes (e.g. ``'H1'``, ``'L1'``, ``'V1'``).
             background: Optional mapping of detector name to background
                 ``TimeSeries`` (e.g. noise or zeros), the package's or GWpy's. If omitted, the projected
-                detector response is returned directly on the waveform time grid.
+                detector response is returned directly on the waveform time grid, extended at each
+                end by the padding that keeps the geocentre-to-detector delay from pushing signal
+                out of the buffer; see
+                :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
             sampling_frequency: Sample rate in Hz.
             minimum_frequency: Low-frequency cutoff in Hz.
             earth_rotation: If ``True``, evaluate antenna patterns at
@@ -368,6 +371,23 @@ class TransientSimulator(GWSimulator):
 #: complete CBC mapping got a `ValueError` about unsupported LAL parameters from the duration query
 #: while generation accepted the same input -- the query being unusable by its only intended caller.
 _PROJECTION_ONLY_PARAMETERS = frozenset({"right_ascension", "declination", "polarization_angle", "coa_time"})
+
+
+def _projected_duration(buffer_duration: float | None, sampling_frequency: float) -> float | None:
+    """Extend a polarization-buffer duration by the padding projection adds at that end.
+
+    :meth:`TransientSimulator.simulate` projects with the default kernel, which pads the
+    polarizations by :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end so
+    the geocentre-to-detector delay cannot push signal out of the buffer. The projected strain a
+    caller places therefore starts that much earlier and ends that much later than the waveform
+    backend's buffer, and a placement query answering for the buffer alone would let a segment
+    boundary crop the difference. ``None`` stays ``None``: unknown plus a constant is still unknown.
+    """
+    if buffer_duration is None:
+        return None
+    return float(buffer_duration) + edge_padding(sampling_frequency, DEFAULT_SINC_TAPS, DEFAULT_KAISER_BETA) / float(
+        sampling_frequency
+    )
 
 
 def _waveform_parameters(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -502,13 +522,18 @@ class CBCSimulator(TransientSimulator):
             backend cannot say. Treat ``None`` as *unknown*, never as zero -- see
             :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.pre_coalescence_duration`.
             Note the value is where the buffer starts, not where audible signal begins, which makes
-            it safe for placement: a segment chosen from it never crops real signal.
+            it safe for placement: a segment chosen from it never crops real signal. It includes
+            the projection's padding (see :func:`_projected_duration`), because :meth:`simulate`
+            returns the projected strain, which starts that much before the polarizations.
         """
-        return self._waveform_factory.pre_coalescence_duration(
-            self._waveform_model,
+        return _projected_duration(
+            self._waveform_factory.pre_coalescence_duration(
+                self._waveform_model,
+                sampling_frequency,
+                minimum_frequency,
+                **_waveform_parameters(params),
+            ),
             sampling_frequency,
-            minimum_frequency,
-            **_waveform_parameters(params),
         )
 
     def post_coalescence_duration(
@@ -525,10 +550,10 @@ class CBCSimulator(TransientSimulator):
         than the run itself cannot distinguish an event whose content is entirely in the past from
         one whose tail lands in the segment being written, and must generate both to find out.
 
-        **This is buffer padding, not physical ringdown.** It is a fraction of the buffer, so it
-        scales with it: a fraction of a second for a stellar-mass binary, tens of seconds for a
-        binary neutron star at the same cutoff, and longer as the cutoff falls. A caller
-        substituting a constant is not approximating it.
+        **This is what the backend keeps after coalescence, not a physical ringdown time.** It
+        depends on the backend's conditioning -- a fraction of the buffer on ripple, the remnant's
+        merger and ringdown bounds plus a taper's time response on LAL -- and ranges from a fraction
+        of a second to tens of seconds. A caller substituting a constant is not approximating it.
 
         Exposed here for the same reason as the pre side: reaching the backend through
         ``_waveform_factory`` means two private attributes across a package boundary, and a caller
@@ -543,13 +568,17 @@ class CBCSimulator(TransientSimulator):
             Seconds from coalescence to one sample past the buffer's end, always positive; or
             ``None`` when the backend cannot say. Treat ``None`` as *unknown*, never as zero --
             zero asserts the content stops at coalescence, which would discard exactly the events
-            whose tail reaches into the segment being written.
+            whose tail reaches into the segment being written. Includes the projection's padding,
+            as :meth:`pre_coalescence_duration` does and for the same reason.
         """
-        return self._waveform_factory.post_coalescence_duration(
-            self._waveform_model,
+        return _projected_duration(
+            self._waveform_factory.post_coalescence_duration(
+                self._waveform_model,
+                sampling_frequency,
+                minimum_frequency,
+                **_waveform_parameters(params),
+            ),
             sampling_frequency,
-            minimum_frequency,
-            **_waveform_parameters(params),
         )
 
     def generate_polarizations(

@@ -38,8 +38,12 @@ CANONICAL_PARAMS = {
 
 @pytest.mark.requires_lalsuite
 def test_mode_array_restricts_higher_modes() -> None:
-    """Restricting IMRPhenomXHM to (2,2) changes the waveform."""
-    backend = LALSimulationBackend()
+    """Restricting IMRPhenomXHM to (2,2) changes the waveform.
+
+    On one pinned buffer length: unpinned, the quadrupole-only waveform gets a shorter buffer, since
+    no higher harmonic enters the band before it.
+    """
+    backend = LALSimulationBackend(segment_duration=16.0)
     full = backend.generate_td_waveform("IMRPhenomXHM", **CANONICAL_PARAMS)
     dominant = backend.generate_td_waveform(
         "IMRPhenomXHM", waveform_arguments={"ModeArray": [(2, 2), (2, -2)]}, **CANONICAL_PARAMS

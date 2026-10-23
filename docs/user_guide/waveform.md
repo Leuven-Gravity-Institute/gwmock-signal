@@ -45,7 +45,9 @@ Waveform generation is split into three layers:
       constructing it raises an `ImportError` saying so; the default then falls
       back to `RippleBackend` (see below). Parameter handling is **strict**:
       only documented mass, spin, distance, inclination, and coalescence-phase
-      aliases are accepted; unknown keys raise `ValueError`.
+      aliases are accepted; unknown keys raise `ValueError`. How the
+      frequency-domain waveform becomes a time series is described under
+      [Frequency-to-time conditioning](#frequency-to-time-conditioning-lal-and-gwsignal).
 
     - **`GWSignalBackend`** — routes **frequency-domain-native** approximants
       through the LVK's forward-looking
@@ -333,6 +335,225 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
   are **not** cropped to a science segment — windowing is downstream.
 - **Reuse one `WaveformFactory`** in hot loops: construction calls
   `available_approximants()` once and can be slow on cold import.
+
+## Frequency-to-time conditioning (LAL and gwsignal)
+
+The LAL and gwsignal backends evaluate the model in the frequency domain, with
+coalescence at the frequency-domain phase reference, and inverse-transform it
+into a buffer. A periodic transform folds whatever extends past either end of
+that buffer back into it, so the buffer is sized to hold the inspiral, merger
+and ringdown, and the spectrum must not end in a step. Content a model places
+outside those — described under
+[content the buffer does not hold](#content-the-buffer-does-not-hold) — is not
+held.
+
+- **Tapered, not cut, below `minimum_frequency`.** The model is generated from a
+  start frequency below the cutoff and multiplied by a raised cosine that rises
+  from zero there to one at `minimum_frequency`. Every bin from
+  `minimum_frequency` up is the model's own value, unchanged; the content below
+  it is tapered and is part of the injected strain.
+- **Start frequency.** As LALSimulation's own conditioning chooses it: the
+  frequency with 10% more chirp time than `minimum_frequency`, or, when the
+  cutoff lies above the lowest innermost-stable-orbit frequency of a Kerr black
+  hole of the binary's mass (heavy binaries, whose band starts in the merger),
+  than that frequency instead.
+- **Before coalescence**, the buffer holds the quadrupole's chirp time from
+  where the largest harmonic the model emits enters the generated band, the
+  larger of LALSimulation's bound and this package's 1PN estimate, plus three
+  cycles and the taper's time response (one over its width). A harmonic `m`
+  reaches a frequency when the quadrupole is at `2 / m` of it, so the largest
+  `|m|` enters first. It is the largest `|m|` of an explicit `ModeArray`, and
+  otherwise of the modes LALSimulation's mode interface lists for the model by
+  default: 4 for IMRPhenomXHM, XPHM and HM, 5 for IMRPhenomTPHM and SEOBNRv4PHM,
+  2 for a quadrupole-only model such as IMRPhenomD, TaylorF2, NRTidalv2 or
+  IMRPhenomNSBH. A model known to carry higher harmonics whose modes
+  LALSimulation cannot list is sized for 5, the largest any of its models emits.
+- **After coalescence**, LALSimulation's merger and ringdown time bounds for the
+  remnant (eleven e-folds of the fundamental quasi-normal mode at the largest
+  spin the components allow), plus three cycles and the taper's time response.
+  `ringdown_fraction`, when set, is a lower bound on this as a fraction of the
+  buffer; by default no fixed fraction is used.
+- The total is rounded up to a power of two seconds; a pinned `segment_duration`
+  replaces it and keeps at least half for the inspiral.
+
+How this relates to LALSimulation's `SimInspiralTDFromFD`: the start frequency,
+the raised-cosine window, the three extra cycles and the merger and ringdown
+bounds are LALSimulation's. Two things differ, both to keep the requested band
+exactly as the model gives it. LALSimulation finishes with an eighth-order
+Butterworth high-pass at the cutoff and a time-domain taper at both ends, which
+change the band just above the cutoff; here the frequency taper sits entirely
+below it and the buffer is made long enough that its ends are already quiet. And
+the buffer reaches back for higher harmonics, which enter the band before the
+quadrupole does.
+
+**What is bounded and what is estimated.** The chirp time from the onset of the
+largest harmonic and the merger and ringdown times are LALSimulation's own
+bounds (`SimInspiralChirpTimeBound`, `SimInspiralMergeTimeBound`,
+`SimInspiralRingdownTimeBound` at `SimInspiralFinalBlackHoleSpinBound`). The
+three extra cycles and the taper's time response are estimates, sized by
+measurement. The taper's window spreads content that does not chirp through the
+taper band — the merger of a heavy, precessing binary, whose band starts there —
+for several times one over the band's width on both sides: binaries of 200 to
+360 solar masses at a 5 Hz cutoff ring at 4.5 to 5 Hz for about ten seconds
+after coalescence. Five widths are reserved at each end. Over a test set of 259
+binaries from 19 to 2612 solar masses (IMRPhenomXPHM with multibanding off,
+against references holding at least 1024 s on each side), one width left up to
+5.1e-03 of a polarization's peak outside the buffer, four 1.0e-04 and five
+7.3e-05, the smallest number meeting 1e-04 everywhere; the cost is 3% to 5% more
+generated strain than one width. Before coalescence one width already sufficed
+(under 1.5e-05); the reservation is symmetric because the window's response is.
+None of these terms bounds content a model places outside the inspiral, merger
+and ringdown; what lies past the buffer is measured below.
+
+Measured with a 5 Hz cutoff against the same tapered waveform on a buffer four
+times longer, at 512 to 4096 Hz (enough for each source's band; the rate does
+not change the IMRPhenomX results, checked at 8192 Hz on the worst cases), as
+the largest content outside the buffer as a fraction of peak strain, over equal
+and unequal masses (to 250+5 solar masses), aligned and anti-aligned spins of
+0.99, in-plane spins of 0.9, and total masses to 2612 solar masses:
+
+| Approximant                                  | Worst case outside the buffer                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| IMRPhenomD                                   | 5e-06                                                                                                                                                                                            |
+| IMRPhenomXHM                                 | 5.3e-05 (250+5)                                                                                                                                                                                  |
+| IMRPhenomXPHM                                | 1.7e-02 (250+5, spins 0.99 aligned); 5e-04 to 3e-03 at 60+30, 130+13 and 250+5 with spins of 0.99 or 0.9 in-plane; 2e-06 to 2.3e-05 at 2612 solar masses, and 1.5e-03 with spins of 0.99 aligned |
+| IMRPhenomTPHM, SEOBNRv4PHM, SEOBNRv4HM       | 6e-06                                                                                                                                                                                            |
+| IMRPhenomNSBH                                | 4.3e-05                                                                                                                                                                                          |
+| TaylorF2 (binary neutron star)               | 3.7e-05 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                  |
+| IMRPhenomPv2_NRTidalv2 (binary neutron star) | 8e-09 (20 Hz cutoff, 8192 Hz)                                                                                                                                                                    |
+
+The binary neutron stars were measured at a 20 Hz cutoff, where a reference at
+8192 Hz is affordable; at a 5 Hz cutoff only a 1024 Hz reference was, and there
+the 2.5e-04 left after coalescence is the spectrum cut at that rate's Nyquist
+frequency (the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192
+Hz).
+
+These were measured with one taper width at each end; five only lengthen the
+buffer. The IMRPhenomXPHM row is the default model, whose multibanded precession
+angles put content outside any buffer (below). With multibanding off, the same
+sources and a test set of 259 binaries leave at most 7.3e-05 outside the buffer.
+SEOBNRv5HM and SEOBNRv5PHM are not part of LALSimulation and were not checked.
+
+### Content the buffer does not hold
+
+- **IMRPhenomXPHM's multibanded precession angles.** By default IMRPhenomXPHM
+  evaluates its precession angles on a coarse frequency grid and interpolates
+  them (`PhenomXPHMThresholdMband`). The interpolation leaves the spectral phase
+  slightly non-smooth, which in time puts content at every delay, on both sides
+  of coalescence: at 250+5 solar masses with spins of 0.99 aligned and a 5 Hz
+  cutoff, 1.6e-02 of peak strain 5 s after coalescence, still 1e-04 two to four
+  thousand seconds away, and 3e-05 out to ±30000 s. It is an artefact of the
+  interpolation, not of precession — it appears with zero in-plane spin — and it
+  depends on the frequency grid: the same source generated into buffers 1, 2 and
+  4 times as long differs inside the buffer by 2e-02 to 3e-02 of peak (mismatch
+  3e-04 to 6e-04). Lengthening the buffer helps only slowly — 126 s more after
+  coalescence still leaves 1.3e-03 outside — and does not touch the grid
+  dependence. Setting `waveform_arguments={"PhenomXPHMThresholdMband": 0.0}`
+  with `PhenomXHMThresholdMband` also set to 0, reduces both by four orders of
+  magnitude or more: on this source with the buffer as sized here, the content
+  outside the buffer falls from 8.8e-03 to 8.8e-07 of peak, and the change with
+  the grid from 2e-02 to 3e-02 to 8.8e-07 at the planned buffer and 4e-11 once
+  it is twice as long. The cost is about 5 times the frequency-domain evaluation
+  time, a few percent of the time per event once projection is counted. In band
+  the two agree closely: over 50 stellar- and intermediate-mass binaries the
+  mismatch between the default and the multibanding-off waveform (the 10 km
+  full-cryogenic ET design sensitivity, 5 Hz cutoff) is 5e-08 at the median and
+  at most 5e-06 maximised over time and phase, although they differ by up to
+  6e-03 of peak in time. LALSimulation's own `SimInspiralTD` drops the content
+  after coalescence too — its buffer ends about 0.7 s after coalescence, with a
+  taper.
+- **A spectrum that ends in a step** rings with a tail falling as one over time.
+  TaylorF2 stops at its innermost stable orbit (3.7e-05 of peak outside the
+  buffer above).
+- **IMRPhenomXHM's own multibanding** (`PhenomXHMThresholdMband`, also used
+  inside IMRPhenomXPHM) leaves a much weaker component of the same kind: up to
+  5e-05 of peak outside the buffer, and a waveform that changes with the
+  frequency grid by up to 3.5e-05 of peak (mismatch at most 2.4e-09) on a 250+5
+  solar-mass binary with spins of 0.99 aligned and two heavier aligned-spin
+  binaries. With `PhenomXHMThresholdMband = 0` the grid dependence falls to
+  below 1.5e-05 of peak and to 1e-08 once the buffer is twice as long.
+
+### Recommended: turn off IMRPhenomXPHM and IMRPhenomXHM multibanding for injection data
+
+With its default multibanding, the waveform IMRPhenomXPHM returns depends on the
+length of the buffer it is generated into — and so on the segment duration of a
+simulation — and leaves content outside any buffer, as described above. For
+injection data that must not depend on how it was segmented, set both
+`PhenomXPHMThresholdMband` and `PhenomXHMThresholdMband` to 0. IMRPhenomXHM
+alone is affected far less (up to 3.5e-05 of peak, above), and setting
+`PhenomXHMThresholdMband` to 0 reduces its grid dependence too: to at most
+1.5e-05 of peak at the planned buffer and 1e-08 once the buffer is twice as
+long, on the same three binaries.
+
+- **Cost.** About 4.7 times the frequency-domain evaluation time, measured over
+  50 stellar- and intermediate-mass binaries at a 5 Hz cutoff: a few percent of
+  the time per event once projection onto the detectors is counted.
+- **Agreement in band.** Over the same 50 binaries the mismatch between the
+  default and the multibanding-off waveform (h+, 10 km full-cryogenic ET design
+  sensitivity, 5 Hz cutoff) is 5e-08 at the median and at most 5e-06 maximised
+  over time and phase.
+
+From the Python API, pass them as `waveform_arguments`, which reach the LAL
+dictionary of every call:
+
+```python
+from gwmock_signal import CBCSimulator
+from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+simulator = CBCSimulator("IMRPhenomXPHM", waveform_backend=LALSimulationBackend(f_ref=5.0))
+params = {
+    **event,  # the source parameters
+    "waveform_arguments": {
+        "PhenomXPHMThresholdMband": 0.0,
+        "PhenomXHMThresholdMband": 0.0,
+    },
+}
+strain = simulator.simulate(params, detectors, sampling_frequency=8192.0, minimum_frequency=5.0)
+```
+
+From a gwmock configuration, put them under `signal.waveform-options`, which
+gwmock passes to gwmock-signal as `waveform_arguments`:
+
+```yaml
+signal:
+    waveform-model: IMRPhenomXPHM
+    waveform-backend: lal
+    waveform-options:
+        PhenomXPHMThresholdMband: 0.0
+        PhenomXHMThresholdMband: 0.0
+```
+
+Not under `signal.waveform-arguments`: those are merged into each event's source
+parameters, which the LAL backend rejects for these keys, so they are not
+applied. The configuration above was checked end to end: the strain gwmock
+writes equals, bit for bit, the strain `CBCSimulator.simulate` returns with the
+same `waveform_arguments`, and differs from the default by 1.2e-03 of peak on a
+precessing 111+111 solar-mass binary.
+
+Sizing for the largest harmonic the model emits, rather than for `m = 3`,
+lengthens the buffers of higher-harmonic models: on a 250+5 solar mass binary
+the earlier sizing left 6.7e-03 of peak before the buffer, and 5.3e-05 is left
+now. The previous conditioning — a hard cut at the cutoff and a buffer sized for
+the inspiral above it with a fixed tenth after coalescence — put a 2302+248
+solar mass binary's 4 s buffer up to 0.34 of peak away from the same waveform on
+a buffer eight times longer, with 0.26 of peak on its first sample; tapered, its
+512 s buffer is within 1.4e-06, with 2.6e-07 on the first sample.
+
+Buffers are longer as a result, most for heavy binaries and for models with
+higher harmonics: at a 5 Hz cutoff and 8192 Hz, a set of IMRPhenomXPHM binary
+black holes spanning 14 to 1665 solar masses needs about 6.8 times the strain of
+the previous conditioning: twice what `m = 3` needed, and 5% more for five taper
+widths rather than one. With one taper width this was measured at 2.5 times the
+generation and projection time per event. Binary-neutron-star and
+neutron-star–black-hole buffers grew by 3% and 6% before the taper reservation,
+which was not re-measured on them.
+
+If LALSimulation refuses to start an approximant below the cutoff, the backend
+generates it from the cutoff and places the same taper _above_ it instead, which
+does reduce the lowest part of the band, and logs a warning. Every approximant
+tried — the IMRPhenomX, D, NSBH and NRTidalv2 families, TaylorF2, IMRPhenomTPHM
+and SEOBNRv4 — starts below the cutoff without complaint. The ripple backend has
+its own taper, described in its constructor documentation.
 
 ## Scientific notes
 
