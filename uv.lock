@@ -846,7 +846,7 @@ release = [
 requires-dist = [
     { name = "astropy", specifier = ">=7.0" },
     { name = "gwmock-data", specifier = ">=0.3.0" },
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.18.1" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.18.2" },
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.12" },
     { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
