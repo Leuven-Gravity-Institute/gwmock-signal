@@ -77,7 +77,7 @@ dev = [
   # and neither publishes a wheel for Python 3.15 yet, where the tests that need them skip.
   "gwpy>=4.1.0; python_version < '3.15'",
   "h5py>=3.16.0; python_version < '3.15'",
-  "ruff>=0.17.1",
+  "ruff>=0.17.2",
   "prek>=0.5.7",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.17.0",
