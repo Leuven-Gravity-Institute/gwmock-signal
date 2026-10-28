@@ -755,8 +755,10 @@ class TestTheDeviceBackend:
         """The guard is only worth having if 32-bit output is wrong, so measure it.
 
         Calls the primitive directly, bypassing the guard, and compares against the 64-bit host
-        result. Without this the guard's justification -- "wrong by of order a percent of peak
-        while still looking like strain" -- lives only in a docstring.
+        result. Without this the guard's justification -- "wrong by about 1e-6 of peak, over a
+        million times the 64-bit error, while still looking like strain" -- lives only in a
+        docstring. Measured 1.1e-06 over this 256 s input, where the 64-bit device path is within
+        8.6e-14; the bound below is a tenth of that, far above any 64-bit difference.
         """
         jax = pytest.importorskip("jax")
         from gwmock_signal.projection.geometry import reconstructed_geometry
@@ -794,7 +796,7 @@ class TestTheDeviceBackend:
         within = reference.value[pad : pad + len(plus)]
         peak = float(np.max(np.abs(within)))
         worst = float(np.max(np.abs(degraded - within))) / peak
-        assert worst > 1e-4, (
+        assert worst > 1e-7, (
             f"32-bit output differed from the 64-bit host path by only {worst:.3e} of peak, so the "
             f"guard is refusing something harmless and its message overstates the hazard"
         )
