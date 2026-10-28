@@ -645,3 +645,111 @@ def test_production_projection_accepts_a_non_default_kernel() -> None:
     # An invalid pair must be refused before anything is allocated.
     with pytest.raises(ValueError, match="transition"):
         project_polarizations_td_rotating(plus, cross, sinc_taps=63, kaiser_beta=32.0, **common)
+
+
+# --- Positions given as a whole sample plus a fraction ------------------------------------------------
+
+
+def _quarter_tone(whole: np.ndarray, part: np.ndarray) -> np.ndarray:
+    """A quarter-rate tone at ``whole + part``, exact at any index: it is 4-periodic in the sample."""
+    return np.cos(0.5 * np.pi * (whole % 4) + 0.5 * np.pi * part + 0.3)
+
+
+def test_device_resampling_keeps_a_fraction_apart_from_a_large_index() -> None:
+    """Near sample 2**23 a float64 position resolves only 1.9e-9 of a sample.
+
+    Given as a whole sample and a fraction, the device kernel keeps the fraction's precision and only
+    its own error remains; summed into one float64 it loses up to 1.5e-9 of the tone's amplitude.
+    """
+    import jax.numpy as jnp
+
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc
+
+    n = 1 << 23
+    samples = jnp.asarray(np.tile(_quarter_tone(np.arange(4), np.zeros(4)), n // 4))
+    whole = np.arange(n - 3000, n - 1000)
+    fraction = 0.123456789012345
+    want = _quarter_tone(whole, np.full(whole.shape, fraction))
+
+    split = np.asarray(_interpolate_uniform_sinc(samples, jnp.asarray(whole), n, fraction=fraction))
+    joined = np.asarray(_interpolate_uniform_sinc(samples, jnp.asarray(whole + fraction), n))
+
+    assert np.max(np.abs(split - want)) < 1e-11
+    assert np.max(np.abs(joined - want)) > 1e-10
+
+
+def test_device_resampling_given_apart_reproduces_exact_float_positions_bit_for_bit() -> None:
+    """Where a float64 position is exact, the same position given apart is evaluated identically."""
+    import jax.numpy as jnp
+
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc
+
+    samples = jnp.asarray(np.cos(0.37 * np.arange(512)))
+    whole = np.arange(-3, 516)  # including positions outside the series, which give zero either way
+    for fraction in (0.375, -1.625, 2.0):
+        split = np.asarray(_interpolate_uniform_sinc(samples, jnp.asarray(whole), 512, fraction=fraction))
+        joined = np.asarray(_interpolate_uniform_sinc(samples, jnp.asarray(whole + fraction), 512))
+        np.testing.assert_array_equal(split, joined)
+
+
+def test_device_resampling_refuses_a_fraction_with_a_float_index() -> None:
+    """With a fraction, the index must be whole samples: a float index would bring the rounding back."""
+    import jax.numpy as jnp
+
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc
+
+    with pytest.raises(TypeError, match="integer array"):
+        _interpolate_uniform_sinc(jnp.ones(16), jnp.arange(16.0), 16, fraction=0.5)
+
+
+def test_the_rotating_device_projection_passes_whole_samples_and_the_delay_apart(monkeypatch) -> None:
+    """The device projection hands the kernel integer positions and the delay as a separate fraction."""
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc as original
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+
+    seen = []
+
+    def recording(samples, index, n_samples, **kwargs):
+        seen.append((np.asarray(index).dtype, kwargs.get("fraction")))
+        return original(samples, index, n_samples, **kwargs)
+
+    monkeypatch.setattr("gwmock_signal.projection.jax_projection._interpolate_uniform_sinc", recording)
+    response, location = reconstructed_geometry("E1")
+    n_samples, sampling_frequency = 256, 256.0
+    project_polarizations_td_rotating(
+        np.ones(n_samples),
+        np.zeros(n_samples),
+        response=response,
+        location=location,
+        sampling_frequency=sampling_frequency,
+        n_samples=n_samples,
+        right_ascension=1.1,
+        declination=-0.3,
+        right_ascension_rate=0.0,
+        declination_rate=0.0,
+        polarization_angle=0.4,
+        gmst_start=0.5,
+        gmst_rate=7.29e-5,
+    )
+    assert len(seen) == 2
+    for dtype, fraction in seen:
+        assert np.issubdtype(dtype, np.integer)
+        assert fraction is not None
+        assert np.asarray(fraction).shape == (n_samples,)
+
+
+@pytest.mark.parametrize("fraction", [np.nan, np.inf, -np.inf, 1e300, -1e300, 0.5])
+def test_device_resampling_places_nothing_for_a_far_or_non_finite_position(fraction: float) -> None:
+    """A non-finite fraction, or a position too far out for the device's int32 index, gives zero.
+
+    Index 3 is inside the series for an ordinary fraction (0.5), so it is checked only for the others;
+    an index beyond int32 is outside whatever the fraction, and must not wrap back inside.
+    """
+    import jax.numpy as jnp
+
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc
+
+    whole = jnp.asarray(np.array([3, 2**32 + 5, -(2**32) + 5], dtype=np.int64))
+    out = np.asarray(_interpolate_uniform_sinc(jnp.ones(16), whole, 16, fraction=fraction))
+    np.testing.assert_array_equal(out[1:], np.zeros(2))
+    assert (out[0] == 0.0) == (fraction != 0.5)

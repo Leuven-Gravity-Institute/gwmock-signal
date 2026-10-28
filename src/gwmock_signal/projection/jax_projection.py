@@ -243,11 +243,17 @@ def project_polarizations_fd(  # noqa: PLR0913
     return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency
 
 
-def _interpolate_uniform_sinc(
+#: A whole sample or fraction beyond this many samples is taken as outside any series: the device kernel
+#: indexes in int32, so whole samples and carried fractions are added only below it and cannot overflow.
+_FAR = 2**29
+
+
+def _interpolate_uniform_sinc(  # noqa: PLR0913
     samples: ArrayLike,
     index: ArrayLike,
     n_samples: int,
     *,
+    fraction: ArrayLike | None = None,
     taps: int = DEFAULT_SINC_TAPS,
     beta: float = DEFAULT_KAISER_BETA,
 ) -> Array:
@@ -275,10 +281,16 @@ def _interpolate_uniform_sinc(
     would need over a hundred arrays of ``n_samples`` live at once, and device memory —
     not arithmetic — is the binding constraint on this path.
 
+    As there, a position may be given as an integer ``index`` plus a separate ``fraction``, which are
+    never added in floating point: a float64 position near sample 10**7 resolves only ~1e-9 of a
+    sample, where the fraction alone keeps its own precision.
+
     Args:
         samples: Uniformly sampled series, shape ``(n_samples,)``.
-        index: Fractional sample positions to evaluate at, any shape.
+        index: Sample positions to evaluate at, any shape: fractional, or, with ``fraction``, whole
+            numbers (an integer array).
         n_samples: Length of ``samples``.
+        fraction: Offset added to each position of ``index``, in samples; broadcastable to it.
         taps: Number of kernel taps; odd.
         beta: Kaiser window shape parameter.
 
@@ -291,7 +303,22 @@ def _interpolate_uniform_sinc(
 
     taps, beta = validate_kernel(taps, beta)
     samples = jnp.asarray(samples, dtype=jnp.float64)
-    index = jnp.asarray(index, dtype=jnp.float64)
+    if fraction is None:
+        index = jnp.asarray(index, dtype=jnp.float64)
+        base = jnp.floor(index)
+        frac = index - base
+        base_int = base.astype(jnp.int32)
+    else:
+        index = jnp.asarray(index)
+        if not jnp.issubdtype(index.dtype, jnp.integer):
+            raise TypeError(f"index must be an integer array when fraction is given, not {index.dtype}")
+        offset_samples = jnp.broadcast_to(jnp.asarray(fraction, dtype=jnp.float64), index.shape)
+        carried = jnp.floor(jnp.where(jnp.isfinite(offset_samples), offset_samples, 0.0))
+        # As on the host: a whole sample or carried fraction this far out, or a non-finite fraction, puts
+        # the position outside any series. Excluded before the sum, which then cannot overflow int32.
+        far = ~jnp.isfinite(offset_samples) | (index > _FAR) | (index < -_FAR) | (jnp.abs(carried) > _FAR)
+        base_int = jnp.where(far, -1, index.astype(jnp.int32) + jnp.where(far, 0.0, carried).astype(jnp.int32))
+        frac = jnp.where(far, 0.0, offset_samples - carried)
     half = (taps - 1) // 2
     denominator = half + 1.0
     normalisation = i0(jnp.asarray(beta, dtype=jnp.float64))
@@ -325,10 +352,6 @@ def _interpolate_uniform_sinc(
             b_kp1, b_kp2 = 2.0 * t * b_kp1 - b_kp2 + coefficient, b_kp1
         return t * b_kp1 - b_kp2 + coefficients[0]
 
-    base = jnp.floor(index)
-    frac = index - base
-    base_int = base.astype(jnp.int32)
-
     # One sine for the whole tap loop, hoisted exactly as the NumPy path does it; see
     # :func:`gwmock_signal.projection.resampling.resample_uniform_sinc` for why the reduction is
     # to [-1/2, 1/2] and not [0, 1). Worth more here than there: this path's window is a
@@ -352,12 +375,13 @@ def _interpolate_uniform_sinc(
         gathered = samples[jnp.clip(base_int + offset, 0, n_samples - 1)]
         return total + weight * gathered, weight_sum + weight
 
-    zeros = jnp.zeros_like(index)
+    zeros = jnp.zeros_like(frac)
     total, weight_sum = jax.lax.fori_loop(0, taps, _accumulate, (zeros, zeros))
 
     # Normalised to unit DC gain, matching the NumPy implementation.
     interpolated = jnp.where(weight_sum != 0.0, total / weight_sum, 0.0)
-    in_range = (index >= 0.0) & (index <= n_samples - 1)
+    # Inside [0, n - 1] when the whole part is, the last sample reached only exactly; as the NumPy path.
+    in_range = (base_int >= 0) & ((base_int < n_samples - 1) | ((base_int == n_samples - 1) & (frac == 0.0)))
     return jnp.where(in_range, interpolated, 0.0)
 
 
@@ -511,10 +535,16 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     padded_cross = jnp.pad(jnp.asarray(cross, dtype=jnp.float64), (pad, pad))
     padded_length = n_samples + 2 * pad
 
-    # Fractional sample index of t - tau(t) on the padded input grid, plus any lattice
-    # alignment the caller asked for -- one shift, one resampling.
-    index = pad + jnp.arange(n_samples, dtype=jnp.float64) - time_delays * sampling_frequency - extra_shift_samples
-    plus_shifted = _interpolate_uniform_sinc(padded_plus, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
-    cross_shifted = _interpolate_uniform_sinc(padded_cross, index, padded_length, taps=sinc_taps, beta=kaiser_beta)
+    # Sample position of t - tau(t) on the padded input grid, plus any lattice alignment the caller
+    # asked for -- one shift, one resampling. The whole sample and the shift are passed apart, as on
+    # the host path, so the shift keeps its own precision at any index.
+    index = pad + jnp.arange(n_samples, dtype=jnp.int32)
+    fraction = -time_delays * sampling_frequency - extra_shift_samples
+    plus_shifted = _interpolate_uniform_sinc(
+        padded_plus, index, padded_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+    )
+    cross_shifted = _interpolate_uniform_sinc(
+        padded_cross, index, padded_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+    )
 
     return f_plus * plus_shifted + f_cross * cross_shifted

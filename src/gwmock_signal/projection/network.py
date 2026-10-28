@@ -348,9 +348,11 @@ def _project_rotating_on_device(  # noqa: PLR0913
 
     # Refused rather than allowed to degrade. Without x64 every `jnp.asarray(..., float64)` in
     # the device path truncates to float32 and the projection still returns a plausible-looking
-    # series -- measured 2.7e-03 of peak over 256 s and 1.8e-02 over 1024 s against this
-    # function's own host path, growing with the span because GPS times lose precision first.
-    # A warning would not do: nothing downstream can tell such a series from a correct one.
+    # series -- measured 1.1e-06 to 1.4e-06 of peak over 256 s to 4096 s against this function's
+    # own host path, where the 64-bit device path is within 5.5e-13. (Before the resampling
+    # position was passed as a whole sample and a fraction, the float32 position alone made it
+    # 2.7e-03 over 256 s and 1.8e-02 over 1024 s.) A warning would not do: nothing downstream
+    # can tell such a series from a correct one.
     # Importing `ripplegw` happens to enable x64, which is why the compact-binary and
     # continuous-wave paths have never hit this; that is an accident of an unrelated import.
     if not jax.config.jax_enable_x64:
@@ -358,7 +360,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
             "backend='jax' requires JAX in 64-bit mode; call "
             'jax.config.update("jax_enable_x64", True) before projecting. In 32-bit mode the '
             "delays and sidereal angles lose the precision this projection depends on and the "
-            "result is wrong by of order a percent of peak while still looking like strain."
+            "result is wrong by about 1e-6 of peak, over a million times the 64-bit error, while "
+            "still looking like strain."
         )
 
     hp_vals = np.asarray(hp.data, dtype=float)
@@ -677,9 +680,17 @@ def _project(  # noqa: PLR0913
             # difference in padding alone.
             require_terrestrial_location(location, name=f"location of {prefix}")
             pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
-            index = pad + np.arange(len(time_array), dtype=float) - time_delays / dt
-            hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
-            hc_shifted = resample_uniform_sinc(np.pad(hc_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
+            #
+            # The whole sample and the delay are passed apart: summed in float64, a position near
+            # sample 10**7 keeps only ~1e-9 of a sample of the delay, an error that grows with the
+            # buffer and peaks where the strain is steepest. Apart, the delay keeps its own precision.
+            index, fraction = pad + np.arange(len(time_array), dtype=np.int64), -time_delays / dt
+            hp_shifted = resample_uniform_sinc(
+                np.pad(hp_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+            )
+            hc_shifted = resample_uniform_sinc(
+                np.pad(hc_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+            )
         else:
             # The same precondition as the rotating branch: the padding is sized for a terrestrial
             # delay, and the phase shift below is circular on the padded buffer, so a detector
