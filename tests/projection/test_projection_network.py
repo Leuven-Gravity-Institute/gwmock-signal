@@ -865,17 +865,16 @@ def test_the_rotating_projection_passes_whole_samples_and_the_delay_apart(monkey
 
     Summed into one float64, a position near sample 10**7 keeps only ~1e-9 of a sample of the delay.
     """
-    import gwmock_signal.projection.network as module
+    from gwmock_signal.projection.resampling import resample_uniform_sinc as original
     from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
     seen = []
-    original = module.resample_uniform_sinc
 
     def recording(samples, index, **kwargs):
         seen.append((np.asarray(index).dtype, kwargs.get("fraction")))
         return original(samples, index, **kwargs)
 
-    monkeypatch.setattr(module, "resample_uniform_sinc", recording)
+    monkeypatch.setattr("gwmock_signal.projection.network.resample_uniform_sinc", recording)
     t0 = 1_400_000_000.0
     plus = NativeTimeSeries(np.cos(0.3 * np.arange(1024)), t0=t0, sample_rate=1024.0)
     cross = NativeTimeSeries(np.zeros(1024), t0=t0, sample_rate=1024.0)

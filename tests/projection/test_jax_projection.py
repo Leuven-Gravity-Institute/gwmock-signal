@@ -704,19 +704,19 @@ def test_device_resampling_refuses_a_fraction_with_a_float_index() -> None:
 
 def test_the_rotating_device_projection_passes_whole_samples_and_the_delay_apart(monkeypatch) -> None:
     """The device projection hands the kernel integer positions and the delay as a separate fraction."""
-    import gwmock_signal.projection.jax_projection as module
+    from gwmock_signal.projection.jax_projection import _interpolate_uniform_sinc as original
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
 
     seen = []
-    original = module._interpolate_uniform_sinc
 
     def recording(samples, index, n_samples, **kwargs):
         seen.append((np.asarray(index).dtype, kwargs.get("fraction")))
         return original(samples, index, n_samples, **kwargs)
 
-    monkeypatch.setattr(module, "_interpolate_uniform_sinc", recording)
+    monkeypatch.setattr("gwmock_signal.projection.jax_projection._interpolate_uniform_sinc", recording)
     response, location = reconstructed_geometry("E1")
     n_samples, sampling_frequency = 256, 256.0
-    module.project_polarizations_td_rotating(
+    project_polarizations_td_rotating(
         np.ones(n_samples),
         np.zeros(n_samples),
         response=response,
