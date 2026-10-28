@@ -138,3 +138,22 @@ def test_on_lattice_at_gps_epoch_is_exact_add():
 
     assert np.array_equal(out.value[start_index : start_index + values.size], values)
     assert np.count_nonzero(out.value) == values.size
+
+
+def test_a_long_injection_off_the_grid_keeps_its_fraction_to_its_last_sample():
+    """A long injection off the target's grid is placed with its fraction intact at its far end.
+
+    It has 2**20 samples and starts 0.1234... of a sample after the target's grid. Its positions run to
+    a million; summed in float64 with the fraction they resolve it only to about 1e-10 of a sample
+    there, which costs a quarter-rate tone about that much of its amplitude.
+    """
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+    n = 1 << 20
+    offset = 0.123456789012345
+    values = np.tile(np.cos(0.5 * np.pi * np.arange(4) + 0.3), n // 4)
+    target = NativeTimeSeries(np.zeros(n + 8), t0=0.0, sample_rate=1.0)
+    result = np.asarray(inject_strain(target, NativeTimeSeries(values, t0=offset, sample_rate=1.0)).data)
+    k = np.arange(n - 2000, n - 200)
+    want = np.cos(0.5 * np.pi * (k % 4) - 0.5 * np.pi * offset + 0.3)
+    assert np.max(np.abs(result[k] - want)) < 1e-11

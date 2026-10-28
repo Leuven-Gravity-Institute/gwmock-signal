@@ -677,9 +677,17 @@ def _project(  # noqa: PLR0913
             # difference in padding alone.
             require_terrestrial_location(location, name=f"location of {prefix}")
             pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
-            index = pad + np.arange(len(time_array), dtype=float) - time_delays / dt
-            hp_shifted = resample_uniform_sinc(np.pad(hp_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
-            hc_shifted = resample_uniform_sinc(np.pad(hc_vals, (pad, pad)), index, taps=sinc_taps, beta=kaiser_beta)
+            #
+            # The whole sample and the delay are passed apart: summed in float64, a position near
+            # sample 10**7 keeps only ~1e-9 of a sample of the delay, an error that grows with the
+            # buffer and peaks where the strain is steepest. Apart, the delay keeps its own precision.
+            index, fraction = pad + np.arange(len(time_array), dtype=np.int64), -time_delays / dt
+            hp_shifted = resample_uniform_sinc(
+                np.pad(hp_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+            )
+            hc_shifted = resample_uniform_sinc(
+                np.pad(hc_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+            )
         else:
             # The same precondition as the rotating branch: the padding is sized for a terrestrial
             # delay, and the phase shift below is circular on the padded buffer, so a detector

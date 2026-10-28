@@ -856,3 +856,37 @@ def test_a_detector_beyond_the_padding_bound_is_refused_on_both_branches(earth_r
             polarization_angle=0.3,
             earth_rotation=earth_rotation,
         )
+
+
+def test_the_rotating_projection_passes_whole_samples_and_the_delay_apart(monkeypatch) -> None:
+    """The host projection hands the kernel integer positions and the delay as a separate fraction.
+
+    Summed into one float64, a position near sample 10**7 keeps only ~1e-9 of a sample of the delay.
+    """
+    import gwmock_signal.projection.network as module
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
+    seen = []
+    original = module.resample_uniform_sinc
+
+    def recording(samples, index, **kwargs):
+        seen.append((np.asarray(index).dtype, kwargs.get("fraction")))
+        return original(samples, index, **kwargs)
+
+    monkeypatch.setattr(module, "resample_uniform_sinc", recording)
+    t0 = 1_400_000_000.0
+    plus = NativeTimeSeries(np.cos(0.3 * np.arange(1024)), t0=t0, sample_rate=1024.0)
+    cross = NativeTimeSeries(np.zeros(1024), t0=t0, sample_rate=1024.0)
+    project_polarizations_to_network(
+        {"plus": plus, "cross": cross},
+        ["H1"],
+        right_ascension=1.1,
+        declination=-0.3,
+        polarization_angle=0.4,
+        earth_rotation=True,
+    )
+    assert len(seen) == 2
+    for dtype, fraction in seen:
+        assert np.issubdtype(dtype, np.integer)
+        assert fraction is not None
+        assert np.max(np.abs(fraction)) < 1024.0 * 0.03  # a delay, not a position

@@ -140,10 +140,14 @@ def _inject(target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset:
             logger.debug("No overlap; returning copy of target.")
             return target.copy()
         # Positions from integer target indices minus one offset, rather than from per-sample GPS
-        # timestamp arrays, each of which carries float64 rounding of a sizeable fraction of a sample.
-        positions = np.arange(start_idx, end_idx + 1) - offset
+        # timestamp arrays, each of which carries float64 rounding of a sizeable fraction of a sample;
+        # the indices and the offset's fraction are passed apart, so the fraction keeps its precision
+        # to the injection's last sample.
+        whole = math.floor(offset)
         injected = np.array(target.data, copy=True)
-        injected[start_idx : end_idx + 1] += resample_uniform_sinc(values, positions)
+        injected[start_idx : end_idx + 1] += resample_uniform_sinc(
+            values, np.arange(start_idx, end_idx + 1) - whole, fraction=whole - offset
+        )
         return target.with_data(injected)
     start = round(offset)
     first = max(start, 0)
