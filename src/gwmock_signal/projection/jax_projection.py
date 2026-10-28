@@ -243,6 +243,11 @@ def project_polarizations_fd(  # noqa: PLR0913
     return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency
 
 
+#: A whole sample or fraction beyond this many samples is taken as outside any series: the device kernel
+#: indexes in int32, so whole samples and carried fractions are added only below it and cannot overflow.
+_FAR = 2**29
+
+
 def _interpolate_uniform_sinc(  # noqa: PLR0913
     samples: ArrayLike,
     index: ArrayLike,
@@ -308,9 +313,12 @@ def _interpolate_uniform_sinc(  # noqa: PLR0913
         if not jnp.issubdtype(index.dtype, jnp.integer):
             raise TypeError(f"index must be an integer array when fraction is given, not {index.dtype}")
         offset_samples = jnp.broadcast_to(jnp.asarray(fraction, dtype=jnp.float64), index.shape)
-        carried = jnp.floor(offset_samples)
-        base_int = index.astype(jnp.int32) + carried.astype(jnp.int32)
-        frac = offset_samples - carried
+        carried = jnp.floor(jnp.where(jnp.isfinite(offset_samples), offset_samples, 0.0))
+        # As on the host: a whole sample or carried fraction this far out, or a non-finite fraction, puts
+        # the position outside any series. Excluded before the sum, which then cannot overflow int32.
+        far = ~jnp.isfinite(offset_samples) | (index > _FAR) | (index < -_FAR) | (jnp.abs(carried) > _FAR)
+        base_int = jnp.where(far, -1, index.astype(jnp.int32) + jnp.where(far, 0.0, carried).astype(jnp.int32))
+        frac = jnp.where(far, 0.0, offset_samples - carried)
     half = (taps - 1) // 2
     denominator = half + 1.0
     normalisation = i0(jnp.asarray(beta, dtype=jnp.float64))
