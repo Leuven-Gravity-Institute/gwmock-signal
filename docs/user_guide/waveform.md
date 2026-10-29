@@ -328,9 +328,9 @@ The CLI `--sample-rate` flag accepts an `int`. Both represent Hertz.
   gwsignal backends evaluate the binary at masses and distance divided by a
   common factor, on a frequency grid multiplied by it, and multiply the result
   by it, which is exact for a frequency-domain model in exact arithmetic: the
-  masses enter only through `M f`. In floating point, the result differs from
-  direct generation by rounding in LAL's model: typically below 1e-12 of the
-  peak, and around 1e-11 for some binaries. Errors on other limits (tidal
+  masses enter only through `M f`. In floating point, the rescaled and direct
+  paths still differ: measured with the LAL backend, typically below 1e-12 of
+  the peak, and around 1e-11 for some binaries. Errors on other limits (tidal
   deformability above 5000, for example) still surface from LAL.
 - Series are **offset by `tc`** in the sense documented for each backend; they
   are **not** cropped to a science segment — windowing is downstream.

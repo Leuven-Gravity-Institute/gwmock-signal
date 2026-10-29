@@ -95,11 +95,11 @@ _TAPER_RESPONSE_WIDTHS = 5.0
 #: Only frequency-domain approximants evaluated in closed form belong here: the rescaling is exact
 #: for them in exact arithmetic, but a time-domain model integrated numerically is not
 #: scale-invariant to its integrator's tolerance (SEOBNRv4 differs by 2e-3). In floating point the
-#: rescaled route still differs from direct generation by rounding in LAL's model, as a fraction of
-#: each polarization's peak: for IMRPhenomNSBH over 40 binaries, median 7e-13 and largest 9e-12;
-#: for IMRPhenomD over 20, median 3e-13 and largest 2e-12. The difference varies by binary, and
-#: one 9.7 + 3.7 solar-mass IMRPhenomNSBH binary rescaled to 1.5 and to 2.0 solar masses differs
-#: by 2e-11.
+#: rescaled and direct paths through this backend still differ, as a fraction of each
+#: polarization's peak: for IMRPhenomNSBH over 40 binaries, median 7e-13 and largest 9e-12; for
+#: IMRPhenomD over 20, median 3e-13 and largest 2e-12. The difference varies by binary, and one
+#: 9.7 + 3.7 solar-mass IMRPhenomNSBH binary rescaled to 1.5 and to 2.0 solar masses differs by
+#: 2e-11.
 _LIGHTER_MASS_GUARDS: dict[str, float] = {"IMRPhenomNSBH": 3.0}
 
 
