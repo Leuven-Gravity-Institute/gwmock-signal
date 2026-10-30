@@ -185,7 +185,31 @@ still looking like strain.
 ## Scientific notes
 
 - Antenna patterns and delays follow **PyCBC/LAL** conventions, consistent with
-  many **Bilby** and **PyCBC** analyses.
+  many **Bilby** and **PyCBC** analyses, except for sidereal time (next note).
+- **Sidereal time follows the Earth's measured rotation (UT1), not UTC.** The
+  orientation of a detector on the rotating Earth is set by the Earth Rotation
+  Angle, which IAU 2000 Resolution B1.8 defines as a linear function of UT1;
+  Greenwich Mean Sidereal Time is that angle plus the accumulated precession
+  (Kaplan 2005, USNO Circular 179, eq. 2.12 and Resolution B1.8,
+  [arXiv:astro-ph/0602086](https://arxiv.org/abs/astro-ph/0602086)). UT1 is
+  measured and published by the IERS; UTC is kept within 0.9 s of it by leap
+  seconds. gwmock-signal takes sidereal time from Astropy with the IERS UT1-UTC,
+  so the simulated strain is what a detector would record. LAL's
+  `GreenwichMeanSiderealTime`, and the PyCBC and Bilby analyses built on it,
+  evaluate the same series with UT1 taken equal to UTC: compared with the IAU
+  2006 series at UT1 = UTC it agrees to 1e-7 rad, and it differs from gwmock's
+  by UT1-UTC times the Earth's rotation rate (2.2e-5 rad at GPS 1e9, where
+  UT1-UTC = -0.305 s; at most 6.6e-5 rad).
+- **What that difference does to an analysis.** Sidereal time enters the
+  projection only through the hour angle, sidereal time minus right ascension.
+  Strain simulated here is therefore exactly the strain a UTC-convention
+  pipeline computes for the injected right ascension minus (UT1-UTC) times
+  7.29e-5 rad/s: an analysis with LAL, PyCBC or Bilby recovers the right
+  ascension offset by that much (+2.2e-5 rad, about 5 arcsec, at GPS 1e9), and
+  nothing else. The waveform and the SNR are unchanged, and the antenna patterns
+  and delays are those of the offset sky position. Compare recovered and
+  injected right ascensions with this offset in mind when the comparison is at
+  arcsecond level.
 - For long signals or high precision, keep **`earth_rotation=True`** unless you
   have verified the approximation.
 
