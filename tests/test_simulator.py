@@ -222,6 +222,17 @@ class TestRegisterWaveformModel:
         params = {} if waveform_arguments is None else {"waveform_arguments": waveform_arguments}
         assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered(params) is tapered
 
+    @pytest.mark.parametrize(
+        ("approximant", "tapered"),
+        [("IMRPhenomNSBH", True), ("IMRPhenomPv2_NRTidalv2", True), ("IMRPhenomXAS", False), ("SpinTaylorT4", False)],
+    )
+    def test_only_a_measured_approximant_is_declared_tapered(self, approximant, tapered):
+        """The 1e-4 line is measured per approximant; one not measured is not taken as tapered."""
+        pytest.importorskip("lalsimulation")
+        from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+        assert LALSimulationBackend().tapers_polarizations(approximant, {}) is tapered
+
     def test_the_declaration_does_not_need_lalsuite_to_say_no(self) -> None:
         """A custom model on a mocked backend is never tapered, whatever the backend could say."""
         backend = MagicMock(spec=LALSimulationBackend)

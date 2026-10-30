@@ -345,28 +345,42 @@ class LALSimulationBackend(WaveformBackend):
         ImportError: On construction, if ``lalsuite`` is not installed.
     """
 
-    #: Options that must be zero for an approximant's buffer to count as tapered. No buffer holds all of a
-    #: model's content: the user guide's table measures what is left outside at 5e-06 of peak for
-    #: IMRPhenomD to 5.3e-05 for IMRPhenomXHM and 7.3e-05 for IMRPhenomXPHM with multibanding off. A cut of
-    #: that size adds ringing of at most its own amplitude times |sin(pi*shift)| / (pi*d) at d samples from
-    #: the cut under the exact, global oversampling, which is below what the buffer already lacks. The rule
-    #: is therefore a cut of at most 1e-4 of peak, and the one configuration far above it is IMRPhenomXPHM
-    #: with its precession angles multibanded, at up to 1.7e-02, unless that multibanding is off.
-    _UNTAPERED_UNLESS_ZERO: Final = {"IMRPhenomXPHM": ("PhenomXPHMThresholdMband",)}
+    #: The approximants measured to leave at most 1e-4 of peak outside their buffers, each with the options
+    #: that must be zero for that to hold. The user guide's table measures what is left outside: 5e-06 of
+    #: peak for IMRPhenomD, 6e-06 for IMRPhenomTPHM and the SEOBNRv4 models, 4.3e-05 for IMRPhenomNSBH,
+    #: 5.3e-05 for IMRPhenomXHM, 7.3e-05 for IMRPhenomXPHM with its precession angles not multibanded, and
+    #: for the binary-neutron-star models 3.7e-05 (TaylorF2) and 8e-09 (IMRPhenomPv2_NRTidalv2) at a 20 Hz
+    #: cutoff. A cut of that size rings by at most its own amplitude times |sin(pi*shift)| / (pi*d) at d
+    #: samples from it under the exact, global oversampling, below what the buffer already lacks; hence the
+    #: 1e-4 line. IMRPhenomXPHM with its precession angles multibanded leaves up to 1.7e-02, far above it.
+    #: An approximant not measured is not declared tapered.
+    _TAPERED_WITH_ZERO: Final = {
+        "IMRPhenomD": (),
+        "IMRPhenomTPHM": (),
+        "SEOBNRv4PHM": (),
+        "SEOBNRv4HM": (),
+        "IMRPhenomNSBH": (),
+        "IMRPhenomXHM": (),
+        "IMRPhenomXPHM": ("PhenomXPHMThresholdMband",),
+        "TaylorF2": (),
+        "IMRPhenomPv2_NRTidalv2": (),
+    }
 
     def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
-        """True unless the model leaves more than 1e-4 of peak outside the buffer.
+        """True for an approximant measured to leave at most 1e-4 of peak outside its buffer, with these options.
 
         Every buffer is conditioned from the frequency domain with a raised-cosine taper below
         ``minimum_frequency`` and sized to hold the merger and ringdown (see :meth:`generate_td_waveform`),
-        and what each model still leaves outside is measured in the user guide: at most 7.3e-05 of peak,
-        except IMRPhenomXPHM with its precession-angle multibanding on, at up to 1.7e-02, which
-        ``PhenomXPHMThresholdMband = 0`` turns off. See ``_UNTAPERED_UNLESS_ZERO`` for why 1e-4 is the line.
+        and what each model still leaves outside is measured in the user guide. ``_TAPERED_WITH_ZERO`` lists
+        the approximants measured below the 1e-4 line and why it is the line; IMRPhenomXPHM is among them
+        only with ``PhenomXPHMThresholdMband = 0``, and an approximant not listed is not declared tapered.
         Only a value equal to the number zero turns it off -- ``0``, ``0.0``, a NumPy zero or ``False``, which
         LAL's setter takes as 0 -- and a string such as ``"0"`` does not.
         """
         arguments = waveform_arguments or {}
-        return all(arguments.get(key) == 0 for key in self._UNTAPERED_UNLESS_ZERO.get(approximant, ()))
+        if approximant not in self._TAPERED_WITH_ZERO:
+            return False
+        return all(arguments.get(key) == 0 for key in self._TAPERED_WITH_ZERO[approximant])
 
     #: What a missing ``lalsuite`` stops, as named in the error.
     LAL_FEATURE = "The LAL waveform backend"

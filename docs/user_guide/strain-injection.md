@@ -248,13 +248,13 @@ result = cw_sim.simulate(
   piece cut from a longer signal: the exact interpolation is global, so the cut
   ends would ring across the whole piece. `CBCSimulator.simulate` sets it from
   the waveform backend and the waveform's options (`polarizations_tapered`):
-  True for the LALSimulation backend's approximants, which leave at most 7.3e-05
-  of peak outside their buffers (the waveform guide's table), except
-  `IMRPhenomXPHM` with its precession-angle multibanding on, which leaves up to
-  1.7e-02; set `"PhenomXPHMThresholdMband": 0.0` in `waveform_arguments` to turn
-  it off. A cut of amplitude ε rings by at most ε·|sin(πδ)|/(πd) at d samples
-  from it under the global interpolation, below the content the buffer already
-  lacks.
+  True for the LALSimulation backend's approximants measured in the waveform
+  guide's table, which leave at most 7.3e-05 of peak outside their buffers,
+  except `IMRPhenomXPHM` with its precession-angle multibanding on, which leaves
+  up to 1.7e-02; set `"PhenomXPHMThresholdMband": 0.0` in `waveform_arguments`
+  to turn it off. An approximant not measured there is not taken as tapered. A
+  cut of amplitude ε rings by at most ε·|sin(πδ)|/(πd) at d samples from it
+  under the global interpolation, below the content the buffer already lacks.
 - **Performance:** Large segments are memory-bound; avoid unnecessary copies if
   the API documents mutability (default recommendation: return a **new**
   `TimeSeries`).
