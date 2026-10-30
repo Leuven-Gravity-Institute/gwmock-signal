@@ -87,6 +87,7 @@ def inject_strains_sequential(
     injections: Sequence[TimeSeries | gwpy.timeseries.TimeSeries],
     *,
     interpolate_if_offset: bool = True,
+    tapered: bool = False,
 ) -> TimeSeries:
     """Apply ``inject_strain`` to each series in order.
 
@@ -95,6 +96,8 @@ def inject_strains_sequential(
             ``TimeSeries``.
         injections: Strain series applied in list order, of either kind.
         interpolate_if_offset: Forwarded to each ``inject_strain`` call.
+        tapered: Forwarded to each ``inject_strain`` call: whether every series in ``injections``
+            is a whole signal tapered to zero at both ends.
 
     Returns:
         Final :class:`~gwmock_signal.timeseries.TimeSeries`.
@@ -102,7 +105,7 @@ def inject_strains_sequential(
     """
     result = as_timeseries(target).copy()
     for injection in injections:
-        result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
+        result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset, tapered=tapered)
     return result
 
 

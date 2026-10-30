@@ -203,6 +203,15 @@ class TestRegisterWaveformModel:
         sim.register_waveform_model("toy_burst", _toy_registered_waveform)
         assert sim.polarizations_tapered is False
 
+    def test_the_gwsignal_backend_inherits_the_lal_conditioning_and_its_taper(self) -> None:
+        """GWSignalBackend replaces only the frequency-domain evaluation; the tapered conditioning is LAL's."""
+        pytest.importorskip("lalsimulation")
+        from gwmock_signal.waveform.backends.gwsignal import GWSignalBackend
+        from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+        assert GWSignalBackend.generate_td_waveform is LALSimulationBackend.generate_td_waveform
+        assert GWSignalBackend.tapers_polarizations is True
+
     @pytest.mark.requires_gwpy
     def test_register_waveform_model_allows_custom_callable(self) -> None:
         """A registered callable waveform can be selected by ``waveform_model``."""

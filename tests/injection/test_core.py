@@ -139,6 +139,9 @@ def test_a_tapered_injection_is_placed_accurately_up_to_nyquist(nyquist_fraction
     assert np.max(np.abs(tapered.value - expected)) <= 1e-10
     assert np.max(np.abs(untapered.value - expected)) > 1e-6
 
+    sequential = inject_strains_sequential(target, [injection], tapered=True)
+    np.testing.assert_array_equal(sequential.value, tapered.value)
+
 
 @pytest.mark.requires_gwpy
 def test_off_lattice_far_into_segment_is_skipped_without_interpolation():

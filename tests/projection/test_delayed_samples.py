@@ -213,6 +213,17 @@ def test_a_tapered_burst_near_nyquist_is_projected_to_the_exact_interpolant(back
 
 
 @pytest.mark.requires_lalsuite
+def test_the_phase_shift_branch_ignores_the_tapered_option():
+    """With ``earth_rotation=False`` the delay is an exact phase shift already, and ``tapered`` changes nothing."""
+    plus, cross = _gaussian_burst(1e-4)
+    common = {"earth_rotation": False, **SKY}
+    tapered = project_polarizations_to_network({"plus": plus, "cross": cross}, _detectors(), tapered=True, **common)
+    plain = project_polarizations_to_network({"plus": plus, "cross": cross}, _detectors(), **common)
+    for detector in _detectors():
+        np.testing.assert_array_equal(np.asarray(tapered[detector.name].data), np.asarray(plain[detector.name].data))
+
+
+@pytest.mark.requires_lalsuite
 @pytest.mark.usefixtures("_sixty_four_bit_jax")
 @pytest.mark.parametrize(
     ("earth_rotation", "backend", "tolerance"),
