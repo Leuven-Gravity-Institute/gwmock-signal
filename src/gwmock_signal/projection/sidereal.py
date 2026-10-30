@@ -55,8 +55,10 @@ and so carried up to 0.9 s of sidereal error, worth 6.7e-4 in the antenna patter
     LAL's ``XLALGreenwichMeanSiderealTime``, which PyCBC and Bilby analyses use, takes UT1 equal to
     UTC instead: it agrees with the IAU 2006 series at UT1 = UTC to 1e-7 rad, and differs from this
     module by UT1-UTC times the Earth's rotation rate (2.2e-5 rad at GPS 1e9). Sidereal time enters
-    the projection only through the hour angle, so that difference is exactly a shift of right
-    ascension: such a pipeline recovers the injected right ascension offset by it, and nothing else.
+    the projection only through the hour angle, so at any one time that difference is a shift of
+    right ascension -- of date, when the source direction is precessed: such a pipeline recovers the
+    right ascension offset by it. The shift follows UT1-UTC, which drifts by about 0.7 ms a day near
+    GPS 1e9 (4e-9 rad across a 1.8-hour signal) and steps by 1 s at a leap second.
 """
 
 from __future__ import annotations
