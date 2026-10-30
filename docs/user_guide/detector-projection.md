@@ -205,17 +205,18 @@ still looking like strain.
 - **What that difference does to an analysis.** Sidereal time enters the
   projection only through the hour angle, sidereal time minus right ascension.
   At any one time, then, strain simulated here is the strain a UTC-convention
-  pipeline computes for the right ascension minus (UT1-UTC) times 7.29e-5 rad/s:
-  an analysis with LAL, PyCBC or Bilby recovers the right ascension offset by
-  that much (+2.2e-5 rad, about 5 arcsec, at GPS 1e9), and the waveform and the
-  SNR are unchanged. The offset is fixed only as far as UT1-UTC is: it drifts
-  with it, by about 0.7 ms a day near GPS 1e9 (5e-8 rad a day, so 4e-9 rad
-  across a 1.8-hour signal, and from 2.2e-5 to 2.5e-5 rad over the following
-  month), and it steps by 7.3e-5 rad at a leap second, where UT1-UTC changes by
-  1 s. With `precess_source_direction=True` the offset applies to the right
-  ascension of date that the projection uses, not to the J2000 value passed in.
-  Compare recovered and injected right ascensions with this offset in mind when
-  the comparison is at arcsecond level.
+  pipeline computes for the right ascension shifted by the whole sidereal-time
+  difference: minus (UT1-UTC) times 7.29e-5 rad/s, to within the 1e-7 rad
+  between the two series. An analysis with LAL, PyCBC or Bilby recovers the
+  right ascension offset by that much (+2.2e-5 rad, about 5 arcsec, at GPS 1e9),
+  and the waveform and the SNR are unchanged. The offset is fixed only as far as
+  UT1-UTC is: it drifts with it, by about 0.7 ms a day near GPS 1e9 (5e-8 rad a
+  day, so 4e-9 rad across a 1.8-hour signal, and from 2.2e-5 to 2.5e-5 rad over
+  the following month), and it steps by 7.3e-5 rad at a leap second, where
+  UT1-UTC changes by 1 s. With `precess_source_direction=True` the offset
+  applies to the right ascension of date that the projection uses, not to the
+  J2000 value passed in. Compare recovered and injected right ascensions with
+  this offset in mind when the comparison is at arcsecond level.
 - For long signals or high precision, keep **`earth_rotation=True`** unless you
   have verified the approximation.
 
