@@ -198,10 +198,10 @@ class TestRegisterWaveformModel:
     def test_only_a_tapering_backend_approximant_is_declared_tapered(self) -> None:
         """The LALSimulation backend's approximants are tapered; a custom registration never is."""
         pytest.importorskip("lalsimulation")
-        assert CBCSimulator("IMRPhenomD").polarizations_tapered({}) is True
+        assert CBCSimulator("IMRPhenomD").polarizations_tapered({}, 8192.0) is True
         sim = CBCSimulator("toy_burst")
         sim.register_waveform_model("toy_burst", _toy_registered_waveform)
-        assert sim.polarizations_tapered({}) is False
+        assert sim.polarizations_tapered({}, 8192.0) is False
 
     @pytest.mark.parametrize(
         ("waveform_arguments", "tapered"),
@@ -220,7 +220,7 @@ class TestRegisterWaveformModel:
         """With its precession-angle multibanding on, IMRPhenomXPHM places content outside any buffer."""
         pytest.importorskip("lalsimulation")
         params = {} if waveform_arguments is None else {"waveform_arguments": waveform_arguments}
-        assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered(params) is tapered
+        assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered(params, 8192.0) is tapered
 
     @pytest.mark.parametrize(
         ("approximant", "tapered"),
@@ -237,7 +237,18 @@ class TestRegisterWaveformModel:
         pytest.importorskip("lalsimulation")
         from gwmock_signal.waveform.backends.lal import LALSimulationBackend
 
-        assert LALSimulationBackend().tapers_polarizations(approximant, {}) is tapered
+        assert LALSimulationBackend().tapers_polarizations(approximant, {}, sampling_frequency=8192.0) is tapered
+
+    @pytest.mark.parametrize(
+        ("rate", "tapered"), [(8192.0, True), (16384.0, True), (4096.0, False), (1024.0, False), (None, False)]
+    )
+    def test_the_binary_neutron_star_model_is_tapered_only_at_the_rate_it_was_measured_at(self, rate, tapered):
+        """Below 8192 Hz a binary neutron star's merger is cut at Nyquist, so its buffer is not tapered."""
+        pytest.importorskip("lalsimulation")
+        from gwmock_signal.waveform.backends.lal import LALSimulationBackend
+
+        backend = LALSimulationBackend()
+        assert backend.tapers_polarizations("IMRPhenomPv2_NRTidalv2", {}, sampling_frequency=rate) is tapered
 
     def test_the_declaration_does_not_need_lalsuite_to_say_no(self) -> None:
         """A custom model on a mocked backend is never tapered, whatever the backend could say."""
@@ -246,7 +257,7 @@ class TestRegisterWaveformModel:
         backend.tapers_polarizations.return_value = True
         sim = CBCSimulator(waveform_model="toy_burst", waveform_backend=backend)
         sim.register_waveform_model("toy_burst", _toy_registered_waveform)
-        assert sim.polarizations_tapered({}) is False
+        assert sim.polarizations_tapered({}, 8192.0) is False
 
     def test_the_gwsignal_backend_inherits_the_lal_conditioning_and_its_taper(self) -> None:
         """GWSignalBackend replaces only the frequency-domain evaluation; the tapered conditioning is LAL's."""

@@ -206,7 +206,13 @@ class WaveformFactory:
             return None
         return self._backend.pre_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
 
-    def tapers_polarizations(self, name: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
+    def tapers_polarizations(
+        self,
+        name: str,
+        waveform_arguments: Mapping[str, object] | None = None,
+        *,
+        sampling_frequency: float | None = None,
+    ) -> bool:
         """Return whether model *name*, with these options, produces a whole signal tapered to zero at both ends.
 
         Only a backend approximant can say so, from :meth:`WaveformBackend.tapers_polarizations`. A
@@ -220,7 +226,7 @@ class WaveformFactory:
             raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
         if self._models[name] is not self._backend_models.get(name):
             return False
-        return bool(self._backend.tapers_polarizations(name, waveform_arguments))
+        return bool(self._backend.tapers_polarizations(name, waveform_arguments, sampling_frequency=sampling_frequency))
 
     def post_coalescence_duration(
         self,

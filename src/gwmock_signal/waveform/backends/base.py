@@ -46,7 +46,13 @@ def _pop_alias(params: dict[str, object], canonical: str, *aliases: str, default
 class WaveformBackend(ABC):
     """Abstract interface for time-domain waveform generators."""
 
-    def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
+    def tapers_polarizations(
+        self,
+        approximant: str,
+        waveform_arguments: Mapping[str, object] | None = None,
+        *,
+        sampling_frequency: float | None = None,
+    ) -> bool:
         """Return whether every buffer generated with these settings falls smoothly to zero at both ends.
 
         When it does, the projection and the injection oversample it exactly before the resampling kernel
@@ -59,6 +65,8 @@ class WaveformBackend(ABC):
             approximant: The approximant name.
             waveform_arguments: The options the waveform is generated with, as in the parameters'
                 ``waveform_arguments``.
+            sampling_frequency: The rate the waveform is generated at, in Hz, where the answer depends
+                on it; ``None`` if unknown.
         """
         return False
 

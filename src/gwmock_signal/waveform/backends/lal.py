@@ -351,7 +351,8 @@ class LALSimulationBackend(WaveformBackend):
     #: 5.3e-05 for IMRPhenomXHM, 7.3e-05 for IMRPhenomXPHM with its precession angles not multibanded, and
     #: 8e-09 for IMRPhenomPv2_NRTidalv2 (a binary neutron star at a 20 Hz cutoff and 8192 Hz; at a 5 Hz cutoff
     #: only a 1024 Hz reference was affordable, whose 2.5e-04 the guide traces to that rate's Nyquist cut,
-    #: as the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192 Hz). TaylorF2 is left out: it
+    #: as the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192 Hz, so it counts as tapered only
+    #: at 8192 Hz or above: ``_MINIMUM_RATE_HZ``). TaylorF2 is left out: it
     #: stops abruptly at its innermost stable orbit, and was measured only at a 20 Hz cutoff. A cut of that size rings by at most its own amplitude times |sin(pi*shift)| / (pi*d) at d
     #: samples from it under the exact, global oversampling, below what the buffer already lacks; hence the
     #: 1e-4 line. IMRPhenomXPHM with its precession angles multibanded leaves up to 1.7e-02, far above it.
@@ -367,7 +368,17 @@ class LALSimulationBackend(WaveformBackend):
         "IMRPhenomPv2_NRTidalv2": (),
     }
 
-    def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
+    #: The lowest rate, in Hz, an approximant's bound was measured at where a lower rate cuts its spectrum at
+    #: Nyquist: a binary neutron star's merger reaches above 512 Hz, so at 1024 Hz its buffer is cut there.
+    _MINIMUM_RATE_HZ: Final = {"IMRPhenomPv2_NRTidalv2": 8192.0}
+
+    def tapers_polarizations(
+        self,
+        approximant: str,
+        waveform_arguments: Mapping[str, object] | None = None,
+        *,
+        sampling_frequency: float | None = None,
+    ) -> bool:
         """True for an approximant measured to leave at most 1e-4 of peak outside its buffer, with these options.
 
         Every buffer is conditioned from the frequency domain with a raised-cosine taper below
@@ -380,6 +391,9 @@ class LALSimulationBackend(WaveformBackend):
         """
         arguments = waveform_arguments or {}
         if approximant not in self._TAPERED_WITH_ZERO:
+            return False
+        minimum_rate = self._MINIMUM_RATE_HZ.get(approximant)
+        if minimum_rate is not None and (sampling_frequency is None or sampling_frequency < minimum_rate):
             return False
         return all(arguments.get(key) == 0 for key in self._TAPERED_WITH_ZERO[approximant])
 
