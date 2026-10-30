@@ -362,6 +362,8 @@ class LALSimulationBackend(WaveformBackend):
         and what each model still leaves outside is measured in the user guide: at most 7.3e-05 of peak,
         except IMRPhenomXPHM with its precession-angle multibanding on, at up to 1.7e-02, which
         ``PhenomXPHMThresholdMband = 0`` turns off. See ``_UNTAPERED_UNLESS_ZERO`` for why 1e-4 is the line.
+        Only a value equal to the number zero turns it off -- ``0``, ``0.0``, a NumPy zero or ``False``, which
+        LAL's setter takes as 0 -- and a string such as ``"0"`` does not.
         """
         arguments = waveform_arguments or {}
         return all(arguments.get(key) == 0 for key in self._UNTAPERED_UNLESS_ZERO.get(approximant, ()))

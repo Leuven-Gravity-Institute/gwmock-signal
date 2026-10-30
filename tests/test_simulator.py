@@ -211,6 +211,9 @@ class TestRegisterWaveformModel:
             ({"PhenomXPHMThresholdMband": 1e-3}, False),
             ({"PhenomXPHMThresholdMband": 0.0}, True),
             ({"PhenomXPHMThresholdMband": 0}, True),
+            ({"PhenomXPHMThresholdMband": np.float64(0.0)}, True),
+            ({"PhenomXPHMThresholdMband": False}, True),
+            ({"PhenomXPHMThresholdMband": "0"}, False),
         ],
     )
     def test_imrphenomxphm_is_tapered_only_with_its_precession_multibanding_off(self, waveform_arguments, tapered):
