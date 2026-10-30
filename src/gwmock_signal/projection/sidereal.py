@@ -53,8 +53,9 @@ and so carried up to 0.9 s of sidereal error, worth 6.7e-4 in the antenna patter
     uses the IERS UT1-UTC, so the strain is what a detector would record.
 
     LAL's ``XLALGreenwichMeanSiderealTime``, which PyCBC and Bilby analyses use, takes UT1 equal to
-    UTC instead: it agrees with the IAU 2006 series at UT1 = UTC to 1e-7 rad, and differs from this
-    module by UT1-UTC times the Earth's rotation rate (2.2e-5 rad at GPS 1e9). Sidereal time enters
+    UTC instead: it agrees with the IAU 2006 series at UT1 = UTC to 1e-7 rad, and exceeds this
+    module's by minus UT1-UTC times the Earth's rotation rate (+2.2e-5 rad at GPS 1e9, where UT1-UTC
+    is -0.305 s). Sidereal time enters
     the projection only through the hour angle, so at any one time that difference is a shift of
     right ascension -- of date, when the source direction is precessed: such a pipeline recovers the
     right ascension offset by it. The shift follows UT1-UTC, which drifts by about 0.7 ms a day near

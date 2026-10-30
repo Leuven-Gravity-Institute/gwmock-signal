@@ -197,9 +197,9 @@ still looking like strain.
   so the simulated strain is what a detector would record. LAL's
   `GreenwichMeanSiderealTime`, and the PyCBC and Bilby analyses built on it,
   evaluate the same series with UT1 taken equal to UTC: compared with the IAU
-  2006 series at UT1 = UTC it agrees to 1e-7 rad, and it differs from gwmock's
-  by UT1-UTC times the Earth's rotation rate (2.2e-5 rad at GPS 1e9, where
-  UT1-UTC = -0.305 s; at most 6.6e-5 rad).
+  2006 series at UT1 = UTC it agrees to 1e-7 rad, and it exceeds gwmock's by
+  minus UT1-UTC times the Earth's rotation rate (+2.2e-5 rad at GPS 1e9, where
+  UT1-UTC = -0.305 s; at most 6.6e-5 rad either way).
 - **What that difference does to an analysis.** Sidereal time enters the
   projection only through the hour angle, sidereal time minus right ascension.
   At any one time, then, strain simulated here is the strain a UTC-convention
