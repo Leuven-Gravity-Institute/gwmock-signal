@@ -349,8 +349,10 @@ class LALSimulationBackend(WaveformBackend):
     #: that must be zero for that to hold. The user guide's table measures what is left outside: 5e-06 of
     #: peak for IMRPhenomD, 6e-06 for IMRPhenomTPHM and the SEOBNRv4 models, 4.3e-05 for IMRPhenomNSBH,
     #: 5.3e-05 for IMRPhenomXHM, 7.3e-05 for IMRPhenomXPHM with its precession angles not multibanded, and
-    #: for the binary-neutron-star models 3.7e-05 (TaylorF2) and 8e-09 (IMRPhenomPv2_NRTidalv2) at a 20 Hz
-    #: cutoff. A cut of that size rings by at most its own amplitude times |sin(pi*shift)| / (pi*d) at d
+    #: 8e-09 for IMRPhenomPv2_NRTidalv2 (a binary neutron star at a 20 Hz cutoff and 8192 Hz; at a 5 Hz cutoff
+    #: only a 1024 Hz reference was affordable, whose 2.5e-04 the guide traces to that rate's Nyquist cut,
+    #: as the same source at 20 Hz leaves 1.2e-03 at 1024 Hz and 8e-09 at 8192 Hz). TaylorF2 is left out: it
+    #: stops abruptly at its innermost stable orbit, and was measured only at a 20 Hz cutoff. A cut of that size rings by at most its own amplitude times |sin(pi*shift)| / (pi*d) at d
     #: samples from it under the exact, global oversampling, below what the buffer already lacks; hence the
     #: 1e-4 line. IMRPhenomXPHM with its precession angles multibanded leaves up to 1.7e-02, far above it.
     #: An approximant not measured is not declared tapered.
@@ -362,7 +364,6 @@ class LALSimulationBackend(WaveformBackend):
         "IMRPhenomNSBH": (),
         "IMRPhenomXHM": (),
         "IMRPhenomXPHM": ("PhenomXPHMThresholdMband",),
-        "TaylorF2": (),
         "IMRPhenomPv2_NRTidalv2": (),
     }
 

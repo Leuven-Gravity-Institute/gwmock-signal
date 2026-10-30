@@ -224,7 +224,13 @@ class TestRegisterWaveformModel:
 
     @pytest.mark.parametrize(
         ("approximant", "tapered"),
-        [("IMRPhenomNSBH", True), ("IMRPhenomPv2_NRTidalv2", True), ("IMRPhenomXAS", False), ("SpinTaylorT4", False)],
+        [
+            ("IMRPhenomNSBH", True),
+            ("IMRPhenomPv2_NRTidalv2", True),
+            ("IMRPhenomXAS", False),
+            ("SpinTaylorT4", False),
+            ("TaylorF2", False),
+        ],
     )
     def test_only_a_measured_approximant_is_declared_tapered(self, approximant, tapered):
         """The 1e-4 line is measured per approximant; one not measured is not taken as tapered."""
