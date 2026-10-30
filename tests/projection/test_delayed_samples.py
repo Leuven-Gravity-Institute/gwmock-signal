@@ -190,6 +190,30 @@ def test_the_rotating_branch_keeps_every_delayed_sample(backend, duration, toler
 
 @pytest.mark.requires_lalsuite
 @pytest.mark.usefixtures("_sixty_four_bit_jax")
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+def test_a_tapered_burst_near_nyquist_is_projected_to_the_exact_interpolant(backend):
+    """Declared tapered, the 0.1 ms burst -- most of its power near Nyquist -- comes far closer to the sinc sum.
+
+    The kernel alone leaves 2.1e-04 to 1.0e-03 of peak here (the case above); oversampled exactly first,
+    1.8e-06 to 8.8e-06. What remains is the burst's own: sampled at 8192 Hz, a 0.1 ms Gaussian still has
+    4% of its peak at Nyquist, so it is not band-limited, and its exact interpolant has tails falling as
+    one over the distance that the padded buffer cuts off. A signal sampled with margin, such as the
+    2.5 ms burst above, has none to cut.
+    """
+    plus, cross = _gaussian_burst(1e-4)
+    pad = edge_padding(FS)
+    projected = project_polarizations_to_network(
+        {"plus": plus, "cross": cross}, _detectors(), earth_rotation=True, backend=backend, tapered=True, **SKY
+    )
+    for detector in _detectors():
+        expected = _rotating_reference(plus, cross, detector, pad)
+        actual = np.asarray(projected[detector.name].data)
+        peak = np.max(np.abs(expected))
+        assert np.max(np.abs(actual - expected)) < 2e-5 * peak, detector.name
+
+
+@pytest.mark.requires_lalsuite
+@pytest.mark.usefixtures("_sixty_four_bit_jax")
 @pytest.mark.parametrize(
     ("earth_rotation", "backend", "tolerance"),
     [

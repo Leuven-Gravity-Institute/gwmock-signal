@@ -343,6 +343,11 @@ class LALSimulationBackend(WaveformBackend):
         ImportError: On construction, if ``lalsuite`` is not installed.
     """
 
+    #: Every buffer is conditioned from the frequency domain with a raised-cosine taper below
+    #: ``minimum_frequency`` and sized to hold the merger and ringdown, so it falls to about 1e-6 of
+    #: its peak at both ends (see :meth:`generate_td_waveform`).
+    tapers_polarizations = True
+
     #: What a missing ``lalsuite`` stops, as named in the error.
     LAL_FEATURE = "The LAL waveform backend"
 

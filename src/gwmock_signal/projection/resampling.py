@@ -38,7 +38,12 @@ the checks that keep a detector and a shift within it.
     count and attenuation can be traded explicitly.
 
     No windowed-sinc kernel resamples accurately for signal content arbitrarily close
-    to Nyquist. The strain must be oversampled with margin; the tests quantify how much.
+    to Nyquist: the default is accurate to 0.8 x Nyquist. A whole signal tapered to zero
+    at both ends, such as a generated compact-binary waveform, is therefore oversampled
+    exactly first (``oversample_fourier``, the ``tapered`` option of the projection and of
+    injection), which puts its whole band at or below half the kernel's Nyquist frequency.
+    A piece cut from a longer signal cannot be: the exact interpolant is global, and its cut
+    ends would ring across the whole piece.
 """
 
 from __future__ import annotations
@@ -49,7 +54,9 @@ import numpy as np
 from gwmock_data.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    OVERSAMPLING_FACTOR,
     kaiser_window_chebyshev,
+    oversample_fourier,
     resample_uniform_sinc,
     validate_kernel,
 )
@@ -170,9 +177,11 @@ __all__ = [
     "DEFAULT_SINC_TAPS",
     "EARTH_RADIUS_M",
     "MAXIMUM_ALIGNMENT_SHIFT_SAMPLES",
+    "OVERSAMPLING_FACTOR",
     "SPEED_OF_LIGHT_M_S",
     "edge_padding",
     "kaiser_window_chebyshev",
+    "oversample_fourier",
     "require_shift_within_padding",
     "require_terrestrial_location",
     "resample_uniform_sinc",

@@ -200,6 +200,12 @@ class TransientSimulator(GWSimulator):
     Subclasses must implement ``generate_polarizations`` and ``required_params``.
     """
 
+    #: Whether the polarizations this simulator generates are a whole signal that falls smoothly to
+    #: zero at both ends, so the projection and the injection oversample them exactly and place them
+    #: accurately up to Nyquist. False unless a subclass knows better; see
+    #: :attr:`~gwmock_signal.waveform.backends.base.WaveformBackend.tapers_polarizations`.
+    polarizations_tapered: bool = False
+
     #: Which implementation evaluates the ``earth_rotation=True`` projection, ``"numpy"`` or
     #: ``"jax"``.
     #:
@@ -349,6 +355,7 @@ class TransientSimulator(GWSimulator):
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
+            tapered=self.polarizations_tapered,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -357,6 +364,7 @@ class TransientSimulator(GWSimulator):
                 as_timeseries(background[name]),
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
+                tapered=self.polarizations_tapered,
             )
             for name in str_names
         }
@@ -479,6 +487,15 @@ class CBCSimulator(TransientSimulator):
     def waveform_model(self) -> str:
         """PyCBC approximant or custom model name."""
         return self._waveform_model
+
+    @property
+    def polarizations_tapered(self) -> bool:  # type: ignore[override]
+        """Whether this model's buffers are whole signals tapered to zero at both ends.
+
+        True for a backend approximant whose backend's conditioning guarantees it (the LALSimulation
+        backend), and never for a custom registered model, which bypasses that conditioning.
+        """
+        return self._waveform_factory.tapers_polarizations(self._waveform_model)
 
     @property
     def required_params(self) -> frozenset[str]:

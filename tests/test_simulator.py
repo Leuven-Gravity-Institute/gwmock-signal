@@ -195,6 +195,14 @@ class TestRegisterWaveformModel:
         backend.available_approximants.return_value = []
         return CBCSimulator(waveform_model="toy_burst", waveform_backend=backend)
 
+    def test_only_a_tapering_backend_approximant_is_declared_tapered(self) -> None:
+        """The LALSimulation backend's approximants are tapered; a custom registration never is."""
+        pytest.importorskip("lalsimulation")
+        assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered is True
+        sim = CBCSimulator("toy_burst")
+        sim.register_waveform_model("toy_burst", _toy_registered_waveform)
+        assert sim.polarizations_tapered is False
+
     @pytest.mark.requires_gwpy
     def test_register_waveform_model_allows_custom_callable(self) -> None:
         """A registered callable waveform can be selected by ``waveform_model``."""

@@ -206,6 +206,22 @@ class WaveformFactory:
             return None
         return self._backend.pre_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
 
+    def tapers_polarizations(self, name: str) -> bool:
+        """Return whether model *name* produces a whole signal tapered to zero at both ends.
+
+        Only a backend approximant can say so, from :attr:`WaveformBackend.tapers_polarizations`. A
+        custom registration bypasses the backend's conditioning, so it is never taken as tapered, by
+        the same identity check as :meth:`pre_coalescence_duration`.
+
+        Raises:
+            ValueError: If ``name`` is not registered at all, matching :meth:`get_model`.
+        """
+        if name not in self._models:
+            raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
+        if self._models[name] is not self._backend_models.get(name):
+            return False
+        return bool(self._backend.tapers_polarizations)
+
     def post_coalescence_duration(
         self,
         name: str,

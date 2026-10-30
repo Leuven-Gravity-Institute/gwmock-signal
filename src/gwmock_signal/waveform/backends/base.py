@@ -45,6 +45,13 @@ def _pop_alias(params: dict[str, object], canonical: str, *aliases: str, default
 class WaveformBackend(ABC):
     """Abstract interface for time-domain waveform generators."""
 
+    #: Whether every buffer this backend generates is a whole signal that falls smoothly to zero at
+    #: both ends. When it does, the projection and the injection oversample it exactly before the
+    #: resampling kernel reads it, and place it accurately up to its Nyquist frequency rather than to
+    #: 0.8 of it. A backend sets this only if its conditioning guarantees it: the exact interpolation
+    #: is global, so a buffer cut off abruptly would ring from its ends across its whole length.
+    tapers_polarizations: bool = False
+
     @abstractmethod
     def available_approximants(self) -> list[str]:
         """Return supported time-domain approximant names."""

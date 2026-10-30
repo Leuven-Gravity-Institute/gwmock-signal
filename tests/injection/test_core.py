@@ -113,6 +113,34 @@ def test_off_lattice_injection_matches_analytic_signal(start_offset_seconds: flo
 
 
 @pytest.mark.requires_gwpy
+@pytest.mark.parametrize("nyquist_fraction", [0.9, 0.95])
+def test_a_tapered_injection_is_placed_accurately_up_to_nyquist(nyquist_fraction: float):
+    """Declared tapered, an off-lattice injection is oversampled exactly and placed to roundoff near Nyquist.
+
+    Undeclared, the same injection goes through the kernel alone, accurate only to 0.8 x Nyquist: 2e-6 off at
+    0.9 and about 1e-2 at 0.95, which this also pins so the declaration is shown to matter.
+    """
+    fs = 1024.0
+    dt = 1.0 / fs
+    target = TimeSeries(np.zeros(int(16 * fs)), t0=0.0, sample_rate=fs)
+    n_inj = 2048
+    inj_t0 = 2.0 + 0.37 * dt
+    inj_times = inj_t0 + np.arange(n_inj) * dt
+    centre = inj_t0 + 0.5 * n_inj * dt
+    sigma = 128.0 * dt
+    frequency = nyquist_fraction * 0.5 * fs
+    injection = TimeSeries(_gaussian_tone(inj_times, centre, sigma, frequency), t0=inj_t0, sample_rate=fs)
+    expected = _gaussian_tone(np.arange(len(target)) * dt, centre, sigma, frequency)
+    expected[np.abs(np.arange(len(target)) * dt - centre) > 0.5 * n_inj * dt] = 0.0
+
+    tapered = inject_strain(target, injection, tapered=True)
+    untapered = inject_strain(target, injection)
+
+    assert np.max(np.abs(tapered.value - expected)) <= 1e-10
+    assert np.max(np.abs(untapered.value - expected)) > 1e-6
+
+
+@pytest.mark.requires_gwpy
 def test_off_lattice_far_into_segment_is_skipped_without_interpolation():
     """With interpolation disabled, a fractional offset is skipped rather than snapped."""
     fs = 1024.0

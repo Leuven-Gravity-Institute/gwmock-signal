@@ -27,7 +27,9 @@ from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_ge
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    OVERSAMPLING_FACTOR,
     edge_padding,
+    oversample_fourier,
     require_terrestrial_location,
     resample_uniform_sinc,
 )
@@ -248,7 +250,9 @@ def validate_projection_backend(value: str, *, parameter: str = "backend") -> st
 
 
 @functools.lru_cache(maxsize=_KERNEL_CACHE_SIZE)
-def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sinc_taps: int, kaiser_beta: float):
+def _compiled_rotating_projection(
+    sampling_frequency: float, n_samples: int, sinc_taps: int, kaiser_beta: float, tapered: bool = False
+):
     """Return a jitted rotating projection for one segment shape, compiled once and reused.
 
     Without this the device path runs **eagerly**, dispatching every operation in the per-sample
@@ -304,6 +308,7 @@ def _compiled_rotating_projection(sampling_frequency: float, n_samples: int, sin
             gmst_rate=gmst_rate,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
+            tapered=tapered,
         )
 
     return jax.jit(_project)
@@ -322,6 +327,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     polarization_angle: float,
     sinc_taps: int,
     kaiser_beta: float,
+    tapered: bool = False,
 ) -> dict[str, TimeSeries]:
     """Run the rotating projection through the JAX primitive, one detector at a time.
 
@@ -385,7 +391,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
         )
     anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
 
-    compiled = _compiled_rotating_projection(sampling_frequency, n_samples, sinc_taps, kaiser_beta)
+    compiled = _compiled_rotating_projection(sampling_frequency, n_samples, sinc_taps, kaiser_beta, tapered)
 
     strains: dict[str, TimeSeries] = {}
     for name, prefix in detectors:
@@ -428,6 +434,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     backend: str = "numpy",
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
+    tapered: bool = False,
 ) -> dict[str, TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
@@ -502,6 +509,12 @@ def project_polarizations_to_network(  # noqa: PLR0913
         sinc_taps: Taps in the band-limited resampling kernel used by the
             ``earth_rotation=True`` branch. More taps cost arithmetic and buy accuracy.
         kaiser_beta: Kaiser window shape parameter for that kernel.
+        tapered: Whether the polarizations are a whole signal that falls smoothly to zero at both
+            ends, such as a generated compact-binary waveform. If so, the ``earth_rotation=True``
+            branch oversamples them exactly before the kernel reads them, and is accurate up to
+            their Nyquist frequency rather than to 0.8 of it. Leave it ``False`` for a piece cut
+            from a longer signal: the exact interpolation is global, and the cut ends would ring
+            across the whole piece. The ``earth_rotation=False`` branch is unaffected.
 
     Returns:
             Mapping from each detector name to the projected strain as a
@@ -527,7 +540,23 @@ def project_polarizations_to_network(  # noqa: PLR0913
         backend=backend,
         sinc_taps=sinc_taps,
         kaiser_beta=kaiser_beta,
+        tapered=tapered,
     )
+
+
+def _kernel_input(
+    hp_vals: np.ndarray, hc_vals: np.ndarray, pad: int, *, tapered: bool
+) -> tuple[int, int, np.ndarray, np.ndarray]:
+    """Return what the rotating branch's kernel reads: ``(pad, factor, plus, cross)``.
+
+    Both polarizations zero-padded as the device path pads them, and -- for a whole tapered signal --
+    oversampled exactly by ``factor``, so the kernel stays accurate up to their Nyquist frequency rather
+    than to 0.8 of it. Neither depends on the detector, so it is done once for all of them.
+    """
+    plus, cross = np.pad(hp_vals, (pad, pad)), np.pad(hc_vals, (pad, pad))
+    if not tapered:
+        return pad, 1, plus, cross
+    return pad, OVERSAMPLING_FACTOR, oversample_fourier(plus), oversample_fourier(cross)
 
 
 # PLR0915: this function was already at the 50-statement limit before the one-line call to
@@ -547,6 +576,7 @@ def _project(  # noqa: PLR0913
     sinc_taps: int,
     kaiser_beta: float,
     keep_delayed_samples: bool = True,
+    tapered: bool = False,
 ) -> dict[str, TimeSeries]:
     """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`.
 
@@ -637,6 +667,7 @@ def _project(  # noqa: PLR0913
             polarization_angle=polarization_angle,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
+            tapered=tapered,
         )
 
     hp_vals = np.asarray(hp.data, dtype=float)
@@ -650,6 +681,13 @@ def _project(  # noqa: PLR0913
     freqs_fd = np.fft.rfftfreq(n_samples, d=dt)
 
     strains: dict[str, TimeSeries] = {}
+
+    # What the rotating branch's kernel reads, prepared once for every detector.
+    kernel_input = (
+        _kernel_input(hp_vals, hc_vals, edge_padding(hp.sample_rate, sinc_taps, kaiser_beta), tapered=tapered)
+        if earth_rotation
+        else None
+    )
 
     # Per sample, not per segment: see the anchor-and-rate comment above.
     precession_offsets = time_array - input_start
@@ -679,17 +717,16 @@ def _project(  # noqa: PLR0913
             # and with the same padding, or the two paths disagree at the edges by the
             # difference in padding alone.
             require_terrestrial_location(location, name=f"location of {prefix}")
-            pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
+            pad, factor, hp_read, hc_read = kernel_input
             #
             # The whole sample and the delay are passed apart: summed in float64, a position near
             # sample 10**7 keeps only ~1e-9 of a sample of the delay, an error that grows with the
             # buffer and peaks where the strain is steepest. Apart, the delay keeps its own precision.
-            index, fraction = pad + np.arange(len(time_array), dtype=np.int64), -time_delays / dt
-            hp_shifted = resample_uniform_sinc(
-                np.pad(hp_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
-            )
-            hc_shifted = resample_uniform_sinc(
-                np.pad(hc_vals, (pad, pad)), index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+            # On an oversampled series both scale by the factor, exactly.
+            index, fraction = factor * (pad + np.arange(len(time_array), dtype=np.int64)), factor * (-time_delays / dt)
+            hp_shifted, hc_shifted = (
+                resample_uniform_sinc(series, index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta)
+                for series in (hp_read, hc_read)
             )
         else:
             # The same precondition as the rotating branch: the padding is sized for a terrestrial
