@@ -194,12 +194,14 @@ still looking like strain.
   [arXiv:astro-ph/0602086](https://arxiv.org/abs/astro-ph/0602086)). UT1 is
   measured and published by the IERS; UTC is kept within 0.9 s of it by leap
   seconds. gwmock-signal takes sidereal time from Astropy with the IERS UT1-UTC,
-  so the simulated strain is what a detector would record. LAL's
-  `GreenwichMeanSiderealTime`, and the PyCBC and Bilby analyses built on it,
-  evaluate the same series with UT1 taken equal to UTC: compared with the IAU
-  2006 series at UT1 = UTC it agrees to 1e-7 rad, and it exceeds gwmock's by
-  minus UT1-UTC times the Earth's rotation rate (+2.2e-5 rad at GPS 1e9, where
-  UT1-UTC = -0.305 s; at most 6.6e-5 rad either way).
+  so the detectors rotate with the Earth's measured rotation. (Sidereal time is
+  the mean one: nutation is not modelled.) LAL's `GreenwichMeanSiderealTime`,
+  which the PyCBC and Bilby analyses built on it use, converts GPS time to UTC
+  and evaluates its own sidereal-time series with UTC in place of UT1. It agrees
+  with the IAU 2006 series at UT1 = UTC to 1e-7 rad, so the difference from
+  gwmock's is that substitution: LAL's exceeds it by minus UT1-UTC times the
+  Earth's rotation rate (+2.2e-5 rad at GPS 1e9, where UT1-UTC = -0.305 s; at
+  most 6.6e-5 rad either way), plus the 1e-7 rad between the two series.
 - **What that difference does to an analysis.** Sidereal time enters the
   projection only through the hour angle, sidereal time minus right ascension.
   At any one time, then, strain simulated here is the strain a UTC-convention
@@ -209,11 +211,11 @@ still looking like strain.
   SNR are unchanged. The offset is fixed only as far as UT1-UTC is: it drifts
   with it, by about 0.7 ms a day near GPS 1e9 (5e-8 rad a day, so 4e-9 rad
   across a 1.8-hour signal, and from 2.2e-5 to 2.5e-5 rad over the following
-  month), and it steps by 7.3e-5 rad at a leap second, where UTC jumps by 1 s.
-  With `precess_source_direction=True` the offset applies to the right ascension
-  of date that the projection uses, not to the J2000 value passed in. Compare
-  recovered and injected right ascensions with this offset in mind when the
-  comparison is at arcsecond level.
+  month), and it steps by 7.3e-5 rad at a leap second, where UT1-UTC changes by
+  1 s. With `precess_source_direction=True` the offset applies to the right
+  ascension of date that the projection uses, not to the J2000 value passed in.
+  Compare recovered and injected right ascensions with this offset in mind when
+  the comparison is at arcsecond level.
 - For long signals or high precision, keep **`earth_rotation=True`** unless you
   have verified the approximation.
 
