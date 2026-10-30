@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import Final
 
 import numpy as np
 
@@ -343,10 +345,23 @@ class LALSimulationBackend(WaveformBackend):
         ImportError: On construction, if ``lalsuite`` is not installed.
     """
 
-    #: Every buffer is conditioned from the frequency domain with a raised-cosine taper below
-    #: ``minimum_frequency`` and sized to hold the merger and ringdown, so it falls to about 1e-6 of
-    #: its peak at both ends (see :meth:`generate_td_waveform`).
-    tapers_polarizations = True
+    #: Options that must be zero for an approximant's buffer to hold all its content. IMRPhenomXPHM's
+    #: default multibanding of its precession angles leaves content at every delay, up to 1.6e-2 of
+    #: peak outside the buffer (see :meth:`generate_td_waveform`), so its buffer is cut at both ends
+    #: unless that multibanding is off.
+    _UNTAPERED_UNLESS_ZERO: Final = {"IMRPhenomXPHM": ("PhenomXPHMThresholdMband",)}
+
+    def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
+        """True unless the model can place content outside the buffer.
+
+        Every buffer is conditioned from the frequency domain with a raised-cosine taper below
+        ``minimum_frequency`` and sized to hold the merger and ringdown, so it falls to about 1e-6 of its
+        peak at both ends (see :meth:`generate_td_waveform`). The exception is a model whose own
+        approximation places content beyond any buffer: IMRPhenomXPHM with its precession-angle
+        multibanding on, which ``PhenomXPHMThresholdMband = 0`` turns off.
+        """
+        arguments = waveform_arguments or {}
+        return all(arguments.get(key) == 0 for key in self._UNTAPERED_UNLESS_ZERO.get(approximant, ()))
 
     #: What a missing ``lalsuite`` stops, as named in the error.
     LAL_FEATURE = "The LAL waveform backend"

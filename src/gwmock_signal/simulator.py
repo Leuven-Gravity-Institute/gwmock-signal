@@ -200,11 +200,14 @@ class TransientSimulator(GWSimulator):
     Subclasses must implement ``generate_polarizations`` and ``required_params``.
     """
 
-    #: Whether the polarizations this simulator generates are a whole signal that falls smoothly to
-    #: zero at both ends, so the projection and the injection oversample them exactly and place them
-    #: accurately up to Nyquist. False unless a subclass knows better; see
-    #: :attr:`~gwmock_signal.waveform.backends.base.WaveformBackend.tapers_polarizations`.
-    polarizations_tapered: bool = False
+    def polarizations_tapered(self, params: Mapping[str, Any]) -> bool:
+        """Whether the polarizations generated for *params* fall smoothly to zero at both ends.
+
+        If so, the projection and the injection oversample them exactly and place them accurately up to
+        Nyquist. False unless a subclass knows better; see
+        :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.tapers_polarizations`.
+        """
+        return False
 
     #: Which implementation evaluates the ``earth_rotation=True`` projection, ``"numpy"`` or
     #: ``"jax"``.
@@ -355,7 +358,7 @@ class TransientSimulator(GWSimulator):
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
-            tapered=self.polarizations_tapered,
+            tapered=self.polarizations_tapered(params),
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -364,7 +367,7 @@ class TransientSimulator(GWSimulator):
                 as_timeseries(background[name]),
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
-                tapered=self.polarizations_tapered,
+                tapered=self.polarizations_tapered(params),
             )
             for name in str_names
         }
@@ -488,14 +491,14 @@ class CBCSimulator(TransientSimulator):
         """PyCBC approximant or custom model name."""
         return self._waveform_model
 
-    @property
-    def polarizations_tapered(self) -> bool:  # type: ignore[override]
-        """Whether this model's buffers are whole signals tapered to zero at both ends.
+    def polarizations_tapered(self, params: Mapping[str, Any]) -> bool:
+        """Whether this model's buffers, with the options in *params*, fall smoothly to zero at both ends.
 
-        True for a backend approximant whose backend's conditioning guarantees it (the LALSimulation
-        backend), and never for a custom registered model, which bypasses that conditioning.
+        True where the backend's conditioning guarantees it for this approximant and these
+        ``waveform_arguments`` (the LALSimulation backend, except IMRPhenomXPHM with its precession-angle
+        multibanding on), and never for a custom registered model, which bypasses that conditioning.
         """
-        return self._waveform_factory.tapers_polarizations(self._waveform_model)
+        return self._waveform_factory.tapers_polarizations(self._waveform_model, params.get("waveform_arguments"))
 
     @property
     def required_params(self) -> frozenset[str]:

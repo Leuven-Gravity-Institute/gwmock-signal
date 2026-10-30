@@ -247,7 +247,10 @@ result = cw_sim.simulate(
   and placed accurately up to its Nyquist frequency. Leave it `False` for a
   piece cut from a longer signal: the exact interpolation is global, so the cut
   ends would ring across the whole piece. `CBCSimulator.simulate` sets it from
-  the waveform backend (`polarizations_tapered`).
+  the waveform backend and the waveform's options (`polarizations_tapered`):
+  True for the LALSimulation backend's approximants, except `IMRPhenomXPHM` with
+  its precession-angle multibanding on, which places content outside any buffer;
+  set `"PhenomXPHMThresholdMband": 0.0` in `waveform_arguments` to turn it off.
 - **Performance:** Large segments are memory-bound; avoid unnecessary copies if
   the API documents mutability (default recommendation: return a **new**
   `TimeSeries`).

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -45,12 +46,21 @@ def _pop_alias(params: dict[str, object], canonical: str, *aliases: str, default
 class WaveformBackend(ABC):
     """Abstract interface for time-domain waveform generators."""
 
-    #: Whether every buffer this backend generates is a whole signal that falls smoothly to zero at
-    #: both ends. When it does, the projection and the injection oversample it exactly before the
-    #: resampling kernel reads it, and place it accurately up to its Nyquist frequency rather than to
-    #: 0.8 of it. A backend sets this only if its conditioning guarantees it: the exact interpolation
-    #: is global, so a buffer cut off abruptly would ring from its ends across its whole length.
-    tapers_polarizations: bool = False
+    def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
+        """Return whether every buffer generated with these settings falls smoothly to zero at both ends.
+
+        When it does, the projection and the injection oversample it exactly before the resampling kernel
+        reads it, and place it accurately up to its Nyquist frequency rather than to 0.8 of it. A backend
+        answers True only where its conditioning guarantees it, for the approximant and the options
+        given: the exact interpolation is global, so a buffer cut off abruptly -- or one with content its
+        model places outside it -- would ring from its ends across its whole length. False here.
+
+        Args:
+            approximant: The approximant name.
+            waveform_arguments: The options the waveform is generated with, as in the parameters'
+                ``waveform_arguments``.
+        """
+        return False
 
     @abstractmethod
     def available_approximants(self) -> list[str]:

@@ -198,10 +198,35 @@ class TestRegisterWaveformModel:
     def test_only_a_tapering_backend_approximant_is_declared_tapered(self) -> None:
         """The LALSimulation backend's approximants are tapered; a custom registration never is."""
         pytest.importorskip("lalsimulation")
-        assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered is True
+        assert CBCSimulator("IMRPhenomD").polarizations_tapered({}) is True
         sim = CBCSimulator("toy_burst")
         sim.register_waveform_model("toy_burst", _toy_registered_waveform)
-        assert sim.polarizations_tapered is False
+        assert sim.polarizations_tapered({}) is False
+
+    @pytest.mark.parametrize(
+        ("waveform_arguments", "tapered"),
+        [
+            (None, False),
+            ({}, False),
+            ({"PhenomXPHMThresholdMband": 1e-3}, False),
+            ({"PhenomXPHMThresholdMband": 0.0}, True),
+            ({"PhenomXPHMThresholdMband": 0}, True),
+        ],
+    )
+    def test_imrphenomxphm_is_tapered_only_with_its_precession_multibanding_off(self, waveform_arguments, tapered):
+        """With its precession-angle multibanding on, IMRPhenomXPHM places content outside any buffer."""
+        pytest.importorskip("lalsimulation")
+        params = {} if waveform_arguments is None else {"waveform_arguments": waveform_arguments}
+        assert CBCSimulator("IMRPhenomXPHM").polarizations_tapered(params) is tapered
+
+    def test_the_declaration_does_not_need_lalsuite_to_say_no(self) -> None:
+        """A custom model on a mocked backend is never tapered, whatever the backend could say."""
+        backend = MagicMock(spec=LALSimulationBackend)
+        backend.available_approximants.return_value = []
+        backend.tapers_polarizations.return_value = True
+        sim = CBCSimulator(waveform_model="toy_burst", waveform_backend=backend)
+        sim.register_waveform_model("toy_burst", _toy_registered_waveform)
+        assert sim.polarizations_tapered({}) is False
 
     def test_the_gwsignal_backend_inherits_the_lal_conditioning_and_its_taper(self) -> None:
         """GWSignalBackend replaces only the frequency-domain evaluation; the tapered conditioning is LAL's."""
@@ -210,7 +235,7 @@ class TestRegisterWaveformModel:
         from gwmock_signal.waveform.backends.lal import LALSimulationBackend
 
         assert GWSignalBackend.generate_td_waveform is LALSimulationBackend.generate_td_waveform
-        assert GWSignalBackend.tapers_polarizations is True
+        assert GWSignalBackend.tapers_polarizations is LALSimulationBackend.tapers_polarizations
 
     @pytest.mark.requires_gwpy
     def test_register_waveform_model_allows_custom_callable(self) -> None:
