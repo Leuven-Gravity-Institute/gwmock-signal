@@ -43,6 +43,25 @@ sidereal model, including its IERS UT1 handling, while the kernel does one multi
 Using Astropy also removes the ``dut1`` approximation rather than merely exposing it:
 Astropy applies real IERS UT1-UTC, whereas the on-device series defaulted to ``dut1 = 0``
 and so carried up to 0.9 s of sidereal error, worth 6.7e-4 in the antenna pattern.
+
+!!! note "UT1, deliberately, and not the pipelines' UTC"
+
+    The Earth's orientation is set by the Earth Rotation Angle, which IAU 2000 Resolution B1.8
+    defines as a linear function of UT1, and sidereal time is that angle plus the accumulated
+    precession (Kaplan 2005, USNO Circular 179, eq. 2.12; arXiv:astro-ph/0602086). UT1 is the
+    measured rotation; UTC is kept within 0.9 s of it by leap seconds. Sidereal time here therefore
+    uses the IERS UT1-UTC, so the detectors rotate with the Earth's measured rotation. It is the mean
+    sidereal time: nutation is not modelled (see :func:`precess_to_epoch`).
+
+    LAL's ``XLALGreenwichMeanSiderealTime``, which PyCBC and Bilby analyses use, converts GPS time to
+    UTC and evaluates its own series with UTC in place of UT1. It agrees with the IAU 2006 series at
+    UT1 = UTC to 1e-7 rad, so the difference from this module is that substitution: LAL's exceeds
+    this module's by minus UT1-UTC times the Earth's rotation rate (+2.2e-5 rad at GPS 1e9, where
+    UT1-UTC is -0.305 s), plus the 1e-7 rad between the two series. Sidereal time enters
+    the projection only through the hour angle, so at any one time that difference is a shift of
+    right ascension -- of date, when the source direction is precessed: such a pipeline recovers the
+    right ascension offset by it. The shift follows UT1-UTC, which drifts by about 0.7 ms a day near
+    GPS 1e9 (4e-9 rad across a 1.8-hour signal) and changes by 1 s at a leap second.
 """
 
 from __future__ import annotations
