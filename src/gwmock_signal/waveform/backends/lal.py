@@ -345,20 +345,23 @@ class LALSimulationBackend(WaveformBackend):
         ImportError: On construction, if ``lalsuite`` is not installed.
     """
 
-    #: Options that must be zero for an approximant's buffer to hold all its content. IMRPhenomXPHM's
-    #: default multibanding of its precession angles leaves content at every delay, up to 1.6e-2 of
-    #: peak outside the buffer (see :meth:`generate_td_waveform`), so its buffer is cut at both ends
-    #: unless that multibanding is off.
+    #: Options that must be zero for an approximant's buffer to count as tapered. No buffer holds all of a
+    #: model's content: the user guide's table measures what is left outside at 5e-06 of peak for
+    #: IMRPhenomD to 5.3e-05 for IMRPhenomXHM and 7.3e-05 for IMRPhenomXPHM with multibanding off. A cut of
+    #: that size adds ringing of at most its own amplitude times |sin(pi*shift)| / (pi*d) at d samples from
+    #: the cut under the exact, global oversampling, which is below what the buffer already lacks. The rule
+    #: is therefore a cut of at most 1e-4 of peak, and the one configuration far above it is IMRPhenomXPHM
+    #: with its precession angles multibanded, at up to 1.7e-02, unless that multibanding is off.
     _UNTAPERED_UNLESS_ZERO: Final = {"IMRPhenomXPHM": ("PhenomXPHMThresholdMband",)}
 
     def tapers_polarizations(self, approximant: str, waveform_arguments: Mapping[str, object] | None = None) -> bool:
-        """True unless the model can place content outside the buffer.
+        """True unless the model leaves more than 1e-4 of peak outside the buffer.
 
         Every buffer is conditioned from the frequency domain with a raised-cosine taper below
-        ``minimum_frequency`` and sized to hold the merger and ringdown, so it falls to about 1e-6 of its
-        peak at both ends (see :meth:`generate_td_waveform`). The exception is a model whose own
-        approximation places content beyond any buffer: IMRPhenomXPHM with its precession-angle
-        multibanding on, which ``PhenomXPHMThresholdMband = 0`` turns off.
+        ``minimum_frequency`` and sized to hold the merger and ringdown (see :meth:`generate_td_waveform`),
+        and what each model still leaves outside is measured in the user guide: at most 7.3e-05 of peak,
+        except IMRPhenomXPHM with its precession-angle multibanding on, at up to 1.7e-02, which
+        ``PhenomXPHMThresholdMband = 0`` turns off. See ``_UNTAPERED_UNLESS_ZERO`` for why 1e-4 is the line.
         """
         arguments = waveform_arguments or {}
         return all(arguments.get(key) == 0 for key in self._UNTAPERED_UNLESS_ZERO.get(approximant, ()))
