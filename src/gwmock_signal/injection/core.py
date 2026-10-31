@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
+from gwmock_data.injection import places_whole_samples
 
 from gwmock_signal.projection.resampling import OVERSAMPLING_FACTOR, oversample_fourier, resample_uniform_sinc
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
@@ -37,6 +38,7 @@ def inject_strain(
     *,
     interpolate_if_offset: bool = True,
     tapered: bool = False,
+    on_grid: bool = False,
 ) -> TimeSeries:
     """Return a new series equal to ``target`` plus ``injection`` on overlapping samples.
 
@@ -47,11 +49,12 @@ def inject_strain(
     of ``target`` takes its kernel taps from injection samples beyond that end where there are
     any.
 
-    Whether the injection is on the lattice is decided with an absolute tolerance
-    derived from the float64 resolution of the GPS timestamps
-    (:meth:`~gwmock_signal.sampling_grid.SamplingGrid.lattice_tolerance_samples`),
-    so a fractional offset is never mistaken for an aligned one however far into
-    the segment the injection starts.
+    The injection is placed at the time it carries. It is added sample for sample only when
+    rounding its offset to whole samples moves it by no more than LAL's no-op shift of 1e-4
+    samples (``gwmock_data.injection.places_whole_samples``), as LALSimulation's
+    ``XLALSimAddInjectionREAL8TimeSeries`` places an injection, or when the caller declares it
+    built on the target's lattice (``on_grid``). A few float64 steps off the lattice is a genuine
+    offset for a signal placed at its coalescence time: two steps are 0.24 µs at GPS 1e9.
 
     The target samples filled are those whose position in the injection's own sample index lies in
     ``[0, injection.n_samples - 1]``; a single off-lattice injection sample therefore fills none. If
@@ -70,15 +73,25 @@ def inject_strain(
             accurately up to its Nyquist frequency rather than to 0.8 of it. Leave it ``False``
             for a piece cut from a longer signal: the exact interpolation is global, and the
             cut ends would ring across the whole piece.
+        on_grid: Whether ``injection`` was built on the target's lattice, so that any fraction of
+            a sample in its offset is the float64 rounding of its timestamps
+            (:meth:`~gwmock_signal.sampling_grid.SamplingGrid.lattice_tolerance_samples`). It is
+            then added sample for sample.
 
     Returns:
         New :class:`~gwmock_signal.timeseries.TimeSeries` with injected strain.
 
     Raises:
-        ValueError: If either series is not one-dimensional, or the sample rates or units differ.
+        ValueError: If either series is not one-dimensional, the sample rates or units differ, or
+            ``injection`` is declared on the lattice but starts further off it than both its
+            timestamps' float64 resolution and LAL's no-op shift allow.
     """
     return _inject(
-        as_timeseries(target), as_timeseries(injection), interpolate_if_offset=interpolate_if_offset, tapered=tapered
+        as_timeseries(target),
+        as_timeseries(injection),
+        interpolate_if_offset=interpolate_if_offset,
+        tapered=tapered,
+        on_grid=on_grid,
     )
 
 
@@ -88,6 +101,7 @@ def inject_strains_sequential(
     *,
     interpolate_if_offset: bool = True,
     tapered: bool = False,
+    on_grid: bool = False,
 ) -> TimeSeries:
     """Apply ``inject_strain`` to each series in order.
 
@@ -98,6 +112,8 @@ def inject_strains_sequential(
         interpolate_if_offset: Forwarded to each ``inject_strain`` call.
         tapered: Forwarded to each ``inject_strain`` call: whether every series in ``injections``
             is a whole signal tapered to zero at both ends.
+        on_grid: Forwarded to each ``inject_strain`` call: whether every series in ``injections``
+            was built on the target's lattice.
 
     Returns:
         Final :class:`~gwmock_signal.timeseries.TimeSeries`.
@@ -105,7 +121,13 @@ def inject_strains_sequential(
     """
     result = as_timeseries(target).copy()
     for injection in injections:
-        result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset, tapered=tapered)
+        result = _inject(
+            result,
+            as_timeseries(injection),
+            interpolate_if_offset=interpolate_if_offset,
+            tapered=tapered,
+            on_grid=on_grid,
+        )
     return result
 
 
@@ -125,7 +147,12 @@ def _add_strain(background: TimeSeries, signal: np.ndarray) -> TimeSeries:
 
 
 def _inject(
-    target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset: bool, tapered: bool = False
+    target: TimeSeries,
+    injection: TimeSeries,
+    *,
+    interpolate_if_offset: bool,
+    tapered: bool = False,
+    on_grid: bool = False,
 ) -> TimeSeries:
     """Return ``target`` plus the part of ``injection`` that falls within it, as a new series."""
     for role, series in (("target", target), ("injection", injection)):
@@ -140,7 +167,7 @@ def _inject(
     values = np.asarray(injection.data)
     grid = target.grid
     offset = float(grid.index_of(injection.t0))
-    if abs(offset - round(offset)) > grid.lattice_tolerance_samples(injection.t0):
+    if not places_whole_samples(offset, grid.lattice_tolerance_samples(injection.t0), on_grid=on_grid):
         if not interpolate_if_offset:
             logger.debug("Non-integer sample offset; not interpolating; returning copy of target.")
             return target.copy()

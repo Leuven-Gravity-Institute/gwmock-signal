@@ -188,3 +188,64 @@ def test_a_long_injection_off_the_grid_keeps_its_fraction_to_its_last_sample():
     k = np.arange(n - 2000, n - 200)
     want = np.cos(0.5 * np.pi * (k % 4) - 0.5 * np.pi * offset + 0.3)
     assert np.max(np.abs(result[k] - want)) < 1e-11
+
+
+class TestPlacementAtTheCarriedTime:
+    """An injection is placed at the time it carries, rounded only within LAL's no-op shift or when declared."""
+
+    RATE, EPOCH, N = 8192.0, 1e9, 2048
+
+    @staticmethod
+    def _series(values, t0, rate):
+        from gwmock_signal.timeseries import TimeSeries as Native
+
+        return Native(np.asarray(values, dtype=float), t0=float(t0), sample_rate=float(rate), unit="strain")
+
+    def _tone(self, positions):
+        """A tapered tone at 0.05 of the sample rate, in samples."""
+        return np.exp(-0.5 * ((positions - self.N / 2) / (self.N / 12)) ** 2) * np.cos(0.1 * np.pi * positions)
+
+    def test_an_injection_two_ulps_off_the_grid_is_placed_there(self):
+        """1/512 sample, 0.24 µs at GPS 1e9: inside the 8-ULP lattice tolerance, outside LAL's no-op shift."""
+        start = 1000
+        t0 = self.EPOCH + start / self.RATE + 2.0**-22
+        assert (t0 - self.EPOCH) * self.RATE - start == 1 / 512
+        target = self._series(np.zeros(4096), self.EPOCH, self.RATE)
+        injection = self._series(self._tone(np.arange(self.N, dtype=float)), t0, self.RATE)
+
+        written = np.asarray(inject_strain(target, injection).data)[start + 1 : start + self.N]
+
+        positions = np.arange(start + 1, start + self.N) - start - 1 / 512
+        assert np.max(np.abs(written - self._tone(positions))) < 1e-9
+        assert np.max(np.abs(written - self._tone(positions + 1 / 512))) > 1e-4
+
+    def test_an_injection_declared_on_the_grid_is_added_sample_for_sample(self):
+        """At 3000 Hz, ``1e9 + 1000 / 3000`` rounds more than LAL's shift off the grid."""
+        rate, at = 3000.0, 1000
+        t0 = self.EPOCH + at / rate
+        assert abs((t0 - self.EPOCH) * rate - at) > 1e-4
+        values = np.arange(1.0, 65.0)
+        target = self._series(np.zeros(1100), self.EPOCH, rate)
+        injection = self._series(values, t0, rate)
+
+        declared = np.asarray(inject_strain(target, injection, on_grid=True).data)
+        undeclared = np.asarray(inject_strain(target, injection).data)
+
+        np.testing.assert_array_equal(declared[at : at + values.size], values)
+        assert not np.array_equal(undeclared[at : at + values.size], values)
+
+    def test_inject_strains_sequential_forwards_the_declaration(self):
+        """``inject_strains_sequential`` passes ``on_grid`` on to each injection."""
+        rate, at = 3000.0, 1000
+        values = np.arange(1.0, 65.0)
+        target = self._series(np.zeros(1100), self.EPOCH, rate)
+        injection = self._series(values, self.EPOCH + at / rate, rate)
+        out = np.asarray(inject_strains_sequential(target, [injection], on_grid=True).data)
+        np.testing.assert_array_equal(out[at : at + values.size], values)
+
+    def test_an_injection_declared_on_the_grid_but_off_it_is_refused(self):
+        """A declaration 0.3 samples off the grid is refused, not placed."""
+        target = self._series(np.zeros(4096), self.EPOCH, self.RATE)
+        injection = self._series(np.ones(8), self.EPOCH + 100.3 / self.RATE, self.RATE)
+        with pytest.raises(ValueError, match="declared on the grid"):
+            inject_strain(target, injection, on_grid=True)

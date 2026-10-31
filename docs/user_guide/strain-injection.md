@@ -97,6 +97,22 @@ target-sample boundary, the function returns `target.copy()` — i.e., the
 background unchanged, with a debug-level log message. Use this when you need
 strict grid alignment guarantees.
 
+An injection counts as aligned when rounding its start to the nearest target
+sample moves it by no more than 1e-4 samples, the threshold LALSimulation's
+`XLALSimAddInjectionREAL8TimeSeries` uses; anything further off is placed at the
+time it carries. A start a few float64 steps off the grid is therefore not
+aligned: at GPS 1e9 and 8192 Hz two steps are 1/512 sample, 0.24 µs. A series
+you built on the target's grid can round further off it than 1e-4 samples at a
+rate that is not a power of two (`t0 + k / 4000` misses its sample by up to
+2.3e-4 samples). Declare it, and it is added sample for sample:
+
+```python
+out = inject_strain(target, built_on_grid, on_grid=True)
+```
+
+A declared series further off the grid than both its timestamps' float64
+resolution and LAL's 1e-4-sample shift allow is refused with `ValueError`.
+
 ## Example 4 — One-call CBC injection with `inject_cbc_signal`
 
 The convenience function [`inject_cbc_signal`](../api/pipeline/) orchestrates
