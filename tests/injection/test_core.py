@@ -249,3 +249,22 @@ class TestPlacementAtTheCarriedTime:
         injection = self._series(np.ones(8), self.EPOCH + 100.3 / self.RATE, self.RATE)
         with pytest.raises(ValueError, match="declared on the grid"):
             inject_strain(target, injection, on_grid=True)
+
+    @pytest.mark.parametrize("where", [-5000.3, 5000.3])
+    def test_a_declared_injection_off_the_grid_that_cannot_overlap_adds_nothing(self, where):
+        """Returned as a copy, as any injection outside the target is; not located, so not refused."""
+        target = self._series(np.zeros(4096), self.EPOCH, self.RATE)
+        injection = self._series(np.ones(8), self.EPOCH + where / self.RATE, self.RATE)
+        out = inject_strain(target, injection, on_grid=True)
+        assert out is not target
+        assert not np.any(np.asarray(out.data))
+
+    @pytest.mark.parametrize(("fraction", "where"), [(5e-5, "end"), (-5e-5, "start")])
+    def test_an_injection_rounded_onto_the_targets_edge_is_added(self, fraction, where):
+        """Within LAL's shift of the target's last sample (or of one before its first), it is rounded onto it."""
+        target = self._series(np.zeros(64), 0.0, 16.0)
+        n = 4
+        first = 64 + fraction if where == "end" else -(n - 1) + fraction
+        injection = self._series(np.ones(n), (first - 1 if where == "end" else first) / 16.0, 16.0)
+        out = np.asarray(inject_strain(target, injection).data)
+        assert out[-1 if where == "end" else 0] == 1.0

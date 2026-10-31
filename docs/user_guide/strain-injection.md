@@ -85,17 +85,17 @@ out = inject_strains_sequential(target, [inj1, inj2], interpolate_if_offset=True
 
 ## Example 3 — Disable interpolation (strict grid)
 
-If you know injections are **exactly aligned** to the target grid and want to
-avoid resampling altogether:
+If you want an injection added only when it needs no resampling:
 
 ```python
 out = inject_strain(target, h1, interpolate_if_offset=False)
 ```
 
-When `interpolate_if_offset=False` and the injection start is not aligned to a
-target-sample boundary, the function returns `target.copy()` — i.e., the
-background unchanged, with a debug-level log message. Use this when you need
-strict grid alignment guarantees.
+When `interpolate_if_offset=False` and the injection would be resampled (it is
+not aligned, in the sense below), the function returns `target.copy()` — i.e.,
+the background unchanged, with a debug-level log message. The flag guarantees
+that nothing is resampled; an aligned injection is still added, rounded to whole
+samples.
 
 An injection counts as aligned when rounding its start to the nearest target
 sample moves it by no more than 1e-4 samples, the threshold LALSimulation's
@@ -112,6 +112,10 @@ out = inject_strain(target, built_on_grid, on_grid=True)
 
 A declared series further off the grid than both its timestamps' float64
 resolution and LAL's 1e-4-sample shift allow is refused with `ValueError`.
+
+The high-level paths (`CBCSimulator.simulate`, `inject_cbc_signal`) place a
+projected waveform at its coalescence time and never declare it, so they always
+follow LAL's rule.
 
 ## Example 4 — One-call CBC injection with `inject_cbc_signal`
 

@@ -32,6 +32,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("gwmock_signal.injection")
 
 
+#: Beyond half a sample outside the target, neither rounding nor resampling places anything in it.
+_HALF_SAMPLE = 0.5
+
+
 def inject_strain(
     target: TimeSeries | gwpy.timeseries.TimeSeries,
     injection: TimeSeries | gwpy.timeseries.TimeSeries,
@@ -66,8 +70,9 @@ def inject_strain(
         target: Background segment (e.g. zeros or noise): a
             :class:`~gwmock_signal.timeseries.TimeSeries` or a GWpy ``TimeSeries``.
         injection: Strain to add (e.g. a projected waveform), of either kind.
-        interpolate_if_offset: If ``False`` and the injection start is not on a
-            target sample boundary, return a copy of ``target`` without resampling.
+        interpolate_if_offset: If ``False``, nothing is resampled: an injection that would be
+            resampled (one not placed by whole samples, above) is skipped and a copy of ``target``
+            returned. One declared on the lattice but off it is refused, not skipped.
         tapered: Whether ``injection`` is a whole signal that falls smoothly to zero at both
             ends. If so, an off-lattice injection is first oversampled exactly, and placed
             accurately up to its Nyquist frequency rather than to 0.8 of it. Leave it ``False``
@@ -167,6 +172,12 @@ def _inject(
     values = np.asarray(injection.data)
     grid = target.grid
     offset = float(grid.index_of(injection.t0))
+    # An injection lying more than half a sample outside the target adds nothing however it would be
+    # placed, rounded or resampled, so it is not located: a declaration it could not honour here is not
+    # refused here.
+    if offset > n_target - 1 + _HALF_SAMPLE or offset + len(values) - 1 < -_HALF_SAMPLE:
+        logger.debug("No overlap; returning copy of target.")
+        return target.copy()
     if not places_whole_samples(offset, grid.lattice_tolerance_samples(injection.t0), on_grid=on_grid):
         if not interpolate_if_offset:
             logger.debug("Non-integer sample offset; not interpolating; returning copy of target.")
