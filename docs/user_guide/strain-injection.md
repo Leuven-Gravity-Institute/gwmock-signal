@@ -83,19 +83,39 @@ from gwmock_signal.injection import inject_strains_sequential
 out = inject_strains_sequential(target, [inj1, inj2], interpolate_if_offset=True)
 ```
 
-## Example 3 — Disable interpolation (strict grid)
+## Example 3 — Disable resampling
 
-If you know injections are **exactly aligned** to the target grid and want to
-avoid resampling altogether:
+If you want an injection added only when it needs no resampling:
 
 ```python
 out = inject_strain(target, h1, interpolate_if_offset=False)
 ```
 
-When `interpolate_if_offset=False` and the injection start is not aligned to a
-target-sample boundary, the function returns `target.copy()` — i.e., the
-background unchanged, with a debug-level log message. Use this when you need
-strict grid alignment guarantees.
+When `interpolate_if_offset=False` and the injection would be resampled (it is
+not aligned, in the sense below), the function returns `target.copy()` — i.e.,
+the background unchanged, with a debug-level log message. The flag guarantees
+that nothing is resampled; an aligned injection is still added, rounded to whole
+samples.
+
+An injection counts as aligned when rounding its start to the nearest target
+sample moves it by no more than 1e-4 samples, the threshold LALSimulation's
+`XLALSimAddInjectionREAL8TimeSeries` uses; anything further off is placed at the
+time it carries. A start a few float64 steps off the grid is therefore not
+aligned: at GPS 1e9 and 8192 Hz two steps are 1/512 sample, 0.24 µs. A series
+you built on the target's grid can round further off it than 1e-4 samples at a
+rate that is not a power of two (`t0 + k / 4000` misses its sample by up to
+2.3e-4 samples). Declare it, and it is added sample for sample:
+
+```python
+out = inject_strain(target, built_on_grid, on_grid=True)
+```
+
+A declared series further off the grid than both its timestamps' float64
+resolution and LAL's 1e-4-sample shift allow is refused with `ValueError`.
+
+The high-level paths (`CBCSimulator.simulate`, `inject_cbc_signal`) place a
+projected waveform at its coalescence time and never declare it, so they always
+follow LAL's rule.
 
 ## Example 4 — One-call CBC injection with `inject_cbc_signal`
 

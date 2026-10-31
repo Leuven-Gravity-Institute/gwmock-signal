@@ -33,7 +33,7 @@ dependencies = [
   "pyyaml>=6.0",
   # The time series, its sampling grid and HDF5 I/O, shared by the gwmock packages. 0.4.5 is the first
   # whose resample_uniform_sinc takes a whole sample and a fraction apart (fraction=).
-  "gwmock-data>=0.4.6",
+  "gwmock-data>=0.4.7",
 ]
 
 [project.optional-dependencies]
