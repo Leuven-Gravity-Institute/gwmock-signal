@@ -83,7 +83,7 @@ from gwmock_signal.injection import inject_strains_sequential
 out = inject_strains_sequential(target, [inj1, inj2], interpolate_if_offset=True)
 ```
 
-## Example 3 — Disable interpolation (strict grid)
+## Example 3 — Disable resampling
 
 If you want an injection added only when it needs no resampling:
 
