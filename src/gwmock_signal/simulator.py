@@ -200,6 +200,15 @@ class TransientSimulator(GWSimulator):
     Subclasses must implement ``generate_polarizations`` and ``required_params``.
     """
 
+    def polarizations_tapered(self, params: Mapping[str, Any], sampling_frequency: float) -> bool:
+        """Whether the polarizations generated for *params* at *sampling_frequency* fall smoothly to zero at both ends.
+
+        If so, the projection and the injection oversample them exactly and place them accurately up to
+        Nyquist. False unless a subclass knows better; see
+        :meth:`~gwmock_signal.waveform.backends.base.WaveformBackend.tapers_polarizations`.
+        """
+        return False
+
     #: Which implementation evaluates the ``earth_rotation=True`` projection, ``"numpy"`` or
     #: ``"jax"``.
     #:
@@ -349,6 +358,7 @@ class TransientSimulator(GWSimulator):
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
+            tapered=self.polarizations_tapered(params, sampling_frequency),
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -357,6 +367,7 @@ class TransientSimulator(GWSimulator):
                 as_timeseries(background[name]),
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
+                tapered=self.polarizations_tapered(params, sampling_frequency),
             )
             for name in str_names
         }
@@ -479,6 +490,17 @@ class CBCSimulator(TransientSimulator):
     def waveform_model(self) -> str:
         """PyCBC approximant or custom model name."""
         return self._waveform_model
+
+    def polarizations_tapered(self, params: Mapping[str, Any], sampling_frequency: float) -> bool:
+        """Whether this model's buffers, with the options in *params* and at this rate, fall smoothly to zero at both ends.
+
+        True where the backend's conditioning guarantees it for this approximant and these
+        ``waveform_arguments`` (the LALSimulation backend, except IMRPhenomXPHM with its precession-angle
+        multibanding on), and never for a custom registered model, which bypasses that conditioning.
+        """
+        return self._waveform_factory.tapers_polarizations(
+            self._waveform_model, params.get("waveform_arguments"), sampling_frequency=sampling_frequency
+        )
 
     @property
     def required_params(self) -> frozenset[str]:

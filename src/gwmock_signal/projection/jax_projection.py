@@ -44,6 +44,7 @@ from gwmock_signal.projection import kernels
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    OVERSAMPLING_FACTOR,
     edge_padding,
     kaiser_window_chebyshev,
     validate_kernel,
@@ -248,6 +249,31 @@ def project_polarizations_fd(  # noqa: PLR0913
 _FAR = 2**29
 
 
+def _oversample_fourier(samples: ArrayLike, n_samples: int, factor: int = OVERSAMPLING_FACTOR) -> Array:
+    """Interpolate a series onto a grid ``factor`` times finer, on the device.
+
+    The device counterpart of :func:`gwmock_signal.projection.resampling.oversample_fourier`, step for step:
+    zero-padded to twice its length, the Nyquist bin split evenly between the positive and the negative
+    frequency, extended with zeros to the finer grid's Nyquist frequency, and cut to
+    ``factor * (n_samples - 1) + 1`` samples, sample ``k`` of the input landing on sample ``factor * k``. Exact
+    for a whole series tapered to zero at both ends, as there.
+
+    Args:
+        samples: Uniformly sampled series, shape ``(n_samples,)``.
+        n_samples: Length of ``samples``; static.
+        factor: How many times finer the result's grid is.
+
+    Returns:
+        The interpolated series, shape ``(factor * (n_samples - 1) + 1,)``.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    padded = 2 * n_samples
+    spectrum = jnp.fft.rfft(jnp.asarray(samples, dtype=jnp.float64), padded)
+    spectrum = spectrum.at[-1].multiply(0.5)
+    return jnp.fft.irfft(spectrum, factor * padded)[: factor * (n_samples - 1) + 1] * factor
+
+
 def _interpolate_uniform_sinc(  # noqa: PLR0913
     samples: ArrayLike,
     index: ArrayLike,
@@ -406,6 +432,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
+    tapered: bool = False,
 ) -> Array:
     """Project time-domain polarizations with a time-dependent antenna pattern.
 
@@ -439,15 +466,20 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         sub-sample alignment shift. ``require_terrestrial_location`` enforces that assumption on
         the host, where the geometry is still concrete.
 
-    !!! warning "Oversample the strain"
+    !!! warning "Accurate to 0.8 x Nyquist, or up to Nyquist when ``tapered``"
 
         Resampling at the delayed times uses the Kaiser-windowed sinc kernel in
         :mod:`gwmock_signal.projection.resampling`, which is the exact interpolant for a
         band-limited series in the limit of many taps. Its error is nonetheless a steep
         function of how close the signal comes to Nyquist: the shipped kernel reaches ~1e-12
-        up to about 0.8 x Nyquist and degrades sharply above that. The sample rate should
-        therefore be chosen well above the signal's highest frequency, not merely above it.
-        ``project_polarizations_to_network`` uses the same kernel and has the same limit.
+        up to about 0.8 x Nyquist and degrades sharply above that (0.4 of the signal at 0.98).
+        With ``tapered``, the polarizations -- a whole signal falling smoothly to zero at both
+        ends -- are first interpolated exactly onto a grid twice as fine
+        (:func:`_oversample_fourier`), where their whole band lies at or below half the kernel's
+        Nyquist frequency, and the kernel reads that grid. That costs device memory: twice the
+        padded series per polarization, and the transforms' working arrays while it is built.
+        Without it, choose the sample rate well above the signal's highest frequency.
+        ``project_polarizations_to_network`` does the same on the host.
 
     !!! note "Time coordinate"
 
@@ -491,6 +523,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         sinc_taps: Taps in the resampling kernel. More taps cost arithmetic and buy
             accuracy; the default is set by measured convergence.
         kaiser_beta: Kaiser window shape parameter for the resampling kernel.
+        tapered: Whether the polarizations are a whole signal that falls smoothly to zero at
+            both ends, so they can be oversampled exactly before the kernel reads them; static.
+            Leave it False for a piece cut from a longer signal, whose cut ends the global
+            interpolation would ring from across the whole piece.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.
@@ -534,17 +570,23 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     padded_plus = jnp.pad(jnp.asarray(plus, dtype=jnp.float64), (pad, pad))
     padded_cross = jnp.pad(jnp.asarray(cross, dtype=jnp.float64), (pad, pad))
     padded_length = n_samples + 2 * pad
+    factor = OVERSAMPLING_FACTOR if tapered else 1
+    if tapered:
+        padded_plus = _oversample_fourier(padded_plus, padded_length)
+        padded_cross = _oversample_fourier(padded_cross, padded_length)
+    read_length = factor * (padded_length - 1) + 1
 
     # Sample position of t - tau(t) on the padded input grid, plus any lattice alignment the caller
     # asked for -- one shift, one resampling. The whole sample and the shift are passed apart, as on
-    # the host path, so the shift keeps its own precision at any index.
-    index = pad + jnp.arange(n_samples, dtype=jnp.int32)
-    fraction = -time_delays * sampling_frequency - extra_shift_samples
+    # the host path, so the shift keeps its own precision at any index; on an oversampled series both
+    # scale by the factor, exactly.
+    index = factor * (pad + jnp.arange(n_samples, dtype=jnp.int32))
+    fraction = factor * (-time_delays * sampling_frequency - extra_shift_samples)
     plus_shifted = _interpolate_uniform_sinc(
-        padded_plus, index, padded_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+        padded_plus, index, read_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
     )
     cross_shifted = _interpolate_uniform_sinc(
-        padded_cross, index, padded_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
+        padded_cross, index, read_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
     )
 
     return f_plus * plus_shifted + f_cross * cross_shifted

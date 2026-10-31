@@ -239,6 +239,24 @@ result = cw_sim.simulate(
   windowed-sinc kernel, which treats the injection as zero outside its span, so
   an injection that does not taper to zero rings at its edges; prefer aligned
   waveforms from the same `sampling_frequency` and GPS grid when possible.
+- **Content near Nyquist:** The kernel is accurate to 0.8 x Nyquist; above that
+  it is off by up to about 0.4 of the signal at 0.98 x Nyquist. For a whole
+  signal that falls smoothly to zero at both ends, such as a generated
+  compact-binary waveform, pass `tapered=True` to `inject_strain` or
+  `inject_strains_sequential`: the injection is then oversampled exactly first
+  and placed accurately up to its Nyquist frequency. Leave it `False` for a
+  piece cut from a longer signal: the exact interpolation is global, so the cut
+  ends would ring across the whole piece. `CBCSimulator.simulate` sets it from
+  the waveform backend and the waveform's options (`polarizations_tapered`):
+  True for the LALSimulation backend's approximants measured in the waveform
+  guide's table, which leave at most 7.3e-05 of peak outside their buffers,
+  except `IMRPhenomXPHM` with its precession-angle multibanding on, which leaves
+  up to 1.7e-02; set `"PhenomXPHMThresholdMband": 0.0` in `waveform_arguments`
+  to turn it off. `IMRPhenomPv2_NRTidalv2` counts only at 8192 Hz or above,
+  since at lower rates a binary neutron star's merger is cut at Nyquist. An
+  approximant not measured there is not taken as tapered. A cut of amplitude ε
+  rings by at most ε·|sin(πδ)|/(πd) at d samples from it under the global
+  interpolation, below the content the buffer already lacks.
 - **Performance:** Large segments are memory-bound; avoid unnecessary copies if
   the API documents mutability (default recommendation: return a **new**
   `TimeSeries`).

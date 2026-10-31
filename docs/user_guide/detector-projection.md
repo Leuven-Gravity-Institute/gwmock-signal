@@ -135,6 +135,14 @@ reproduces it.
   can ring at the edges of an injection that does not taper to zero; for
   production injections, prefer waveforms that are windowed or long enough that
   edge effects are negligible.
+- **Content near Nyquist:** With `earth_rotation=True` the polarizations are
+  resampled at the delayed times with the same kernel, accurate to 0.8 x
+  Nyquist. For a whole signal tapered to zero at both ends, pass `tapered=True`:
+  the polarizations are oversampled exactly first, and the projection is
+  accurate up to their Nyquist frequency. Not for a piece cut from a longer
+  signal, such as a continuous-wave segment, whose cut ends the global
+  interpolation would ring from. `earth_rotation=False` shifts exactly in the
+  frequency domain and ignores the option.
 
 ## Choosing the projection implementation
 

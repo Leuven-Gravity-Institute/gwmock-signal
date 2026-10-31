@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from gwmock_signal.projection.resampling import resample_uniform_sinc
+from gwmock_signal.projection.resampling import OVERSAMPLING_FACTOR, oversample_fourier, resample_uniform_sinc
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ def inject_strain(
     injection: TimeSeries | gwpy.timeseries.TimeSeries,
     *,
     interpolate_if_offset: bool = True,
+    tapered: bool = False,
 ) -> TimeSeries:
     """Return a new series equal to ``target`` plus ``injection`` on overlapping samples.
 
@@ -64,6 +65,11 @@ def inject_strain(
         injection: Strain to add (e.g. a projected waveform), of either kind.
         interpolate_if_offset: If ``False`` and the injection start is not on a
             target sample boundary, return a copy of ``target`` without resampling.
+        tapered: Whether ``injection`` is a whole signal that falls smoothly to zero at both
+            ends. If so, an off-lattice injection is first oversampled exactly, and placed
+            accurately up to its Nyquist frequency rather than to 0.8 of it. Leave it ``False``
+            for a piece cut from a longer signal: the exact interpolation is global, and the
+            cut ends would ring across the whole piece.
 
     Returns:
         New :class:`~gwmock_signal.timeseries.TimeSeries` with injected strain.
@@ -71,7 +77,9 @@ def inject_strain(
     Raises:
         ValueError: If either series is not one-dimensional, or the sample rates or units differ.
     """
-    return _inject(as_timeseries(target), as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
+    return _inject(
+        as_timeseries(target), as_timeseries(injection), interpolate_if_offset=interpolate_if_offset, tapered=tapered
+    )
 
 
 def inject_strains_sequential(
@@ -79,6 +87,7 @@ def inject_strains_sequential(
     injections: Sequence[TimeSeries | gwpy.timeseries.TimeSeries],
     *,
     interpolate_if_offset: bool = True,
+    tapered: bool = False,
 ) -> TimeSeries:
     """Apply ``inject_strain`` to each series in order.
 
@@ -87,6 +96,8 @@ def inject_strains_sequential(
             ``TimeSeries``.
         injections: Strain series applied in list order, of either kind.
         interpolate_if_offset: Forwarded to each ``inject_strain`` call.
+        tapered: Forwarded to each ``inject_strain`` call: whether every series in ``injections``
+            is a whole signal tapered to zero at both ends.
 
     Returns:
         Final :class:`~gwmock_signal.timeseries.TimeSeries`.
@@ -94,7 +105,7 @@ def inject_strains_sequential(
     """
     result = as_timeseries(target).copy()
     for injection in injections:
-        result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset)
+        result = _inject(result, as_timeseries(injection), interpolate_if_offset=interpolate_if_offset, tapered=tapered)
     return result
 
 
@@ -113,7 +124,9 @@ def _add_strain(background: TimeSeries, signal: np.ndarray) -> TimeSeries:
     return background.with_data(np.asarray(background.data, dtype=float) + signal)
 
 
-def _inject(target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset: bool) -> TimeSeries:
+def _inject(
+    target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset: bool, tapered: bool = False
+) -> TimeSeries:
     """Return ``target`` plus the part of ``injection`` that falls within it, as a new series."""
     for role, series in (("target", target), ("injection", injection)):
         if len(series.data.shape) != 1:
@@ -144,9 +157,14 @@ def _inject(target: TimeSeries, injection: TimeSeries, *, interpolate_if_offset:
         # the indices and the offset's fraction are passed apart, so the fraction keeps its precision
         # to the injection's last sample.
         whole = math.floor(offset)
+        # A whole tapered signal is oversampled exactly first; the positions and the fraction then both
+        # scale by the factor, exactly.
+        factor = OVERSAMPLING_FACTOR if tapered else 1
         injected = np.array(target.data, copy=True)
         injected[start_idx : end_idx + 1] += resample_uniform_sinc(
-            values, np.arange(start_idx, end_idx + 1) - whole, fraction=whole - offset
+            oversample_fourier(values) if tapered else values,
+            factor * (np.arange(start_idx, end_idx + 1) - whole),
+            fraction=factor * (whole - offset),
         )
         return target.with_data(injected)
     start = round(offset)

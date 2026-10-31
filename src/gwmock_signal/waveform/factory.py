@@ -19,7 +19,7 @@ import importlib
 import importlib.util
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from gwmock_signal._lalsuite import missing_lalsuite_message
@@ -205,6 +205,28 @@ class WaveformFactory:
         if self._models[name] is not self._backend_models.get(name):
             return None
         return self._backend.pre_coalescence_duration(name, sampling_frequency, minimum_frequency, **params)
+
+    def tapers_polarizations(
+        self,
+        name: str,
+        waveform_arguments: Mapping[str, object] | None = None,
+        *,
+        sampling_frequency: float | None = None,
+    ) -> bool:
+        """Return whether model *name*, with these options, produces a whole signal tapered to zero at both ends.
+
+        Only a backend approximant can say so, from :meth:`WaveformBackend.tapers_polarizations`. A
+        custom registration bypasses the backend's conditioning, so it is never taken as tapered, by
+        the same identity check as :meth:`pre_coalescence_duration`.
+
+        Raises:
+            ValueError: If ``name`` is not registered at all, matching :meth:`get_model`.
+        """
+        if name not in self._models:
+            raise ValueError(f"Waveform model '{name}' not found. Available: {list(self._models.keys())}.")
+        if self._models[name] is not self._backend_models.get(name):
+            return False
+        return bool(self._backend.tapers_polarizations(name, waveform_arguments, sampling_frequency=sampling_frequency))
 
     def post_coalescence_duration(
         self,
