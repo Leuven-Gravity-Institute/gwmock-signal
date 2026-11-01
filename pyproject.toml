@@ -38,10 +38,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # HDF5 through h5py rather than gwmock-data's built-in writer and pyfive: faster, and gzip-compressed.
-hdf5 = ["h5py>=3.12"]
+hdf5 = ["h5py>=3.13.0"]
 # Conversion to and from GWpy series, and frame (GWF) output.
 gwpy = ["gwpy>=4.0.0"]
-pycbc = ["pycbc>=2.6.0"]
+pycbc = ["pycbc>=2.8.0"]
 sgwb = ["gwmock-noise>=0.18.3"]
 # Floor is 0.3: the backend calls ``ripplegw.waveform(name, **config)``, the registry factory
 # that replaced the ``waveform_preset[name](...)`` mapping, so 0.2.x no longer works.
