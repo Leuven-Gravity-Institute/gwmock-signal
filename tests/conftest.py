@@ -6,7 +6,7 @@ import pytest
 
 try:
     import lal
-except ModuleNotFoundError:  # Python 3.15 and later: lalsuite publishes no wheel yet
+except ModuleNotFoundError:  # lalsuite may be absent in some test environments
     lal = None
 
 
@@ -61,8 +61,8 @@ def pytest_collection_modifyitems(config, items):
 
     They are marked ``requires_h5py``, ``requires_gwpy`` or ``requires_lalsuite``.
 
-    Python 3.15 is the case: h5py, GWpy and lalsuite publish no wheel for it yet, and the dev group and
-    the package install them only below it. Everything else still runs there.
+    Python 3.15 is the case: h5py publishes no wheel for it yet and GWpy needs h5py, so the dev group installs
+    them only below it. Everything else still runs there.
     """
     for marker, module in (("h5py", "h5py"), ("gwpy", "gwpy"), ("lalsuite", "lalsimulation")):
         if _installed(module):

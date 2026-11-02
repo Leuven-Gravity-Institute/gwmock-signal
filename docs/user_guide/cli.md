@@ -49,14 +49,14 @@ The JSON object must include every **required** CBC key understood by
 
 Additional keys (for example `spin_1z`, `spin_2z`, `coa_phase`) are passed to
 the waveform backend. The default backend is **`--backend lal`** where lalsuite
-is installed; where it is not (Python 3.15, for now) it is
-**`--backend ripple`** if the `jax` extra is installed, and otherwise the
-command stops with an error saying how to install either; the LAL implementation
-accepts only the parameters documented for LAL time-domain generation (unknown
-keys error). **`--backend pycbc`** forwards extras like PyCBC’s
-`get_td_waveform`. **`--backend ripple`** (JAX; requires `gwmock-signal[jax]`)
-supports a fixed set of approximants and converts ripple’s frequency-domain
-output to the time domain on CPU — see [Waveforms](waveform.md).
+is installed; where it is not it is **`--backend ripple`** if the `jax` extra is
+installed, and otherwise the command stops with an error saying how to install
+either; the LAL implementation accepts only the parameters documented for LAL
+time-domain generation (unknown keys error). **`--backend pycbc`** forwards
+extras like PyCBC’s `get_td_waveform`. **`--backend ripple`** (JAX; requires
+`gwmock-signal[jax]`) supports a fixed set of approximants and converts ripple’s
+frequency-domain output to the time domain on CPU — see
+[Waveforms](waveform.md).
 
 Minimal example file `cbc.json`:
 

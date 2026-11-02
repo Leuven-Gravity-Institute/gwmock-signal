@@ -26,10 +26,9 @@ dependencies = [
   "astropy>=7.0",
   # Floor 7.26: the built-in detector table (data/lal_detectors.json) must equal LAL's registry,
   # and earlier releases define E2 and E3 (and, before 7.25, I1) differently.
-  # lalsuite ships no wheel and no source distribution for Python 3.15 yet, so requiring it there
-  # would make the package uninstallable. On 3.15 the LAL-based features are unavailable until a
-  # cp315 wheel is published; drop the marker then.
+  # The first lalsuite release with a Python 3.15 wheel is 8.0.0, so 3.15 needs that floor.
   "lalsuite>=7.26; python_version < '3.15'",
+  "lalsuite>=8.0.0; python_version >= '3.15'",
   "pyyaml>=6.0",
   # The time series, its sampling grid and HDF5 I/O, shared by the gwmock packages. 0.4.5 is the first
   # whose resample_uniform_sinc takes a whole sample and a fraction apart (fraction=).
@@ -75,7 +74,7 @@ lock = "minimal"
 [dependency-groups]
 dev = [
   # The tests compare results with GWpy and exercise HDF5 through h5py; neither is a core dependency,
-  # and neither publishes a wheel for Python 3.15 yet, where the tests that need them skip.
+  # and h5py publishes no wheel for Python 3.15 yet (GWpy needs it), where the tests that need them skip.
   "gwpy>=4.1.0; python_version < '3.15'",
   "h5py>=3.16.0; python_version < '3.15'",
   "ruff>=0.17.3",
@@ -124,7 +123,7 @@ markers = [
   "spark: marks tests which need Spark",
   "slow: marks tests as slow",
   "unit: fast offline tests",
-  # Skipped where the package is not installed: Python 3.15, where none publishes a wheel yet.
+  # Skipped where the package is not installed: Python 3.15, where h5py publishes no wheel yet and GWpy needs it.
   "requires_h5py: needs h5py (the hdf5 extra)",
   "requires_gwpy: needs GWpy (the gwpy extra)",
   "requires_lalsuite: needs lalsuite (LAL detectors and waveforms)",

@@ -39,7 +39,7 @@ def _lalsuite_installed() -> bool:
 def default_waveform_backend() -> WaveformBackend:
     """Return the backend used when none is given: LAL where lalsuite is installed, otherwise ripple.
 
-    lalsuite publishes no wheel for some Python versions (3.15, at the time of writing), so there the LAL
+    lalsuite may be missing (for example where no wheel is published for the interpreter), so there the LAL
     backend cannot run. The ripple (JAX) backend covers the common approximants and installs there, so it
     is used instead when the ``jax`` extra is installed, with a warning: its waveforms are ripple's, not
     LAL's, and differ from what the same configuration produces where lalsuite is installed.

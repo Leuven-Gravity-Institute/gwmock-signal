@@ -52,7 +52,7 @@ jobs:
                   token: ${{ secrets.CODECOV_TOKEN }}
 
     test-core:
-        # The newest Python, where lalsuite and h5py publish no wheel yet. The package installs
+        # The newest Python, where h5py publishes no wheel yet. The package installs
         # with its core dependencies only, and the paths that need none of the optional packages
         # -- projection, injection, simulation with a registered model, the CLI, NumPy and HDF5 files --
         # work there without importing them. Only the package and pytest are installed, and the

@@ -274,6 +274,7 @@ def test_inject_cbc_explicit_lal_backend_accepted(params_file: Path) -> None:
 
 
 @pytest.mark.requires_lalsuite
+@pytest.mark.requires_gwpy  # the gwsignal interface imports GWpy
 def test_inject_cbc_gwsignal_backend_accepted(params_file: Path) -> None:
     """--backend gwsignal is accepted and the command succeeds."""
     result = runner.invoke(
