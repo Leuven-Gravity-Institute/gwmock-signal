@@ -2,7 +2,8 @@ version = 1
 revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
-    "python_full_version >= '3.14'",
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*'",
     "python_full_version < '3.14'",
 ]
 
@@ -813,7 +814,7 @@ source = { editable = "." }
 dependencies = [
     { name = "astropy" },
     { name = "gwmock-data" },
-    { name = "lalsuite", marker = "python_full_version < '3.15'" },
+    { name = "lalsuite" },
     { name = "numpy" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -867,6 +868,7 @@ requires-dist = [
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.13.0" },
     { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
+    { name = "lalsuite", marker = "python_full_version >= '3.15'", specifier = ">=8.0.0" },
     { name = "numpy", specifier = ">=2.2" },
     { name = "pycbc", marker = "extra == 'pycbc'", specifier = ">=2.8.0" },
     { name = "pyyaml", specifier = ">=6.0" },

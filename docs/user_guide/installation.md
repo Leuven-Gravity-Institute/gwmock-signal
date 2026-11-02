@@ -139,8 +139,8 @@ Declared in `pyproject.toml` for the library:
 - **astropy** — sidereal time for detector projection
 - **typer** — CLI (`gwmock-signal` entry point)
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
-  LAL types. Not installed on Python 3.15 and later, for which `lalsuite`
-  publishes no wheel yet; there, the LAL waveform backends are unavailable
+  LAL types. Python 3.15 needs `lalsuite>=8.0.0`, the first release with a
+  3.15 wheel. Where it is missing, the LAL waveform backends are unavailable
   (detector geometry does not need it), and with the `jax` extra installed the
   default waveform backend is the ripple one instead.
 - **pyyaml** — configuration parsing where used
@@ -177,8 +177,8 @@ the same package as the `gwmock-signal` extra of the same name.
 
 ## Python 3.15
 
-On Python 3.15, `lalsuite` and `h5py` publish no wheel yet, so a plain
-`pip install gwmock-signal` installs without them. What needs neither works: the
+On Python 3.15, `h5py` publishes no wheel yet, so a plain
+`pip install gwmock-signal` installs without it. What needs neither works: the
 time series, detector projection onto built-in and custom detectors, injection,
 simulation with a waveform model you register, the CLI, and NumPy, text and HDF5
 files. The LAL waveform backends need `lalsuite`, and report how to install it

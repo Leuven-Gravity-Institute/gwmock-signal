@@ -40,9 +40,8 @@ Waveform generation is split into three layers:
       (`SimInspiralChooseFDWaveform`, or `SimInspiralFD` for time-domain-native
       approximants) and conditioning to the time domain so coalescence sits at
       the frequency-domain phase reference. Shipped with the core dependency
-      **`lalsuite`**; no optional extra is required. On Python 3.15 and later,
-      which lalsuite publishes no wheel for yet, it is unavailable and
-      constructing it raises an `ImportError` saying so; the default then falls
+      **`lalsuite`**; no optional extra is required. Where lalsuite is not
+      installed it is unavailable and constructing it raises an `ImportError` saying so; the default then falls
       back to `RippleBackend` (see below). Parameter handling is **strict**:
       only documented mass, spin, distance, inclination, and coalescence-phase
       aliases are accepted; unknown keys raise `ValueError`. How the
@@ -57,7 +56,7 @@ Waveform generation is split into three layers:
       `LALSimulationBackend`. Time-domain-native approximants fall back to the
       LAL path (gwsignal's frequency-domain output discards the conditioning
       epoch those approximants need). Ships with the core **`lalsuite`**
-      dependency, so it has the same Python 3.15 limitation; no optional extra
+      dependency, so it has the same availability; no optional extra
       is required. External Python models (e.g. SEOBNRv5 via `pyseobnr`) are not
       exposed yet.
 

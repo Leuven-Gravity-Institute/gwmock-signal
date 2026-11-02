@@ -49,7 +49,7 @@ The JSON object must include every **required** CBC key understood by
 
 Additional keys (for example `spin_1z`, `spin_2z`, `coa_phase`) are passed to
 the waveform backend. The default backend is **`--backend lal`** where lalsuite
-is installed; where it is not (Python 3.15, for now) it is
+is installed; where it is not it is
 **`--backend ripple`** if the `jax` extra is installed, and otherwise the
 command stops with an error saying how to install either; the LAL implementation
 accepts only the parameters documented for LAL time-domain generation (unknown

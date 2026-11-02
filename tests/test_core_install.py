@@ -1,6 +1,6 @@
-"""What works with only the core dependencies: no GWpy, no h5py, and no lalsuite.
+"""What works without GWpy, h5py and the other optional packages, never importing them.
 
-This is the installation Python 3.15 gets today, where lalsuite and h5py publish no wheel. CI runs
+This is the installation Python 3.15 gets today, where h5py publishes no wheel. CI runs
 this module there, with only the package and pytest installed; it also runs with everything
 installed, where it checks the same paths never import the optional packages.
 
