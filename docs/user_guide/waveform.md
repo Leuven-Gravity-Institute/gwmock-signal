@@ -41,11 +41,12 @@ Waveform generation is split into three layers:
       approximants) and conditioning to the time domain so coalescence sits at
       the frequency-domain phase reference. Shipped with the core dependency
       **`lalsuite`**; no optional extra is required. Where lalsuite is not
-      installed it is unavailable and constructing it raises an `ImportError` saying so; the default then falls
-      back to `RippleBackend` (see below). Parameter handling is **strict**:
-      only documented mass, spin, distance, inclination, and coalescence-phase
-      aliases are accepted; unknown keys raise `ValueError`. How the
-      frequency-domain waveform becomes a time series is described under
+      installed it is unavailable and constructing it raises an `ImportError`
+      saying so; the default then falls back to `RippleBackend` (see below).
+      Parameter handling is **strict**: only documented mass, spin, distance,
+      inclination, and coalescence-phase aliases are accepted; unknown keys
+      raise `ValueError`. How the frequency-domain waveform becomes a time
+      series is described under
       [Frequency-to-time conditioning](#frequency-to-time-conditioning-lal-and-gwsignal).
 
     - **`GWSignalBackend`** — routes **frequency-domain-native** approximants
@@ -56,8 +57,8 @@ Waveform generation is split into three layers:
       `LALSimulationBackend`. Time-domain-native approximants fall back to the
       LAL path (gwsignal's frequency-domain output discards the conditioning
       epoch those approximants need). Ships with the core **`lalsuite`**
-      dependency, so it has the same availability; no optional extra
-      is required. External Python models (e.g. SEOBNRv5 via `pyseobnr`) are not
+      dependency, so it has the same availability; no optional extra is
+      required. External Python models (e.g. SEOBNRv5 via `pyseobnr`) are not
       exposed yet.
 
     - **`PyCBCBackend`** (optional) — delegates to PyCBC’s time-domain waveform

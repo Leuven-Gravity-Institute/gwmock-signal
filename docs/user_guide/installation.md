@@ -139,8 +139,8 @@ Declared in `pyproject.toml` for the library:
 - **astropy** — sidereal time for detector projection
 - **typer** — CLI (`gwmock-signal` entry point)
 - **lalsuite** — default time-domain CBC waveforms (LALSimulation) and related
-  LAL types. Python 3.15 needs `lalsuite>=8.0.0`, the first release with a
-  3.15 wheel. Where it is missing, the LAL waveform backends are unavailable
+  LAL types. Python 3.15 needs `lalsuite>=8.0.0`, the first release with a 3.15
+  wheel. Where it is missing, the LAL waveform backends are unavailable
   (detector geometry does not need it), and with the `jax` extra installed the
   default waveform backend is the ripple one instead.
 - **pyyaml** — configuration parsing where used
