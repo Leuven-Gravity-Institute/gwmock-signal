@@ -60,12 +60,14 @@ Use `--frozen` in CI-like debugging to reproduce the lockfile exactly.
 **Supported:** 3.13, 3.14 and 3.15 (`requires-python = ">=3.13"` in
 `pyproject.toml`).
 
-**Symptoms:** resolver errors, missing wheels for `pycbc` / `gwpy`, or CI
-mismatch.
+**Symptoms:** resolver errors, missing wheels for `pycbc` / `gwpy` / `h5py`
+(`h5py` has no Python 3.15 wheel yet, and GWpy needs it), or CI mismatch.
 
 - Pin the interpreter, for example `uv venv --python 3.13`.
-- CI runs the matrix in `.github/workflows/ci.yml`: Ubuntu and macOS on 3.13 and
-  3.14, and a core-dependency job on 3.15.
+- CI runs the matrix in `.github/workflows/ci.yml`: Ubuntu and macOS on 3.13,
+  3.14 and 3.15, plus a core-dependency job on 3.15 that installs the package
+  and pytest only. On 3.15 the tests that need `h5py` or GWpy are skipped; the
+  `lalsuite` tests run, since `lalsuite>=8.0.0` has a 3.15 wheel.
 
 ## Pre-commit
 
