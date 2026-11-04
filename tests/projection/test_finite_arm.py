@@ -18,7 +18,7 @@ from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.projection import finite_arm, kernels
 from gwmock_signal.projection.geometry import arm_lengths, reconstructed_geometry
-from gwmock_signal.projection.network import _gmst_accurate, project_polarizations_to_network
+from gwmock_signal.projection.network import _gmst_accurate_array, project_polarizations_to_network
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, SPEED_OF_LIGHT_M_S, edge_padding
 from gwmock_signal.timeseries import TimeSeries
 
@@ -110,7 +110,11 @@ def test_the_residual_is_the_published_transfer_function_less_the_midpoint_shift
 
 
 def test_the_residual_agrees_with_pycbc():
-    """PyCBC's single-arm response is the residual with the midpoint shift and one crossing's delay."""
+    """PyCBC's single-arm response is the residual with the midpoint shift and one crossing's delay.
+
+    Runs only where PyCBC is installed (``--extra pycbc``), which the continuous-integration jobs do not
+    install, so there it is a check to run by hand. Run with PyCBC 2.11.0 when the response was added.
+    """
     detector = pytest.importorskip("pycbc.detector")
     rng = np.random.default_rng(2)
     length = 10_000.0
@@ -199,44 +203,47 @@ def _by_definition(detector, frequency, times, *, frozen_at=None):
     """Return the detector's strain at ``times`` (seconds after T0), from the definition.
 
     The x arm's minus the y arm's, each the strain along its round trip averaged by quadrature, the light
-    reflecting at each time.
+    reflecting at each time. Earth's orientation is taken at every point of the trip, or held at
+    ``frozen_at`` throughout when given.
     """
     plus, cross = _wave(frequency)
     fields = detector.geometry_fields()
     _, vertex = reconstructed_geometry(fields)
     crossing = detector.arm_length_m / C
-    sidereal = np.array([_gmst_accurate(T0 + (t if frozen_at is None else frozen_at)) for t in times])
-    x, y = kernels._polarization_basis(
-        np, sidereal, SKY["right_ascension"], SKY["declination"], SKY["polarization_angle"]
-    )
-    e_plus = np.einsum("ki,kj->kij", x, x) - np.einsum("ki,kj->kij", y, y)
-    e_cross = np.einsum("ki,kj->kij", x, y) + np.einsum("ki,kj->kij", y, x)
-    hour = sidereal - SKY["right_ascension"]
-    dec = SKY["declination"]
-    source = np.stack([np.cos(dec) * np.cos(hour), -np.cos(dec) * np.sin(hour), np.full_like(hour, np.sin(dec))], -1)
     nodes, weights = np.polynomial.legendre.leggauss(40)
     elapsed = 0.5 * (nodes + 1.0) * crossing
+    ra, dec, psi = SKY["right_ascension"], SKY["declination"], SKY["polarization_angle"]
     strain = 0.0
     for sign, arm in zip((1.0, -1.0), kernels.arm_directions(fields, xp=np), strict=True):
-        pattern_plus = 0.5 * np.einsum("i,kij,j->k", arm, e_plus, arm)
-        pattern_cross = 0.5 * np.einsum("i,kij,j->k", arm, e_cross, arm)
         for outward in (True, False):
             moment = times[:, None] + (elapsed - crossing if outward else elapsed)[None, :]
+            sidereal = _gmst_accurate_array(T0 + (moment if frozen_at is None else np.full(moment.shape, frozen_at)))
+            x, y = kernels._polarization_basis(np, sidereal, ra, dec, psi)
+            pattern_plus = 0.5 * ((x @ arm) ** 2 - (y @ arm) ** 2)
+            pattern_cross = (x @ arm) * (y @ arm)
+            hour = sidereal - ra
+            source = np.stack(
+                [np.cos(dec) * np.cos(hour), -np.cos(dec) * np.sin(hour), np.full_like(hour, np.sin(dec))], -1
+            )
             distance = (elapsed if outward else crossing - elapsed) * C
-            position = vertex[None, None, :] + distance[None, :, None] * arm
-            geocentric = moment + np.einsum("ki,kmi->km", source, position) / C
-            leg = pattern_plus[:, None] * plus(geocentric) + pattern_cross[:, None] * cross(geocentric)
+            position = vertex + distance[None, :, None] * arm
+            geocentric = moment + np.einsum("kmi,kmi->km", source, position) / C
+            leg = pattern_plus * plus(geocentric) + pattern_cross * cross(geocentric)
             strain = strain + sign * 0.5 * (leg * weights / 2.0).sum(axis=1)
     return strain
 
 
-@pytest.mark.parametrize(("frequency", "tolerance"), [(100.0, 1e-9), (700.0, 2e-8)])
-@pytest.mark.parametrize("tapered", [True, False])
+@pytest.mark.parametrize(
+    ("frequency", "tolerance", "tapered"),
+    # 1800 Hz is 0.88 of Nyquist, beyond the 0.8 an untapered piece is accurate to.
+    [(100.0, 1e-10, True), (100.0, 1e-10, False), (700.0, 2e-9, True), (700.0, 2e-9, False), (1800.0, 1e-8, True)],
+)
 def test_the_rotating_projection_is_the_arm_average_along_the_light_path(frequency, tolerance, tapered):
     """The rotating projection is the strain averaged along each arm's light path, sample by sample.
 
-    The difference left is the Doppler shift of Earth's rotation, 1.5e-6 at most, times the residual;
-    the definition here holds Earth still for each round trip. The long-wavelength response is 1e-2 off.
+    The difference left is bounded by the Doppler shift of Earth's rotation, 1.5e-6 at most, times the
+    residual, as the residual is applied in detector time: 3e-11, 1.4e-9 and 9e-9 at these frequencies.
+    The long-wavelength response is 1e-2 off.
     """
     detectors = _triangle()
     projected = project_polarizations_to_network(
@@ -324,27 +331,34 @@ def test_a_detector_without_an_arm_length_is_refused(detector):
 
 
 def test_a_midpoint_beyond_the_padding_is_refused():
-    """A midpoint delay past the padding is refused, and one at its edge is read.
+    """A midpoint delay past the padding is refused on both branches, and one at its edge is read exactly.
 
-    The padding covers the largest vertex delay and one sample more.
+    The padding covers the largest vertex delay and one sample more. At that limit the delay is a whole
+    number of samples, so the resampled arm is the series shifted by it, not a partly zeroed copy.
     """
-    from gwmock_signal.projection.network import _finite_arm_rotating, _kernel_input
+    from gwmock_signal.projection.network import _finite_arm_constant, _finite_arm_rotating, _kernel_input
     from gwmock_signal.projection.resampling import EARTH_RADIUS_M
 
     pad = edge_padding(FS)
-    kernel_input = _kernel_input(np.ones(64), np.ones(64), pad, tapered=False)
-    limit = (math.ceil(EARTH_RADIUS_M / C * FS) + 1) / FS
-    ones = np.ones(64)
-    _finite_arm_rotating(
-        kernel_input, ones, ones, np.full(64, limit), FS, sinc_taps=DEFAULT_SINC_TAPS, kaiser_beta=DEFAULT_KAISER_BETA
-    )
+    series = np.random.default_rng(3).standard_normal(512)
+    kernel_input = _kernel_input(series, np.zeros(512), pad, tapered=False)
+    padded = kernel_input[2]
+    shift = math.ceil(EARTH_RADIUS_M / C * FS) + 1
+    kernel = {"sinc_taps": DEFAULT_SINC_TAPS, "kaiser_beta": DEFAULT_KAISER_BETA}
+    ones, rows = np.ones(512), np.arange(512)
+    for sign in (1.0, -1.0):
+        arm = _finite_arm_rotating(kernel_input, ones, ones, np.full(512, sign * shift / FS), FS, **kernel)
+        np.testing.assert_array_equal(arm, padded[pad + rows - int(sign) * shift])
     with pytest.raises(ValueError, match="edge padding"):
-        _finite_arm_rotating(
-            kernel_input,
-            ones,
-            ones,
-            np.full(64, -1.001 * limit),
-            FS,
-            sinc_taps=DEFAULT_SINC_TAPS,
-            kaiser_beta=DEFAULT_KAISER_BETA,
+        _finite_arm_rotating(kernel_input, ones, ones, np.full(512, -1.001 * shift / FS), FS, **kernel)
+    spectra = (np.fft.rfft(series), np.fft.rfft(series), 512)
+    with pytest.raises(ValueError, match="edge padding"):
+        _finite_arm_constant(
+            spectra,
+            f_plus=1.0,
+            f_cross=0.0,
+            midpoint_delay=1.001 * shift / FS,
+            alignment=0.0,
+            length=10_000.0,
+            sample_rate=FS,
         )

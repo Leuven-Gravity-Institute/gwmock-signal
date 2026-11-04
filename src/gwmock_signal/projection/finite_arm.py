@@ -16,7 +16,7 @@
 The long-wavelength response treats a detector as a point at its vertex. Each arm in fact measures
 the strain averaged along the light's round trip to its end mirror and back (R. Essick, S. Vitale and
 M. Evans, Phys. Rev. D 96, 084004 (2017), Eq. (4)). For an arm of length ``L`` the difference is of
-order ``f L / c``: 1.7e-3 at 5 Hz and 0.14 at 4096 Hz for 10 km. It matters most where detectors share
+order ``f L / c``: 1.7e-4 at 5 Hz and 0.14 at 4096 Hz for 10 km. It matters most where detectors share
 arms. In a triangle each arm line is used by two interferometers with opposite signs, so the signal
 cancels in the null stream ``E1 + E2 + E3`` only if both read it as the same average; placed at their
 vertices, they read it 10 km apart.
@@ -33,8 +33,10 @@ The response is split in two, see :func:`~gwmock_signal.projection.kernels.finit
 Both are applied to the arm's strain after the antenna pattern, in detector time. Applying the residual
 there rather than to the polarizations before the delay treats the slowly changing antenna pattern,
 delay and ``mu`` as constant across the residual's length of two light crossings of the arm (67 us for
-10 km). The delay changes by at most 1.5e-6 s per second as Earth turns, so the error is of that order
-times the residual itself.
+10 km). The delay changes by at most 1.5e-6 s per second as Earth turns, so the error is at most of that
+order times the residual itself. Against the strain averaged by quadrature along each arm's light path,
+with Earth turning during the trip, it is 1e-11 of peak at 100 Hz, 4e-10 at 700 Hz and 3e-9 at 1.8 kHz
+for the ET triangle, within that bound (``tests/projection/test_finite_arm.py``).
 """
 
 from __future__ import annotations
@@ -143,7 +145,7 @@ def _leg_nodes(alignment: float, crossing_samples: float) -> tuple[np.ndarray, n
     Gauss-Legendre points on each leg: the outward leg over delays ``[-mu, 2 + mu] T / 2`` and the
     return leg over ``[-2 + mu, -mu] T / 2``, with ``T`` the one-way crossing time, each carrying half the
     weight. For a band-limited signal the error falls like ``(pi W)^(2n) / (2n)!^2`` for a leg ``W``
-    samples long and ``n`` points; ``8 + 2 W`` points keep it below 1e-12 up to Nyquist.
+    samples long and ``n`` points; ``8 + ceil(4 W)`` points keep it below 1e-12 up to Nyquist.
     """
     half = 0.5 * crossing_samples
     legs = (

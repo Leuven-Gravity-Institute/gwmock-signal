@@ -543,8 +543,9 @@ def project_polarizations_to_network(  # noqa: PLR0913
             :mod:`~gwmock_signal.projection.finite_arm` for how it follows Earth's rotation. The two
             differ at order ``f L / c``: about 1e-2 at 100 Hz and 0.1 at 1 kHz for a 10 km arm. They
             differ most where detectors share arms: in a triangle the signal cancels in the null stream
-            ``E1 + E2 + E3`` only with ``True``, to 5e-7 of a single detector's signal at 100 Hz rather
-            than 1.3e-2. Every detector needs an arm length -- a built-in code has LAL's, a
+            ``E1 + E2 + E3`` only with ``True``: for a 100 Hz wave packet on ``ET-Triangle-EMR``, at the sky
+            position of ``tests/projection/test_finite_arm.py``, the null stream holds 7e-7 of a single
+            detector's peak rather than 1.9e-2. Every detector needs an arm length -- a built-in code has LAL's, a
             :class:`~gwmock_signal.detector.CustomDetector` its ``arm_length_m`` -- and the host
             backend; ``backend="jax"`` refuses it. On the ``earth_rotation=True`` branch it resamples
             each arm separately, about twice the cost.
@@ -669,6 +670,27 @@ def _finite_arm_strain(  # noqa: PLR0913 -- one detector's geometry, the sky and
     return x_arm - y_arm
 
 
+def _require_midpoint_within_padding(midpoint_delay: np.ndarray | float, sample_rate: float) -> None:
+    """Reject an arm-midpoint delay the edge padding does not cover.
+
+    The padding covers the largest vertex delay, Earth's radius over ``c``, rounded up to whole samples,
+    and one sample more (see :func:`~gwmock_signal.projection.resampling.edge_padding`). A midpoint lies up
+    to half an arm further from the geocentre, which that sample covers for arms shorter than
+    ``2 c / fs``: 73 km at 8192 Hz.
+
+    Raises:
+        ValueError: If the delay, in samples, exceeds that allowance.
+    """
+    allowed = math.ceil(EARTH_RADIUS_M / SPEED_OF_LIGHT_M_S * sample_rate) + 1
+    largest = float(np.max(np.abs(midpoint_delay)))
+    if largest * sample_rate > allowed:
+        raise ValueError(
+            f"An arm midpoint's delay from the geocentre reaches {largest * 1e3:.4f} ms, beyond the "
+            f"{allowed / sample_rate * 1e3:.4f} ms the edge padding covers at {sample_rate:g} Hz: an arm far longer "
+            f"than any ground-based detector's."
+        )
+
+
 def _finite_arm_rotating(  # noqa: PLR0913
     kernel_input: tuple[int, int, np.ndarray, np.ndarray],
     f_plus: np.ndarray,
@@ -685,18 +707,10 @@ def _finite_arm_rotating(  # noqa: PLR0913
     resampled for the long-wavelength response.
 
     Raises:
-        ValueError: If the midpoint delay reaches past the padding, which is sized for a vertex no
-            further from the geocentre than Earth's radius and has one sample to spare.
+        ValueError: If the midpoint delay reaches past the padding; see :func:`_require_midpoint_within_padding`.
     """
+    _require_midpoint_within_padding(midpoint_delay, sample_rate)
     pad, factor, hp_read, hc_read = kernel_input
-    # The padding covers the largest vertex delay with one sample left for rounding (see `edge_padding`);
-    # a midpoint is up to half an arm further out, which that sample covers for arms shorter than c / fs.
-    allowed = math.ceil(EARTH_RADIUS_M / SPEED_OF_LIGHT_M_S * sample_rate) + 1
-    if float(np.max(np.abs(midpoint_delay))) * sample_rate > allowed:
-        raise ValueError(
-            f"An arm midpoint lies {float(np.max(np.abs(midpoint_delay))) * SPEED_OF_LIGHT_M_S:.0f} m from the "
-            f"geocentre along the source direction, beyond what the edge padding covers at {sample_rate:g} Hz."
-        )
     index = factor * (pad + np.arange(len(midpoint_delay), dtype=np.int64))
     fraction = factor * (-midpoint_delay * sample_rate)
     hp_arm, hc_arm = (
@@ -720,7 +734,12 @@ def _finite_arm_constant(  # noqa: PLR0913
 
     Exact in the frequency domain, and circular on the padded buffer, as the long-wavelength constant
     branch's delay is.
+
+    Raises:
+        ValueError: If the midpoint delay reaches past the padding, where the shift would wrap round the
+            buffer; see :func:`_require_midpoint_within_padding`.
     """
+    _require_midpoint_within_padding(midpoint_delay, sample_rate)
     rfft_hp, rfft_hc, n_samples = rfft_polarizations
     frequencies = np.fft.rfftfreq(n_samples, d=1.0 / sample_rate)
     transfer = np.exp(-2j * np.pi * frequencies * midpoint_delay) * finite_arm_residual(
@@ -878,6 +897,7 @@ def _project(  # noqa: PLR0913
         sinc_taps=sinc_taps,
         kaiser_beta=kaiser_beta,
         tapered=tapered,
+        finite_arm_length=finite_arm_length,
         finite_arm_lengths=lengths,
     )
 
@@ -895,14 +915,14 @@ def _project_on_host(  # noqa: PLR0913
     sinc_taps: int,
     kaiser_beta: float,
     tapered: bool,
+    finite_arm_length: bool,
     finite_arm_lengths: Mapping[str, tuple[float, float]],
 ) -> dict[str, TimeSeries]:
     """Project on the host, for :func:`_project`, once the polarizations are padded and the sky resolved.
 
     ``sky_line`` is ``(input_start, right_ascension, declination, d_right_ascension, d_declination)``: the
     source position at the caller's first sample and its rates, as :func:`_project` resolved them.
-    ``finite_arm_lengths`` holds each detector's arm lengths when the finite-arm response is wanted, and
-    is empty otherwise.
+    ``finite_arm_lengths`` holds each detector's arm lengths, which ``finite_arm_length=True`` needs.
     """
     input_start, right_ascension, declination, d_right_ascension, d_declination = sky_line
     hp_vals = np.asarray(hp.data, dtype=float)
@@ -924,14 +944,14 @@ def _project_on_host(  # noqa: PLR0913
         else None
     )
 
-    # Per sample, not per segment: see the anchor-and-rate comment above.
+    # Per sample, not per segment: see the anchor-and-rate comment in `_project`.
     precession_offsets = time_array - input_start
     right_ascension_array = right_ascension + d_right_ascension * precession_offsets
     declination_array = declination + d_declination * precession_offsets
     gmst_array = _gmst_accurate_array(time_array)
 
     for name, prefix in detectors:
-        if finite_arm_lengths:
+        if finite_arm_length:
             # Every sample of the response is computed here, so the loop moves to the next detector.
             strains[name] = TimeSeries(
                 _finite_arm_strain(

@@ -228,19 +228,21 @@ Eq. (4). PyCBC offers the same function as
 line is read by two interferometers with opposite signs, so a signal cancels in
 `E1 + E2 + E3` only if both read it as the same average. At their vertices they
 read it 10 km apart. For a 100 Hz wave packet on the `ET-Triangle-EMR` preset,
-the null stream holds 1.9e-2 of a single detector's peak with the
-long-wavelength response and 7e-7 with the finite-arm one; at 700 Hz, 0.13 and
-2.4e-4. What remains with finite arms grows as `f^3`, from the difference
-between the two ends of each round trip.
+at the sky position of `tests/projection/test_finite_arm.py`, the null stream
+holds 1.9e-2 of a single detector's peak with the long-wavelength response and
+7e-7 with the finite-arm one; at 700 Hz, 0.13 and 2.4e-4. What remains with
+finite arms grows as `f^3`, from the difference between the two ends of each
+round trip.
 
 **How it follows Earth's rotation.** On the `earth_rotation=True` branch each
 arm is resampled at its own midpoint delay, sample by sample, as the vertex is
 for the long-wavelength response, and the rest of the round trip is applied as a
 filter that follows the arm's changing angle to the source. Against the
 definition -- the strain of an analytic wave averaged by quadrature along each
-arm's light path -- it agrees to 1e-10 of peak at 100 Hz, 5e-9 at 700 Hz and
-4e-8 at 1.8 kHz. The remaining difference is the Doppler shift of Earth's
-rotation (at most 1.5e-6) times the round trip's own correction. With
+arm's light path, with Earth turning during the trip -- it agrees to 1e-11 of
+peak at 100 Hz, 4e-10 at 700 Hz and 3e-9 at 1.8 kHz. The difference is bounded
+by the Doppler shift of Earth's rotation (at most 1.5e-6) times the round trip's
+own correction, since the filter is applied in detector time. With
 `tapered=True` that filter is exact up to Nyquist; otherwise it is as accurate
 as the resampling kernel, to 0.8 of Nyquist. The `earth_rotation=False` branch
 applies the whole response exactly in the frequency domain, at the span's
