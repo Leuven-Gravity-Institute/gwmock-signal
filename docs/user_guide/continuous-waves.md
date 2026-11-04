@@ -51,7 +51,9 @@ in full rather than relative to a reference time.
 These should be provided as **explicit paths** to the files. If a path does not
 exist locally but is a standard `LALPulsar` name (e.g.
 _'earth00-40-DE405.dat.gz'_), the tables will be downloaded and cached (Internet
-access is required once). The run records what it used.
+access is required once) and checked against the content the package records for
+them; see [the ephemeris](detector-projection.md#projection-effects). The run
+records what it used.
 
 ```python
 sim = ContinuousWaveSimulator(

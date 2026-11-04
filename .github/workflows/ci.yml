@@ -69,10 +69,23 @@ jobs:
             # `tests/data/ephemeris.sha256`. What the cache does not cover: GitHub evicts it after 7 days
             # without access, and fork pull requests never restore it.
             - name: Fetch and verify the ephemeris tables
+              env:
+                  FETCH: |
+                      import sys
+                      from gwmock_signal.projection.solar_system import SolarSystemEphemeris
+                      try:
+                          SolarSystemEphemeris().tables()
+                      except ValueError as exc:
+                          print(exc, file=sys.stderr)
+                          sys.exit(2)
               run: |
+                  # Exit 2 is a table refused for its content, cached or downloaded: retrying cannot fix it.
                   for attempt in 1 2 3; do
-                      if uv run --no-sync python -c "from gwmock_signal.projection.solar_system import SolarSystemEphemeris; SolarSystemEphemeris().tables()"; then
-                          exit 0
+                      uv run --no-sync python -c "$FETCH" && exit 0 || status=$?
+                      if [ "$status" -eq 2 ]; then
+                          echo "::error::an ephemeris table was refused for its content (see above); retrying" \
+                               "cannot fix that -- clear the cache, or update tests/data/ephemeris.sha256 and the package's record"
+                          exit 1
                       fi
                       if [ "$attempt" -lt 3 ]; then
                           echo "ephemeris fetch attempt $attempt failed; retrying"
@@ -163,10 +176,23 @@ jobs:
             # `tests/data/ephemeris.sha256`. What the cache does not cover: GitHub evicts it after 7 days
             # without access, and fork pull requests never restore it.
             - name: Fetch and verify the ephemeris tables
+              env:
+                  FETCH: |
+                      import sys
+                      from gwmock_signal.projection.solar_system import SolarSystemEphemeris
+                      try:
+                          SolarSystemEphemeris().tables()
+                      except ValueError as exc:
+                          print(exc, file=sys.stderr)
+                          sys.exit(2)
               run: |
+                  # Exit 2 is a table refused for its content, cached or downloaded: retrying cannot fix it.
                   for attempt in 1 2 3; do
-                      if uv run --no-sync python -c "from gwmock_signal.projection.solar_system import SolarSystemEphemeris; SolarSystemEphemeris().tables()"; then
-                          exit 0
+                      uv run --no-sync python -c "$FETCH" && exit 0 || status=$?
+                      if [ "$status" -eq 2 ]; then
+                          echo "::error::an ephemeris table was refused for its content (see above); retrying" \
+                               "cannot fix that -- clear the cache, or update tests/data/ephemeris.sha256 and the package's record"
+                          exit 1
                       fi
                       if [ "$attempt" -lt 3 ]; then
                           echo "ephemeris fetch attempt $attempt failed; retrying"

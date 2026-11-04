@@ -150,12 +150,16 @@ time system, with the site term from the projection's own geometry), computed
 from the JPL DE405 tables LALPulsar ships, `earth00-40-DE405.dat.gz` and
 `sun00-40-DE405.dat.gz`. They agree with `lalpulsar.Barycenter` at the geocentre
 to 1e-13 s. A table not found locally is downloaded once from the LALSuite
-repository into `~/.cache/gwmock-signal/ephemeris` (or
-`$GWMOCK_SIGNAL_CACHE_DIR/ephemeris`); on a machine without network access, copy
-the files there or pass their paths
+repository into the cache: `$GWMOCK_SIGNAL_CACHE_DIR/ephemeris` if that variable
+is set, otherwise `~/.cache/gwmock-signal/ephemeris` (`$XDG_CACHE_HOME` when
+set; `~/Library/Caches/gwmock-signal/ephemeris` on macOS). On a machine without
+network access, copy the files there or pass their paths
 (`ephemeris=SolarSystemEphemeris(earth=..., sun=...)` to the projection, the
-simulators' `ephemeris` argument). The tables cover 2000 to 2040; a span outside
-them is refused while any solar-system delay is on.
+simulators' `ephemeris` argument). A table served from the cache must be
+byte-for-byte the one the package records for its name (SHA-256); a corrupt copy
+is refused with a message saying so, and deleting it lets it download again. A
+table you pass by path is used as it is. The tables cover 2000 to 2040; a span
+outside them is refused while any solar-system delay is on.
 
 ## Example 3 — Custom detectors (advanced)
 

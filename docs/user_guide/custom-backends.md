@@ -22,6 +22,7 @@ def simulate(
     effects=None,
     interpolate_if_offset=True,
     earth_rotation=None,
+    finite_arm_length=None,
 ) -> DetectorStrainStack: ...
 ```
 
@@ -72,8 +73,9 @@ class ConstantBurstSimulator(GWSimulator):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
-        del minimum_frequency, effects, interpolate_if_offset, earth_rotation
+        del minimum_frequency, effects, interpolate_if_offset, earth_rotation, finite_arm_length
 
         self._validate_params(params)
         amplitude = float(params["amplitude"])

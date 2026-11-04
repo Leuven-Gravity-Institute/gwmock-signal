@@ -188,20 +188,41 @@ def test_the_recorded_hashes_are_the_manifests():
     assert recorded == solar_system.RECORDED_SHA256
 
 
-def test_a_default_table_with_other_content_is_refused(tmp_path):
-    """A file named as a default table but holding anything else is refused, not read."""
-    path = tmp_path / "earth00-40-DE405.dat.gz"
+def _one_row_table(path: Path) -> Path:
     with gzip.open(path, "wt") as handle:
         handle.write("0 7200 1\n" + "0 " + "1 " * 9 + "\n")
+    return path
+
+
+def test_a_cached_default_table_with_other_content_is_refused(tmp_path, monkeypatch):
+    """A default table served from the cache but holding anything else is refused, not read."""
+    monkeypatch.setenv("GWMOCK_SIGNAL_CACHE_DIR", str(tmp_path))
+    (tmp_path / "ephemeris").mkdir()
+    _one_row_table(tmp_path / "ephemeris" / "earth00-40-DE405.dat.gz")
     with pytest.raises(ValueError, match=r"not the \w+ recorded for earth00-40-DE405\.dat\.gz"):
-        solar_system.read_table.__wrapped__(str(path))
+        solar_system.read_table.__wrapped__("earth00-40-DE405.dat.gz")
+
+
+def test_a_table_passed_by_path_is_used_whatever_its_name(tmp_path):
+    """A caller's own table is theirs: a default name on a path does not make it the recorded table."""
+    table = solar_system.read_table.__wrapped__(str(_one_row_table(tmp_path / "earth00-40-DE405.dat.gz")))
+    assert table.position.shape == (1, 3)
+
+
+def test_a_cache_that_cannot_be_written_is_a_download_failure(tmp_path, monkeypatch):
+    """Without a writable cache the error says the table is missing and what to do, not a raw OS error."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    monkeypatch.setenv("GWMOCK_SIGNAL_CACHE_DIR", str(blocker))
+    with pytest.raises(FileNotFoundError, match="could not be downloaded"):
+        solar_system.resolve_table("earth00-40-DE405.dat.gz")
 
 
 def test_the_default_reference_is_the_peak_of_the_unpadded_polarizations():
     """Without ``reference_time`` the delay is absorbed at the polarizations' peak power, as given.
 
     The peak is found on the input before it is padded against the geocentre delay; found on the padded
-    buffer but labelled from the input's start, it came out late by the padding, 25 ms here.
+    buffer but labelled from the input's start, it came out late by the padding, 87 samples here.
     """
     from gwmock_signal.projection.network import project_polarizations_to_network
     from gwmock_signal.timeseries import TimeSeries

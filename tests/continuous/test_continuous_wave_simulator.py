@@ -33,8 +33,6 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
         raise
     TimeSeries = None
 
-pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
-
 from gwmock_signal.continuous import ContinuousWaveSimulator
 from gwmock_signal.projection import network
 from gwmock_signal.projection.effects import ProjectionEffects
@@ -66,6 +64,8 @@ def _simulator(**overrides) -> ContinuousWaveSimulator:
         "spindowns": (-1.0e-10,),
     }
     kwargs.update(overrides)
+    if kwargs.get("projection_backend", "jax") == "jax":
+        pytest.importorskip("jax", reason="the [jax] extra is not installed")
     return ContinuousWaveSimulator(**kwargs)
 
 
