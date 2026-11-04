@@ -157,12 +157,12 @@ network access, copy the files there or pass their paths
 (`ephemeris=SolarSystemEphemeris(earth=..., sun=...)` to the projection, the
 simulators' `ephemeris` argument). A table named by its bare name is looked up
 in the working directory, then in the cache. The package records the SHA-256 of
-both default tables, and a table looked up by either name must be byte-for-byte
-that one wherever it is found; a corrupt copy is refused with a message saying
-so, and deleting it lets it download again. A path with a directory, such as
-`./earth00-40-DE405.dat.gz`, is your own table and is used as it is. The tables
-cover 2000 to 2040; a span outside them is refused while any solar-system delay
-is on.
+both default tables (compressed and not), and a table looked up by one of those
+names must be byte-for-byte that one wherever it is found; a corrupt copy is
+refused with a message saying so, and deleting it lets it download again. A path
+with a directory, such as `tables/earth00-40-DE405.dat.gz`, is your own table
+and is used as it is. The tables cover 2000 to 2040; a span outside them is
+refused while any solar-system delay is on.
 
 ## Example 3 — Custom detectors (advanced)
 

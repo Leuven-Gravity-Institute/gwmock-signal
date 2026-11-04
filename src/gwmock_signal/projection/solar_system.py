@@ -66,12 +66,15 @@ LALSUITE_EPHEMERIS_URL = "https://git.ligo.org/lscsoft/lalsuite/-/raw/master/lal
 DEFAULT_EARTH_EPHEMERIS = "earth00-40-DE405.dat.gz"
 DEFAULT_SUN_EPHEMERIS = "sun00-40-DE405.dat.gz"
 
-#: SHA-256 of the default tables as recorded on 2026-08-03 from the LALSuite repository. The tables are
-#: physics inputs fetched from an unpinned branch, so a copy with any other content -- a corrupt
-#: download, or a table changed upstream -- is refused rather than used; see :func:`read_table`.
+#: SHA-256 of the default tables as recorded on 2026-08-03 from the LALSuite repository, compressed as
+#: published and uncompressed (the ``.dat`` names, which a table can also be looked up by). The tables
+#: are physics inputs fetched from an unpinned branch, so a copy with any other content -- a corrupt
+#: download, or a table changed upstream -- is refused rather than used; see :func:`resolve_table`.
 RECORDED_SHA256 = {
     "earth00-40-DE405.dat.gz": "4995647b2c47617c90804ad0bc814ce42b426f1e5015a90cf939bcdd0c20ea67",
     "sun00-40-DE405.dat.gz": "0b132dc5a712ebc16661a10cb88409e2577c16723c64f98e9b9b4d265510700f",
+    "earth00-40-DE405.dat": "cd966343cd6bee67c3c1ed7722ea1cb41dc89971bdb9515fdeb7610d7161d1da",
+    "sun00-40-DE405.dat": "69ddd05c1b76783821131154c2cafc9f1059b784fc9429ac9ec739eac5dc965e",
 }
 
 #: LALPulsar's naming of its standard tables; only such a bare name is ever downloaded.
@@ -211,24 +214,29 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
     A bare standard name, such as ``earth00-40-DE405.dat.gz``, is looked up in the working directory, then
     in :func:`cache_directory`, and downloaded there from :data:`LALSUITE_EPHEMERIS_URL` if absent; nothing
     else is downloaded. Wherever it is found, a table looked up by a name with a recorded SHA-256
-    (:data:`RECORDED_SHA256`, the two default tables) must have that content. A path with a directory,
-    such as ``./earth00-40-DE405.dat.gz``, is the caller's own table and is used as it is.
+    (:data:`RECORDED_SHA256`, the two default tables compressed or not) must have that content. A path
+    with a directory, such as ``tables/earth00-40-DE405.dat.gz`` or ``"./earth00-40-DE405.dat.gz"`` given
+    as a string, is the caller's own table and is used as it is. (:class:`~pathlib.Path` drops a leading
+    ``./``, so give that form as a string.)
 
     Raises:
-        FileNotFoundError: If the file is neither local nor a standard name, the cache cannot be written,
-            or the download failed.
+        FileNotFoundError: If the file does not exist and is not a standard name, the cache cannot be
+            written, or the download failed.
         ValueError: If a table looked up by a recorded name does not have the recorded content.
     """
-    path = Path(name_or_path)
-    by_name = path.parent == Path() and _STANDARD_NAME.match(path.name) is not None
+    raw = os.fspath(name_or_path)
+    path = Path(raw)
+    by_name = os.path.basename(raw) == raw and _STANDARD_NAME.match(raw) is not None
     for candidate in (path, Path(f"{path}.gz")):
         if candidate.exists():
             if by_name:
                 _require_recorded_content(candidate, candidate.name)
             return candidate
     if not by_name:
+        if os.path.basename(raw) != raw:
+            raise FileNotFoundError(f"Ephemeris {raw!r} does not exist.")
         raise FileNotFoundError(
-            f"Ephemeris {str(name_or_path)!r} does not exist, and is not a standard LALPulsar name such as "
+            f"Ephemeris {raw!r} does not exist, and is not a standard LALPulsar name such as "
             f"{DEFAULT_EARTH_EPHEMERIS!r} that can be downloaded."
         )
     cached = cache_directory() / path.name
@@ -249,7 +257,7 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
             urllib.request.urlopen(f"{LALSUITE_EPHEMERIS_URL}/{path.name}", timeout=60) as response,  # noqa: S310
         ):
             shutil.copyfileobj(response, target)
-        _require_recorded_content(Path(partial), path.name)
+        _require_recorded_content(Path(partial), path.name, downloaded=True)
         os.replace(partial, cached)
     except ValueError:
         Path(partial).unlink(missing_ok=True)
@@ -264,8 +272,13 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
     return cached
 
 
-def _require_recorded_content(path: Path, name: str) -> None:
+def _require_recorded_content(path: Path, name: str, *, downloaded: bool = False) -> None:
     """Refuse a table looked up by a default table's name whose content is not the recorded one.
+
+    Args:
+        path: The file found or downloaded.
+        name: The name it was looked up by.
+        downloaded: Whether ``path`` is a download just made, which is then discarded.
 
     Raises:
         ValueError: If ``name`` has a recorded SHA-256 and the file's differs.
@@ -274,12 +287,22 @@ def _require_recorded_content(path: Path, name: str) -> None:
     if expected is None:
         return
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
-    if actual != expected:
-        raise ValueError(
-            f"Ephemeris {path} has SHA-256 {actual}, not the {expected} recorded for {name}. Either the copy is "
-            f"corrupt -- delete it and it is downloaded again -- or the table changed upstream, which moves the "
-            f"reference trajectories and is worth understanding before using it."
+    if actual == expected:
+        return
+    if downloaded:
+        cause = (
+            f"The copy just downloaded from {LALSUITE_EPHEMERIS_URL} has SHA-256 {actual}, not the {expected} "
+            f"recorded for {name}, and was discarded. Either the download was corrupted -- try again -- or the "
+            f"table changed upstream, which moves the reference trajectories and is worth understanding first."
         )
+    else:
+        cause = (
+            f"Ephemeris {path} has SHA-256 {actual}, not the {expected} recorded for {name}. If it is a copy of "
+            f"the default table, it is corrupt: delete it and it is downloaded again."
+        )
+    raise ValueError(
+        f"{cause} To use a different table under this name, pass a path with a directory, such as 'tables/{name}'."
+    )
 
 
 @cache

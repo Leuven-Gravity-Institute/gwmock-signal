@@ -11,10 +11,13 @@
 # records to agree. CI derives its cache identifier from this file, so editing it invalidates the cache.
 #
 # Recorded 2026-08-03 from ripplegw's own download of
-# https://git.ligo.org/lscsoft/lalsuite/-/raw/master/lalpulsar/lib/<name>.
+# https://git.ligo.org/lscsoft/lalsuite/-/raw/master/lalpulsar/lib/<name>. The `.dat` lines are the
+# same tables uncompressed, for a table looked up by that name.
 #
 # If verification fails: either the cache is corrupt (clear it and refetch) or upstream changed
 # the tables. The second case is worth understanding before updating these lines, because it
 # means the reference trajectories moved.
 4995647b2c47617c90804ad0bc814ce42b426f1e5015a90cf939bcdd0c20ea67  earth00-40-DE405.dat.gz
 0b132dc5a712ebc16661a10cb88409e2577c16723c64f98e9b9b4d265510700f  sun00-40-DE405.dat.gz
+cd966343cd6bee67c3c1ed7722ea1cb41dc89971bdb9515fdeb7610d7161d1da  earth00-40-DE405.dat
+69ddd05c1b76783821131154c2cafc9f1059b784fc9429ac9ec739eac5dc965e  sun00-40-DE405.dat

@@ -211,10 +211,54 @@ def test_a_default_name_in_the_working_directory_is_still_verified(tmp_path, mon
         solar_system.read_table.__wrapped__("sun00-40-DE405.dat.gz")
 
 
-def test_a_table_passed_by_path_is_used_whatever_its_name(tmp_path):
+def test_an_uncompressed_default_name_is_verified_too(tmp_path, monkeypatch):
+    """``.dat`` is a standard name as well, so it is held to the uncompressed table's recorded content."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "earth00-40-DE405.dat").write_text("0 7200 1\n" + "0 " + "1 " * 9 + "\n")
+    with pytest.raises(ValueError, match=r"recorded for earth00-40-DE405\.dat\. .*'tables/earth00-40-DE405\.dat'"):
+        solar_system.read_table.__wrapped__("earth00-40-DE405.dat")
+
+
+def test_the_uncompressed_record_is_the_compressed_tables_content(tables):
+    """The ``.dat`` digests are the published ``.gz`` tables decompressed, not values of their own."""
+    import hashlib
+
+    for table in tables:
+        content = gzip.decompress(Path(table.source).read_bytes())
+        name = Path(table.source).name.removesuffix(".gz")
+        assert hashlib.sha256(content).hexdigest() == solar_system.RECORDED_SHA256[name]
+
+
+@pytest.mark.parametrize("form", ["absolute", "relative", "dot-relative"])
+def test_a_table_passed_by_path_is_used_whatever_its_name(tmp_path, monkeypatch, form):
     """A caller's own table is theirs: a default name on a path does not make it the recorded table."""
-    table = solar_system.read_table.__wrapped__(str(_one_row_table(tmp_path / "earth00-40-DE405.dat.gz")))
-    assert table.position.shape == (1, 3)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "tables").mkdir()
+    _one_row_table(tmp_path / "earth00-40-DE405.dat.gz")
+    _one_row_table(tmp_path / "tables" / "earth00-40-DE405.dat.gz")
+    given = {
+        "absolute": str(tmp_path / "tables" / "earth00-40-DE405.dat.gz"),
+        "relative": "tables/earth00-40-DE405.dat.gz",
+        "dot-relative": "./earth00-40-DE405.dat.gz",
+    }[form]
+    assert solar_system.read_table.__wrapped__(given).position.shape == (1, 3)
+
+
+def test_a_missing_path_is_said_to_be_missing(tmp_path):
+    """A path with a directory that does not exist is missing; whether its name is standard is beside the point."""
+    with pytest.raises(FileNotFoundError, match=r"does not exist\.\Z"):
+        solar_system.resolve_table(str(tmp_path / "earth00-40-DE405.dat.gz"))
+
+
+def test_a_download_with_other_content_is_discarded_and_said_to_be_one(tmp_path, monkeypatch):
+    """A fresh download that is not the recorded table names the download, not a file to delete, and leaves nothing."""
+    import io
+
+    monkeypatch.setenv("GWMOCK_SIGNAL_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(solar_system.urllib.request, "urlopen", lambda *_, **__: io.BytesIO(b"not a table"))
+    with pytest.raises(ValueError, match=r"just downloaded .* was discarded"):
+        solar_system.resolve_table("sun00-40-DE405.dat.gz")
+    assert list((tmp_path / "ephemeris").iterdir()) == []
 
 
 def test_a_cache_that_cannot_be_written_is_reported_as_such(tmp_path, monkeypatch):
