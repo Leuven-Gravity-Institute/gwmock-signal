@@ -56,6 +56,7 @@ def test_inject_cbc_signal_applies_the_finite_arm_response():
     assert null < np.max(np.abs(vertex.data.sum(axis=0))) / peak / 100
 
 
+@pytest.mark.requires_lalsuite
 def test_write_forwards_the_option(monkeypatch, tmp_path):
     """``CBCSimulator.write`` passes the option on to ``simulate``."""
     seen = {}
@@ -78,6 +79,7 @@ def test_write_forwards_the_option(monkeypatch, tmp_path):
     assert seen["finite_arm_length"] is True
 
 
+@pytest.mark.requires_lalsuite
 def test_the_cli_flag_reaches_the_pipeline(monkeypatch, tmp_path):
     """``--finite-arm-length`` arrives at ``inject_cbc_signal``; without it the option is off."""
     seen = []
