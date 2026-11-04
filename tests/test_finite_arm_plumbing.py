@@ -66,6 +66,7 @@ def test_inject_cbc_signal_applies_the_finite_arm_response():
     assert null < np.max(np.abs(vertex.data.sum(axis=0))) / peak / 100
 
 
+@pytest.mark.requires_lalsuite
 def test_write_forwards_the_effects(monkeypatch, tmp_path):
     """``CBCSimulator.write`` passes the effects on to ``simulate``."""
     seen = {}
@@ -88,6 +89,7 @@ def test_write_forwards_the_effects(monkeypatch, tmp_path):
     assert seen["effects"] == ProjectionEffects(shapiro_delay=False)
 
 
+@pytest.mark.requires_lalsuite
 def test_the_cli_flag_reaches_the_pipeline(monkeypatch, tmp_path):
     """Every effect is on by default, and each ``--no-...`` flag turns off exactly its own."""
     seen = []
