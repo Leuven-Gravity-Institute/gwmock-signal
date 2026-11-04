@@ -35,19 +35,32 @@ import numpy as np
 
 from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
+from gwmock_signal.projection import solar_system
+from gwmock_signal.projection.effects import ProjectionEffects
+from gwmock_signal.projection.geometry import (
+    DetectorKey,
+    DetectorSpec,
+    detector_fields,
+    reconstructed_geometry,
+    resolve_detectors,
+)
 from gwmock_signal.projection.jax_projection import (
+    SolarArguments,
     antenna_pattern,
     project_polarizations_fd,
     project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
+from gwmock_signal.projection.kernels import arm_directions
+from gwmock_signal.projection.network import _arm_lengths, _resolve_effects
 from gwmock_signal.projection.resampling import (
+    SPEED_OF_LIGHT_M_S,
     edge_padding,
     require_shift_within_padding,
     require_terrestrial_location,
 )
-from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy
+from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy, precessed_sky_anchor_and_rate
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform.backends.ripple import FrequencyDomainPolarizations, RippleBackend
@@ -167,7 +180,9 @@ def _resolve_detector_specs(
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
-def _static_projection_kernel(n_samples: int, sampling_frequency: float) -> Callable[..., Array]:
+def _static_projection_kernel(
+    n_samples: int, sampling_frequency: float, arm_length: float | None = None
+) -> Callable[..., Array]:
     """Return a cached jitted kernel for the midpoint-only (``earth_rotation=False``) path.
 
     Takes the spectra of the *padded* time-domain polarizations (see :func:`_time_domain_kernel`),
@@ -179,9 +194,12 @@ def _static_projection_kernel(n_samples: int, sampling_frequency: float) -> Call
         n_samples: Samples in the padded buffer the kernel returns.
         sampling_frequency: Sample rate in Hz.
 
+        arm_length: For one arm of the finite-arm response, its length in metres; the callable then
+            also takes each event's ``alignment``, the cosine between the arm and the source.
+
     Returns:
-        A callable over ``(frequencies, plus, cross, f_plus, f_cross, time_delay)``, batched
-        over events and unmapped over the shared frequency grid.
+        A callable over ``(frequencies, plus, cross, f_plus, f_cross, time_delay, alignment)``,
+        batched over events and unmapped over the shared frequency grid.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
@@ -192,6 +210,7 @@ def _static_projection_kernel(n_samples: int, sampling_frequency: float) -> Call
         f_plus: Array,
         f_cross: Array,
         time_delay: Array,
+        alignment: Array,
     ) -> Array:
         return project_polarizations_fd(
             frequencies,
@@ -202,9 +221,11 @@ def _static_projection_kernel(n_samples: int, sampling_frequency: float) -> Call
             time_delay=time_delay,
             n_samples=n_samples,
             sampling_frequency=sampling_frequency,
+            arm_length=arm_length,
+            alignment=alignment,
         )
 
-    return jax.jit(jax.vmap(_project_event, in_axes=(None, 0, 0, 0, 0, 0)))
+    return jax.jit(jax.vmap(_project_event, in_axes=(None, 0, 0, 0, 0, 0, 0)))
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
@@ -240,7 +261,12 @@ def _time_domain_kernel(
 
 
 @lru_cache(maxsize=_KERNEL_CACHE_SIZE)
-def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Callable[..., Array]:
+def _rotating_projection_kernel(
+    n_samples: int,
+    sampling_frequency: float,
+    arm_lengths: tuple[float, float] | None = None,
+    solar_components: tuple[bool, bool, bool] | None = None,
+) -> Callable[..., Array]:
     """Return a cached jitted kernel for the rotating (``earth_rotation=True``) path.
 
     Detector geometry and the sidereal rate are unmapped *arguments*, not closed-over values:
@@ -252,9 +278,16 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
         n_samples: Samples in the padded buffer the kernel projects and returns.
         sampling_frequency: Sample rate in Hz.
 
+        arm_lengths: The two arm lengths for the finite-arm response, ``None`` for the long-wavelength
+            one; static, since the residual's filters are worked out on the host from them.
+        solar_components: ``(roemer, einstein, shapiro)`` for the solar-system delay, ``None`` for none.
+
     Returns:
         A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, extra_shift,
-        gmst_rate, response, location)``, batched over events.
+        solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response, location, arms)``,
+        batched over events; the solar arguments are each event's
+        :meth:`~gwmock_signal.projection.solar_system.DelayModel.arrays`, first sample's time since the
+        model's epoch, and absorbed ``(reference, delay, rate)``.
     """
     import jax  # noqa: PLC0415
 
@@ -268,10 +301,19 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
         psi: Array,
         gmst_start: Array,
         extra_shift: Array,
+        solar_arrays: tuple,
+        solar_start_offset: Array,
+        solar_absorbed: Array,
         gmst_rate: Array,
         response: Array,
         location: Array,
+        arms: Array,
     ) -> Array:
+        solar = (
+            None
+            if solar_components is None
+            else SolarArguments(solar_arrays, solar_components, solar_start_offset, solar_absorbed)
+        )
         return project_polarizations_td_rotating(
             plus,
             cross,
@@ -287,12 +329,15 @@ def _rotating_projection_kernel(n_samples: int, sampling_frequency: float) -> Ca
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
             extra_shift_samples=extra_shift,
+            arms=None if arm_lengths is None else arms,
+            arm_lengths=arm_lengths,
+            solar=solar,
         )
 
     # The sky-position rates are mapped, not unmapped: where they are non-zero they are per-event,
     # because each event's segment sits at its own epoch and the precession polynomials' derivatives
     # differ between epochs. Sharing one rate across a batch would be a second, silent approximation.
-    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None)))
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -454,6 +499,96 @@ def _check_batch_fits(n_events: int, n_detectors: int, n_samples: int, *, earth_
     )
 
 
+@dataclass(frozen=True)
+class _EventSky:
+    """Each event's sky position and solar-system delay, resolved on the host for the batched kernels.
+
+    Attributes:
+        right_ascension: At each event's first unpadded sample; of date when precessing, J2000 otherwise.
+        declination: Likewise.
+        right_ascension_rate: How fast it moves, radians per second; zero without precession.
+        declination_rate: Likewise.
+        models: Each event's :class:`~gwmock_signal.projection.solar_system.DelayModel`, ``None`` without
+            the solar-system delays.
+        absorbed: Each event's ``(coalescence less the model's epoch, delay, rate)`` there.
+        padded_start: Each event's first padded sample, GPS.
+    """
+
+    right_ascension: np.ndarray
+    declination: np.ndarray
+    right_ascension_rate: np.ndarray
+    declination_rate: np.ndarray
+    models: list[solar_system.DelayModel] | None
+    absorbed: np.ndarray | None
+    padded_start: np.ndarray
+
+    @property
+    def solar(self) -> tuple | None:
+        """Return ``(components, stacked arrays, start offsets, absorbed)`` for the rotating kernel."""
+        if self.models is None:
+            return None
+        arrays = tuple(np.stack(parts) for parts in zip(*(model.arrays() for model in self.models), strict=True))
+        offsets = self.padded_start - np.array([model.epoch for model in self.models])
+        return self.models[0].components, arrays, offsets, self.absorbed
+
+    def solar_delay_at(self, gps: np.ndarray) -> np.ndarray:
+        """Return each event's solar-system delay at its own GPS time, with its coalescence values absorbed."""
+        delays = []
+        for model, absorbed, time in zip(self.models, self.absorbed, np.atleast_1d(gps), strict=True):
+            since = np.array([time - model.epoch])
+            delays.append(float(model.evaluate(since)[0]) - absorbed[1] - absorbed[2] * (since[0] - absorbed[0]))
+        return np.asarray(delays)
+
+
+def _event_sky(  # noqa: PLR0913
+    effects: ProjectionEffects,
+    ephemeris: SolarSystemEphemeris,
+    *,
+    right_ascension: np.ndarray,
+    declination: np.ndarray,
+    coa_time: np.ndarray,
+    input_start: np.ndarray,
+    span: float,
+    padding_seconds: float,
+) -> _EventSky:
+    """Resolve each event's sky line and solar-system delay as the host projection does for one event.
+
+    The sky line is anchored at the event's first unpadded sample; the solar-system delay is absorbed at
+    its coalescence and evaluated from the J2000 position.
+    """
+    count = len(coa_time)
+    right_ascension = np.broadcast_to(right_ascension, (count,)).astype(float)
+    declination = np.broadcast_to(declination, (count,)).astype(float)
+    if effects.source_precession:
+        lines = [
+            precessed_sky_anchor_and_rate(float(ra), float(dec), float(start))
+            for ra, dec, start in zip(right_ascension, declination, input_start, strict=True)
+        ]
+        anchor = np.array([line[0] for line in lines])
+        rates = np.array([line[1] for line in lines])
+    else:
+        anchor = np.stack([right_ascension, declination], axis=1)
+        rates = np.zeros((count, 2))
+    padded_start = input_start - padding_seconds
+    models = absorbed = None
+    if effects.solar_system:
+        components = {
+            "roemer": effects.roemer_delay,
+            "einstein": effects.einstein_delay,
+            "shapiro": effects.shapiro_delay,
+        }
+        models, rows = [], []
+        for ra, dec, start, coalescence in zip(right_ascension, declination, padded_start, coa_time, strict=True):
+            model = solar_system.DelayModel.build(
+                float(start) - 0.1, float(start) + span + 0.1, float(ra), float(dec), ephemeris, **components
+            )
+            value, rate = solar_system.delay(np.array([coalescence]), float(ra), float(dec), ephemeris, **components)
+            models.append(model)
+            rows.append((float(coalescence) - model.epoch, float(value[0]), float(rate[0])))
+        absorbed = np.array(rows)
+    return _EventSky(anchor[:, 0], anchor[:, 1], rates[:, 0], rates[:, 1], models, absorbed, padded_start)
+
+
 def simulate_cbc_batch(  # noqa: PLR0913
     approximant: str,
     detector_names: Sequence[DetectorSpec],
@@ -462,8 +597,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
     minimum_frequency: float,
     parameters: Mapping[str, object],
     backend: RippleBackend | None = None,
-    earth_rotation: bool = True,
+    effects: ProjectionEffects | None = None,
+    ephemeris: SolarSystemEphemeris | None = None,
     output_grid: SamplingGrid | None = None,
+    earth_rotation: bool | None = None,
 ) -> BatchedDetectorStrain:
     """Simulate a catalogue of CBC signals on device, one strain per event and detector.
 
@@ -504,19 +641,16 @@ def simulate_cbc_batch(  # noqa: PLR0913
             integer-offset add. When omitted, buffers start at the arbitrary time
             ``epoch + coa_time`` and the consumer must resample; see
             :mod:`gwmock_signal.sampling_grid` for what that costs.
-        earth_rotation: If ``True`` (default, matching
-            :func:`~gwmock_signal.projection.network.project_polarizations_to_network`),
-            evaluate the antenna pattern and geocenter delay per sample and resample the
-            polarizations at the delayed times. If ``False``, evaluate both once at the
-            segment midpoint and apply the delay as an exact frequency-domain phase
-            shift, which is cheaper but only valid for signals short compared with an
-            hour. A binary neutron star in the Einstein Telescope band occupies 2048 s
-            at 10 Hz and 16384 s at 5 Hz, over which the detector sweeps tens of
-            degrees, so ``False`` is not appropriate for that population.
-
-    Both branches use the long-wavelength detector response: the device path has no finite-arm
-    response, which ``finite_arm_length=True`` selects on the host projection
-    (:func:`~gwmock_signal.projection.network.project_polarizations_to_network`).
+        effects: Which physical effects the projection includes, as on the host; see
+            :class:`~gwmock_signal.projection.effects.ProjectionEffects`. ``None``, the default, means
+            all of them. Without ``earth_rotation`` the antenna pattern and delays are evaluated once at
+            the segment midpoint and applied as an exact frequency-domain shift, which suits signals
+            short compared with an hour: a binary neutron star in the Einstein Telescope band occupies
+            2048 s at 10 Hz and 16384 s at 5 Hz, over which the detector sweeps tens of degrees. The
+            solar-system delays are absorbed at each event's ``coa_time``.
+        ephemeris: The Earth and Sun tables for the solar-system delays; the LALPulsar DE405 tables by
+            default.
+        earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
 
     Returns:
         A :class:`BatchedDetectorStrain` with the ``(n_events, n_detectors,
@@ -525,12 +659,15 @@ def simulate_cbc_batch(  # noqa: PLR0913
     """
     import jax.numpy as jnp  # noqa: PLC0415
 
+    effects = _resolve_effects(effects, earth_rotation=earth_rotation, caller="simulate_cbc_batch")
+    earth_rotation = effects.earth_rotation
     backend = backend or RippleBackend()
     # Resolved before anything expensive: an unknown detector should fail here, not after a
     # catalogue has been generated. The two halves are used for different things -- lookup_keys
     # index LAL's registry, output_names key the result -- and conflating them is what limited
     # this path to built-in interferometer codes.
     output_names, lookup_keys = _resolve_detector_specs(detector_names)
+    lengths = _arm_lengths(list(detector_names)) if effects.finite_arm_length else None
 
     # Before generating anything: the estimate includes the waveform-generation buffers, so a
     # check placed after generation could never fire for a batch that exhausts memory *during*
@@ -585,17 +722,23 @@ def simulate_cbc_batch(  # noqa: PLR0913
         # Whole samples, so the padded buffer stays on the lattice the unpadded one was put on.
         start_index = start_index - padding
 
+    sky = _event_sky(
+        effects,
+        SolarSystemEphemeris() if ephemeris is None else ephemeris,
+        right_ascension=np.asarray(right_ascension, dtype=float),
+        declination=np.asarray(declination, dtype=float),
+        coa_time=coa_time,
+        input_start=coa_time + waveform_epoch - alignment_shift / sampling_frequency,
+        span=(projected_samples - 1) * dt,
+        padding_seconds=padding * dt,
+    )
+
     if earth_rotation:
         # The aligned buffer starts one fractional sample earlier than requested, so the
         # sidereal anchor must move with it or F(t) and tau(t) are evaluated up to a full
         # sample after the samples they multiply. `epoch` is the padded buffer's, so the anchor is
         # its first padded sample, where the kernel's sample offsets count from.
         segment_start_gps = coa_time + epoch - alignment_shift / sampling_frequency
-        # No precession, and explicit zero rates rather than an omission. This is the batched
-        # *compact-binary* path, so it follows the convention CBC searches use -- `gha = gmst - ra`
-        # with the catalogue right ascension, matching `XLALTimeDelayFromEarthCenter` -- which is
-        # `project_polarizations_to_network`'s default and what the equivalence tests compare it to.
-        # `precess_source_direction` in that function documents why the continuous-wave path differs.
         strain = _project_rotating(
             fd,
             lookup_keys,
@@ -604,12 +747,17 @@ def simulate_cbc_batch(  # noqa: PLR0913
             sampling_frequency=sampling_frequency,
             merger_index=merger_index,
             segment_start_gps=segment_start_gps,
-            right_ascension=jnp.asarray(right_ascension, dtype=jnp.float64),
-            declination=jnp.asarray(declination, dtype=jnp.float64),
-            right_ascension_rate=jnp.zeros_like(right_ascension),
-            declination_rate=jnp.zeros_like(declination),
+            # The kernel counts from each event's first padded sample, so the sky line is carried there
+            # from the first unpadded one, where it was fitted, as on the host.
+            right_ascension=jnp.asarray(sky.right_ascension - sky.right_ascension_rate * padding * dt),
+            declination=jnp.asarray(sky.declination - sky.declination_rate * padding * dt),
+            right_ascension_rate=jnp.asarray(sky.right_ascension_rate),
+            declination_rate=jnp.asarray(sky.declination_rate),
             polarization_angle=polarization_angle,
             alignment_shift=alignment_shift,
+            arm_lengths={name: lengths[name] for name in output_names} if lengths is not None else None,
+            output_names=output_names,
+            solar=sky.solar,
         )
         return BatchedDetectorStrain(
             strain=strain,
@@ -621,6 +769,59 @@ def simulate_cbc_batch(  # noqa: PLR0913
             grid=output_grid,
         )
 
+    per_detector = _project_static(
+        fd,
+        lookup_keys,
+        output_names,
+        n_samples=n_samples,
+        padding=padding,
+        sampling_frequency=sampling_frequency,
+        merger_index=merger_index,
+        epoch=epoch,
+        coa_time=coa_time,
+        alignment_shift=alignment_shift,
+        polarization_angle=polarization_angle,
+        sky=sky,
+        arm_lengths=lengths,
+    )
+    strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples + 2 * padding)
+    return BatchedDetectorStrain(
+        strain=strain,
+        detector_names=output_names,
+        coa_time=coa_time,
+        epoch=epoch,
+        sampling_frequency=sampling_frequency,
+        start_index=start_index,
+        grid=output_grid,
+    )
+
+
+def _project_static(  # noqa: PLR0913
+    fd: FrequencyDomainPolarizations,
+    lookup_keys: Sequence[DetectorKey],
+    output_names: Sequence[str],
+    *,
+    n_samples: int,
+    padding: int,
+    sampling_frequency: float,
+    merger_index: int,
+    epoch: float,
+    coa_time: np.ndarray,
+    alignment_shift: np.ndarray,
+    polarization_angle: Array,
+    sky: _EventSky,
+    arm_lengths: Mapping[str, tuple[float, float]] | None,
+) -> list[Array]:
+    """Project a batch with the antenna pattern and delays held at each segment's midpoint, on device.
+
+    Returns:
+        One ``(n_events, n_samples + 2 * padding)`` strain per detector.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    dt = 1.0 / sampling_frequency
+    projected_samples = n_samples + 2 * padding
+    lengths = arm_lengths
     # earth_rotation=False reference time: the midpoint of each event's placed segment. The padding
     # is symmetric, so this is also the midpoint of the padded buffer, which is where the host
     # projection evaluates it.
@@ -638,47 +839,47 @@ def simulate_cbc_batch(  # noqa: PLR0913
     padded_plus = jnp.fft.rfft(to_time_domain(fd.plus), axis=-1) * dt
     padded_cross = jnp.fft.rfft(to_time_domain(fd.cross), axis=-1) * dt
     padded_frequencies = jnp.asarray(np.fft.rfftfreq(projected_samples, d=dt), dtype=jnp.float64)
-    project_batch = _static_projection_kernel(projected_samples, sampling_frequency)
 
+    shift = jnp.asarray(alignment_shift, dtype=jnp.float64) / sampling_frequency
+    if sky.solar is not None:
+        # Held at the reference time, as the pattern and the site delay are on this branch.
+        shift = shift - jnp.asarray(sky.solar_delay_at(aligned_midpoint))
+    right_ascension_fd, declination_fd = jnp.asarray(sky.right_ascension), jnp.asarray(sky.declination)
+    angles = {"right_ascension": right_ascension_fd, "declination": declination_fd}
     per_detector = []
-    for key in lookup_keys:
+    for name, key in zip(output_names, lookup_keys, strict=True):
         response, location = reconstructed_geometry(key)
         # The same precondition the rotating path checks: the padding is sized for a terrestrial
         # delay, and this phase shift is circular on the padded buffer, so a detector further out
         # would move signal past an edge and wrap it round. Checked here, where the location is
         # still a concrete host array.
         require_terrestrial_location(location, name=f"location of {key}")
-        f_plus, f_cross = antenna_pattern(
-            response,
-            gmst,
-            right_ascension=right_ascension,
-            declination=declination,
-            polarization_angle=polarization_angle,
-        )
-        time_delay = time_delay_from_geocenter(location, gmst, right_ascension=right_ascension, declination=declination)
-        # The alignment offset is a pure time shift, so it rides on the same exact phase
-        # factor as the geocenter delay: no interpolation is involved on this branch at all.
-        per_detector.append(
-            project_batch(
-                padded_frequencies,
-                padded_plus,
-                padded_cross,
-                f_plus,
-                f_cross,
-                time_delay + jnp.asarray(alignment_shift, dtype=jnp.float64) / sampling_frequency,
+        if lengths is None:
+            terms = [(1.0, response, location, None, None)]
+        else:
+            fields = key if isinstance(key, tuple) else detector_fields(key)
+            terms = [
+                (sign, 0.5 * np.outer(arm, arm), location + 0.5 * length * arm, arm, length)
+                for sign, arm, length in zip((1.0, -1.0), arm_directions(fields, xp=np), lengths[name], strict=True)
+            ]
+        detector = 0.0
+        for sign, tensor, point, arm, length in terms:
+            f_plus, f_cross = antenna_pattern(tensor, gmst, polarization_angle=polarization_angle, **angles)
+            # The alignment offset is a pure time shift, so it rides on the same exact phase factor as the
+            # geocenter delay: no interpolation is involved on this branch at all.
+            delay = time_delay_from_geocenter(point, gmst, **angles) + shift
+            alignment = (
+                jnp.zeros_like(delay)
+                if arm is None
+                else -SPEED_OF_LIGHT_M_S * time_delay_from_geocenter(arm, gmst, **angles)
             )
-        )
+            project_batch = _static_projection_kernel(projected_samples, sampling_frequency, length)
+            detector = detector + sign * project_batch(
+                padded_frequencies, padded_plus, padded_cross, f_plus, f_cross, delay, alignment
+            )
+        per_detector.append(detector)
 
-    strain = jnp.stack(per_detector, axis=1)  # (n_events, n_detectors, n_samples + 2 * padding)
-    return BatchedDetectorStrain(
-        strain=strain,
-        detector_names=output_names,
-        coa_time=coa_time,
-        epoch=epoch,
-        sampling_frequency=sampling_frequency,
-        start_index=start_index,
-        grid=output_grid,
-    )
+    return per_detector
 
 
 def _project_rotating(  # noqa: PLR0913
@@ -696,6 +897,9 @@ def _project_rotating(  # noqa: PLR0913
     declination_rate: Array,
     polarization_angle: Array,
     alignment_shift: np.ndarray,
+    arm_lengths: Mapping[str, tuple[float, float]] | None = None,
+    output_names: Sequence[str] = (),
+    solar: tuple | None = None,
 ) -> Array:
     """Project a batch with a time-dependent antenna pattern, on device.
 
@@ -719,15 +923,17 @@ def _project_rotating(  # noqa: PLR0913
             ``(n_events,)``. Used on the host to anchor sidereal time per event.
         right_ascension: Per-event right ascension in radians.
         declination: Per-event declination in radians.
-        right_ascension_rate: Per-event rate of change of right ascension, in radians per second.
-            Zero on this path, which follows the compact-binary convention of not precessing the
-            source direction; the kernel takes it because the continuous-wave route, which does
-            precess, shares that kernel.
+        right_ascension_rate: Per-event rate of change of right ascension, in radians per second:
+            zero without source precession.
         declination_rate: Per-event rate of change of declination, in radians per second.
         polarization_angle: Per-event polarization angle in radians.
         alignment_shift: Per-event sub-sample offset, in samples, to absorb so the output
             starts on the caller's lattice. Folded into the resampling the projection already
             performs, so it is one exact operation rather than two.
+        arm_lengths: Each detector's arm lengths, keyed by output name, for the finite-arm response;
+            ``None`` for the long-wavelength one.
+        output_names: The detectors' output names, in the order of ``lookup_keys``.
+        solar: :attr:`_EventSky.solar`, or ``None`` without the solar-system delays.
 
     Returns:
         Strain of shape ``(n_events, n_detectors, n_samples + 2 * padding)``.
@@ -754,11 +960,32 @@ def _project_rotating(  # noqa: PLR0913
     # compilation. Pinning it removes that possibility.
     gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
 
-    project_batch = _rotating_projection_kernel(n_samples + 2 * padding, sampling_frequency)
+    count = len(segment_start_gps)
+    if solar is None:
+        components, solar_arrays, start_offsets, absorbed = (
+            None,
+            (np.zeros((count, 1)),),
+            np.zeros(count),
+            np.zeros((count, 3)),
+        )
+    else:
+        components, solar_arrays, start_offsets, absorbed = solar
+    solar_arguments = (
+        tuple(jnp.asarray(array) for array in solar_arrays),
+        jnp.asarray(start_offsets, dtype=jnp.float64),
+        jnp.asarray(absorbed, dtype=jnp.float64),
+    )
 
     per_detector = []
-    for key in lookup_keys:
+    for name, key in zip(output_names or [None] * len(lookup_keys), lookup_keys, strict=True):
         response, location = reconstructed_geometry(key)
+        lengths = None if arm_lengths is None else tuple(float(length) for length in arm_lengths[name])
+        arms = (
+            np.stack(arm_directions(key if isinstance(key, tuple) else detector_fields(key), xp=np))
+            if lengths is not None
+            else np.zeros((2, 3))
+        )
+        project_batch = _rotating_projection_kernel(n_samples + 2 * padding, sampling_frequency, lengths, components)
         per_detector.append(
             project_batch(
                 plus_td,
@@ -770,9 +997,11 @@ def _project_rotating(  # noqa: PLR0913
                 polarization_angle,
                 gmst_anchors,
                 jnp.asarray(alignment_shift, dtype=jnp.float64),
+                *solar_arguments,
                 gmst_rate,
                 jnp.asarray(response, dtype=jnp.float64),
                 jnp.asarray(location, dtype=jnp.float64),
+                jnp.asarray(arms, dtype=jnp.float64),
             )
         )
 
@@ -1122,12 +1351,14 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
     start_time: float,
     end_time: float,
     backend: RippleBackend | None = None,
-    earth_rotation: bool = True,
+    effects: ProjectionEffects | None = None,
+    ephemeris: SolarSystemEphemeris | None = None,
     n_chirp_mass_bins: int = 1,
     chunk_size: int | None = None,
     memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
     align_to_output_grid: bool = True,
     interpolate_if_offset: bool = True,
+    earth_rotation: bool | None = None,
 ) -> list[DetectorStrainStack]:
     """Generate a catalogue on device and assemble it into fixed-duration segments.
 
@@ -1170,9 +1401,10 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             ``segment_duration`` that grid is used for every bin (binning then
             saves no *buffer* memory, though it still splits the catalogue into
             per-bin calls, and the run keeps the single-grid model).
-        earth_rotation: Forwarded to :func:`simulate_cbc_batch`. Defaults to ``True``, and
-            also makes the automatic chunk size smaller, because the rotating path holds
-            more buffers per detector.
+        effects: Forwarded to :func:`simulate_cbc_batch`; all on by default. Its ``earth_rotation``
+            also makes the automatic chunk size smaller, because the rotating path holds more buffers
+            per detector.
+        ephemeris: Forwarded to :func:`simulate_cbc_batch`.
         n_chirp_mass_bins: Number of chirp-mass groups generated separately, each on
             its own worst-case grid (lightest first), injected on top of the
             earlier bins. ``1`` (default) uses a single grid sized for the
@@ -1195,10 +1427,13 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             deliberately; it is a legacy mode, not a fallback.
         interpolate_if_offset: Forwarded to :func:`assemble_segments`.
 
+        earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+
     Returns:
         One :class:`~gwmock_signal.multichannel.stack.DetectorStrainStack` per
         segment, in time order.
     """
+    effects = _resolve_effects(effects, earth_rotation=earth_rotation, caller="simulate_cbc_catalogue")
     if segment_duration <= 0:
         raise ValueError("segment_duration must be > 0")
     if end_time <= start_time:
@@ -1251,7 +1486,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             effective_chunk = recommend_chunk_size(
                 len(tuple(detector_names)),
                 bin_samples,
-                earth_rotation=earth_rotation,
+                earth_rotation=effects.earth_rotation,
                 memory_fraction=memory_fraction,
             )
         for chunk_indices in _count_chunks(bin_indices, effective_chunk):
@@ -1263,7 +1498,8 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
                 minimum_frequency=minimum_frequency,
                 parameters=chunk_parameters,
                 backend=bin_backend,
-                earth_rotation=earth_rotation,
+                effects=effects,
+                ephemeris=ephemeris,
                 output_grid=output_grid,
             )
             # Chain groups: inject each on top of the segments built from earlier ones.

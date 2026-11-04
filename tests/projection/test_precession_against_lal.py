@@ -30,6 +30,7 @@ The ephemeris files are the same ones the continuous-wave tests use.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import itertools
 import pathlib
@@ -38,6 +39,7 @@ import numpy as np
 import pytest
 from astropy.time import Time
 
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.sidereal import gmst_rad_astropy, lunisolar_precession_angles, precess_to_epoch
 
@@ -113,7 +115,7 @@ def _lal_erot(prefix: str, right_ascension: float, declination: float, t_gps: fl
 def _our_erot(prefix: str, right_ascension: float, declination: float, t_gps: float, *, precess: bool) -> float:
     """Return this package's geocentre-to-detector delay, with the same sign convention as LAL.
 
-    Reproduces what ``_time_delay_from_earth_center_lal`` computes rather than calling it, because
+    Reproduces what the projection's site delay computes rather than calling it, because
     that function takes the detector-to-geocentre sign and this comparison is clearer with LAL's.
     """
     _, location = reconstructed_geometry(prefix)
@@ -239,7 +241,13 @@ def test_each_convention_reproduces_its_own_lal_function():
     """
     lal = pytest.importorskip("lal", reason="lalsuite is not installed")
 
-    from gwmock_signal.projection.network import _time_delay_from_earth_center_lal
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.kernels import time_delay_from_geocenter
+    from gwmock_signal.projection.network import _gmst_accurate
+
+    def _time_delay_from_earth_center_lal(code, *, right_ascension, declination, t_gps):
+        location = reconstructed_geometry(code)[1]
+        return float(time_delay_from_geocenter(location, _gmst_accurate(t_gps), right_ascension, declination, xp=np))
 
     prefix, right_ascension, declination, t_gps = "H1", 1.1, 0.3, 1.75e9
     detector = lal.CachedDetectors[lal.LALDetectorIndexLHODIFF]
@@ -323,8 +331,7 @@ def test_the_flag_selects_between_lals_two_conventions():
             right_ascension=ra,
             declination=dec,
             polarization_angle=0.0,
-            earth_rotation=False,
-            precess_source_direction=precess,
+            effects=dataclasses.replace(ProjectionEffects.long_wavelength(), source_precession=precess),
         )[prefix].value
 
     ra_of_date, dec_of_date = precess_to_epoch(right_ascension, declination, t_gps)
@@ -338,32 +345,26 @@ def test_the_flag_selects_between_lals_two_conventions():
     # float64 round-off on the same arithmetic; measured at 0.0 exactly, bounded at 1e-14 rather
     # than asserting equality in case the two orderings ever stop being identical.
     assert np.max(np.abs(routed - by_hand)) < 1e-14 * scale, (
-        "setting precess_source_direction did not reproduce pre-rotating the coordinates by hand, "
+        "setting source_precession did not reproduce pre-rotating the coordinates by hand, "
         "so the flag is not applying the rotation the tests above validated"
     )
     # And it must actually do something: measured at 6.8e-03 of peak here.
     assert np.max(np.abs(routed - untouched)) > 1e-04 * scale, (
-        "precess_source_direction=True gave the same result as False, so the flag is a no-op"
+        "source_precession=True gave the same result as False, so the flag is a no-op"
     )
 
 
-def test_the_projection_defaults_to_the_compact_binary_convention():
-    """The default must be the convention compact-binary searches use.
+def test_precession_is_on_by_default_and_off_in_the_long_wavelength_convention():
+    """Every effect is on by default, precession included; the LAL-convention preset turns it off.
 
-    Pinned separately because it is the load-bearing part of the design and nothing else asserts it:
-    every compact-binary path -- including the batched device one -- relies on the default rather
-    than passing the argument, so flipping it would silently move every CBC injection ~0.43 degrees
-    in right ascension while the tests above, which pass the flag explicitly, all stayed green.
+    A compact-binary analysis with LAL, Bilby or PyCBC computes the hour angle from GMST and a J2000
+    right ascension, so it recovers a right ascension offset from a precessed injection (0.43 degrees by
+    2030); ``ProjectionEffects.long_wavelength()`` reproduces their convention.
     """
-    import inspect
+    from gwmock_signal.projection.effects import ProjectionEffects
 
-    from gwmock_signal.projection.network import project_polarizations_to_network
-
-    default = inspect.signature(project_polarizations_to_network).parameters["precess_source_direction"].default
-    assert default is False, (
-        f"precess_source_direction defaults to {default!r}; it must default to False, the convention "
-        f"lal.XLALTimeDelayFromEarthCenter and every compact-binary search use"
-    )
+    assert ProjectionEffects().source_precession is True
+    assert ProjectionEffects.long_wavelength().source_precession is False
 
 
 @pytest.mark.requires_gwpy
@@ -401,8 +402,7 @@ def test_the_host_and_device_rotating_paths_agree_when_precessing():
             right_ascension=1.1,
             declination=0.3,
             polarization_angle=0.4,
-            earth_rotation=True,
-            precess_source_direction=True,
+            effects=dataclasses.replace(ProjectionEffects.long_wavelength(earth_rotation=True), source_precession=True),
             backend=backend,
         )
         for backend in ("numpy", "jax")

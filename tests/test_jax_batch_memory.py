@@ -208,14 +208,14 @@ def test_degenerate_shapes_rejected(events: int, detectors: int, samples: int) -
         estimate_batch_memory_bytes(events, detectors, samples)
 
 
-def test_catalogue_forwards_earth_rotation() -> None:
-    """``simulate_cbc_catalogue`` must expose Earth rotation.
+def test_catalogue_forwards_the_projection_effects() -> None:
+    """``simulate_cbc_catalogue`` must expose the projection effects, Earth rotation among them.
 
-    It did not when the rotating path first landed, so the production entry point silently
-    took the new default with no way to turn it off.
+    It did not expose Earth rotation when the rotating path first landed, so the production entry point
+    silently took the new default with no way to turn it off.
     """
     import inspect
 
     signature = inspect.signature(jax_batch.simulate_cbc_catalogue)
-    assert "earth_rotation" in signature.parameters
-    assert signature.parameters["earth_rotation"].default is True
+    assert signature.parameters["effects"].default is None  # every effect
+    assert "earth_rotation" in signature.parameters  # the deprecated spelling still works

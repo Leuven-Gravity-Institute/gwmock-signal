@@ -23,6 +23,7 @@ pytest.importorskip("ripplegw", reason="ripple not installed")
 
 from gwmock_signal.detector import CustomDetector  # noqa: E402
 from gwmock_signal.jax_batch import simulate_cbc_batch  # noqa: E402
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.projection.geometry import reconstructed_geometry, resolve_detectors  # noqa: E402
 
 _FS = 2048.0
@@ -61,7 +62,8 @@ def _batch(detectors: list, earth_rotation: bool = True) -> object:
         sampling_frequency=_FS,
         minimum_frequency=_F_MIN,
         parameters=dict(_PARAMETERS),
-        earth_rotation=earth_rotation,
+        # These custom detectors carry no arm lengths: the comparison is of geometry alone.
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
     )
 
 
@@ -90,7 +92,10 @@ def test_single_precision_reproduces_the_detector_registered_with_lal(earth_rota
 
     by_prefix = np.asarray(_batch([prefix], earth_rotation=earth_rotation).strain)
     by_single = np.asarray(
-        _batch([dataclasses.replace(detector, precision="single")], earth_rotation=earth_rotation).strain
+        _batch(
+            [dataclasses.replace(detector, precision="single")],
+            earth_rotation=earth_rotation,
+        ).strain
     )
     assert np.array_equal(by_single, by_prefix)
 

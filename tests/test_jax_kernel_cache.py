@@ -26,6 +26,7 @@ from gwmock_signal.jax_batch import (  # noqa: E402
     _time_domain_kernel,
     simulate_cbc_batch,
 )
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.waveform.backends.ripple import (  # noqa: E402
     RippleBackend,
     _batched_polarization_kernel,
@@ -141,7 +142,7 @@ def test_repeated_batches_reuse_the_projection_kernels(earth_rotation: bool) -> 
         "sampling_frequency": 1024.0,
         "minimum_frequency": 25.0,
         "parameters": _PARAMETERS,
-        "earth_rotation": earth_rotation,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
     }
     simulate_cbc_batch("IMRPhenomD", ["E1", "E2", "E3"], **kwargs)
     before = [c.cache_info().hits for c in caches]
@@ -157,7 +158,7 @@ def test_reuse_does_not_change_the_output(earth_rotation: bool) -> None:
         "sampling_frequency": 1024.0,
         "minimum_frequency": 25.0,
         "parameters": _PARAMETERS,
-        "earth_rotation": earth_rotation,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
     }
     first = np.asarray(simulate_cbc_batch("IMRPhenomD", ["E1", "E2", "E3"], **kwargs).strain)
     second = np.asarray(simulate_cbc_batch("IMRPhenomD", ["E1", "E2", "E3"], **kwargs).strain)
@@ -171,7 +172,11 @@ def test_sidereal_rate_is_not_part_of_the_cache_key() -> None:
     passed as an argument, every epoch would be a fresh cache key and the recompilation this
     cache removes would come straight back.
     """
-    kwargs = {"sampling_frequency": 1024.0, "minimum_frequency": 25.0, "earth_rotation": True}
+    kwargs = {
+        "sampling_frequency": 1024.0,
+        "minimum_frequency": 25.0,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
+    }
     simulate_cbc_batch("IMRPhenomD", ["E1"], parameters=_PARAMETERS, **kwargs)
     before = _rotating_projection_kernel.cache_info()
     shifted = dict(_PARAMETERS)

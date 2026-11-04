@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from gwmock_signal.detector import CustomDetector
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.resampling import edge_padding
 from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 
@@ -267,6 +268,8 @@ class TestMixedNetworkProjection:
             right_ascension=1.2,
             declination=0.3,
             polarization_angle=0.5,
+            # The custom detector carries no arm length, which the finite-arm default would need.
+            effects=ProjectionEffects(finite_arm_length=False),
         )
 
         assert set(result.keys()) == {"H1", "L1_custom"}

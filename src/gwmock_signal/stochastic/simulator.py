@@ -22,6 +22,7 @@ import numpy as np
 
 from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.simulator import GWSimulator
 from gwmock_signal.stochastic.overlap import (
     DetectorSpec,
@@ -88,22 +89,17 @@ class StochasticBackgroundSimulator(GWSimulator):
         *,
         sampling_frequency: float,
         minimum_frequency: float,
-        earth_rotation: bool = True,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
     ) -> DetectorStrainStack:
         """Generate SGWB strain on a fixed detector network.
 
-        Raises:
-            ValueError: If ``finite_arm_length`` is ``True``. The background is drawn from the
-                long-wavelength overlap reduction function, and has no finite-arm counterpart yet.
+        ``effects`` and ``earth_rotation`` are accepted for the common signature and not used: nothing is
+        projected here. The detector response is the overlap reduction function this simulator was given,
+        which carries whatever detector model it was computed with.
         """
-        del earth_rotation, interpolate_if_offset
-        if finite_arm_length:
-            raise ValueError(
-                "finite_arm_length=True is not available for a stochastic background: it is drawn from "
-                "the long-wavelength overlap reduction function, which has no finite-arm counterpart here."
-            )
+        del effects, earth_rotation, interpolate_if_offset
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")

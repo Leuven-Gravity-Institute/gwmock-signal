@@ -123,7 +123,12 @@ V1  rms=8.7621e-22  duration=16.0s
 | `--approximant`                                          | IMRPhenomD | Time-domain approximant string for the active `--backend`                                                                                                                                 |
 | `--backend`                                              |   _(auto)_ | Waveform engine: `lal`, `gwsignal`, `pycbc` or `ripple`; by default `lal` where lalsuite is installed, otherwise `ripple` if the `jax` extra is installed, otherwise an error naming both |
 | `--seed`                                                 |   _(none)_ | Optional integer seed passed to `numpy.random.seed`                                                                                                                                       |
-| `--earth-rotation` / `--no-earth-rotation`               |       true | Enable time-dependent antenna patterns (disable for short waveforms)                                                                                                                      |
+| `--earth-rotation` / `--no-earth-rotation`               |       true | Time-dependent antenna patterns and delays (disable for short waveforms)                                                                                                                  |
+| `--finite-arm-length` / `--no-finite-arm-length`         |       true | Each arm responds to the strain averaged along the light's round trip, not at the vertex                                                                                                  |
+| `--source-precession` / `--no-source-precession`         |       true | Precess the J2000 source direction to the epoch of date; off is LAL's, Bilby's and PyCBC's convention for transients                                                                      |
+| `--roemer-delay` / `--no-roemer-delay`                   |       true | The Earth's orbital light-travel delay, beyond its value and rate at coalescence                                                                                                          |
+| `--einstein-delay` / `--no-einstein-delay`               |       true | TDB minus TT, beyond its value and rate at coalescence                                                                                                                                    |
+| `--shapiro-delay` / `--no-shapiro-delay`                 |       true | The Sun's gravitational delay, beyond its value and rate at coalescence                                                                                                                   |
 | `--interpolate-if-offset` / `--no-interpolate-if-offset` |       true | Enable sinc resampling when injection is off-grid                                                                                                                                         |
 
 ### Example
@@ -136,9 +141,9 @@ gwmock-signal inject cbc --params cbc.json --network H1L1V1 --output injected.h5
 
 Use the **CLI** for quick checks and scripted runs from the shell. Use the
 **Python API** when you already have time series data, custom backgrounds, or
-need `inject_cbc_signal` / `CBCSimulator` options such as custom
-`earth_rotation` and `interpolate_if_offset` tuning beyond the boolean CLI flags
-(see **[Pipeline API](../api/pipeline/)** and
+need `inject_cbc_signal` / `CBCSimulator` options such as a custom ephemeris or
+`interpolate_if_offset` tuning beyond the boolean CLI flags (see
+**[Pipeline API](../api/pipeline/)** and
 **[Simulator API](../api/simulator/)**).
 
 ## See also

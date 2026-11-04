@@ -11,6 +11,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 from gwmock_signal.jax_batch import BatchedDetectorStrain, simulate_cbc_batch  # noqa: E402
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.waveform.backends import RippleBackend  # noqa: E402
 
 _FS = 2048.0
@@ -109,7 +110,7 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
                 right_ascension=float(_CATALOGUE["right_ascension"][i]),
                 declination=float(_CATALOGUE["declination"][i]),
                 polarization_angle=float(_CATALOGUE["polarization_angle"][i]),
-                earth_rotation=False,
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
             )[detector]
             # Both are padded at each end against the geocentre delay, by the same amount.
             assert host.t0 == pytest.approx(float(_CATALOGUE["coa_time"][i]) + result.epoch, rel=0, abs=1e-6)
@@ -146,6 +147,8 @@ def test_simulate_cbc_catalogue_tiles_span_and_places_signals() -> None:
         start_time=start_time,
         end_time=end_time,
         backend=RippleBackend(segment_duration=8.0),  # 8 s generation buffer
+        # GPS 100 lies before the solar-system tables (2000 to 2040).
+        effects=ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False),
     )
 
     assert len(segments) == 6  # ceil((160 - 64) / 16)
@@ -235,6 +238,8 @@ def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
         end_time=512.0,
         n_chirp_mass_bins=5,  # > 2 events
         backend=RippleBackend(segment_duration=8.0),
+        # GPS 0 lies before the solar-system tables (2000 to 2040).
+        effects=ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False),
     )
     assert len(segments) == 8
 
@@ -296,7 +301,7 @@ _EQUIVALENCE_CATALOGUE = {
 }
 
 
-def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None):
+def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None, effects=None):
     """Yield ``(event, detector_index, name, expected)`` from the per-event host projection.
 
     Rebuilds the same time-domain polarizations the device path projects -- one shared frequency
@@ -336,13 +341,14 @@ def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None):
             right_ascension=float(catalogue["right_ascension"][event]),
             declination=float(catalogue["declination"][event]),
             polarization_angle=float(catalogue["polarization_angle"][event]),
-            earth_rotation=earth_rotation,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation) if effects is None else effects,
+            reference_time=float(catalogue["coa_time"][event]),
         )
         for index, name in enumerate(_EQUIVALENCE_DETECTORS):
             yield event, index, name, reference[name]
 
 
-def _batched(*, earth_rotation: bool, backend=None, catalogue=None):
+def _batched(*, earth_rotation: bool, backend=None, catalogue=None, effects=None):
     """Return the batched device result for the shared catalogue."""
     from gwmock_signal.jax_batch import simulate_cbc_batch
 
@@ -352,7 +358,7 @@ def _batched(*, earth_rotation: bool, backend=None, catalogue=None):
         sampling_frequency=_EQUIVALENCE_FS,
         minimum_frequency=_EQUIVALENCE_F_MIN,
         parameters=_EQUIVALENCE_CATALOGUE if catalogue is None else catalogue,
-        earth_rotation=earth_rotation,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation) if effects is None else effects,
         backend=backend,
     )
 
@@ -433,6 +439,28 @@ def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
         assert np.asarray(batch.strain).shape[-1] == expected.n_samples
 
 
+@pytest.mark.requires_gwpy
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_simulate_cbc_batch_matches_the_host_with_every_effect(earth_rotation):
+    """With every effect on, the batched device path is the host projection, event by event.
+
+    Finite arms, precession and the three solar-system delays, absorbed at each event's ``coa_time`` on
+    both paths. The rotating branch's difference is the float64 floor of a 500 s solar-system delay,
+    about 1e-13 s; the static branch evaluates the same delay at one time on both.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+
+    effects = ProjectionEffects(earth_rotation=earth_rotation)
+    batch = _batched(earth_rotation=earth_rotation, effects=effects)
+
+    for event, index, name, expected in _host_reference(earth_rotation=earth_rotation, effects=effects):
+        scale = np.max(np.abs(expected.value))
+        assert scale > 0.0, f"event {event} {name} has a null response"
+        difference = np.abs(_placed_on(expected, batch, event, index) - expected.value)
+        assert np.max(difference) < 1e-9 * scale, f"event {event} {name}: {np.max(difference) / scale:.1e}"
+
+
 #: Two sky positions on opposite sides of the Earth from the Einstein Telescope site, so the
 #: geocentre delay moves the signal later at one and earlier at the other.
 _ANTIPODAL_CATALOGUE = {
@@ -465,8 +493,18 @@ def test_simulate_cbc_batch_keeps_signal_the_delay_moves_past_an_end(earth_rotat
     # an inspiral occupying a sliver of it. The merger is then two samples from the chosen end.
     ringdown_fraction = 0.0001 if merger_at == "end" else 0.9999
     backend = RippleBackend(segment_duration=4.0, ringdown_fraction=ringdown_fraction)
-    batch = _batched(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE)
-    reference = list(_host_reference(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE))
+    batch = _batched(
+        earth_rotation=earth_rotation,
+        backend=backend,
+        catalogue=_ANTIPODAL_CATALOGUE,
+    )
+    reference = list(
+        _host_reference(
+            earth_rotation=earth_rotation,
+            backend=backend,
+            catalogue=_ANTIPODAL_CATALOGUE,
+        )
+    )
 
     padding = edge_padding(_EQUIVALENCE_FS)
     beyond = slice(-padding, None) if merger_at == "end" else slice(0, padding)

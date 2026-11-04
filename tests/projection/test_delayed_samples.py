@@ -17,6 +17,7 @@ import pytest
 from astropy.time import Time
 
 from gwmock_signal.network import Network
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import _project, project_polarizations_to_network
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.timeseries import TimeSeries
@@ -146,7 +147,10 @@ def test_the_phase_shift_branch_keeps_and_places_every_delayed_sample(duration):
     plus, cross = _gaussian_burst(duration)
     pad = edge_padding(FS)
     projected = project_polarizations_to_network(
-        {"plus": plus, "cross": cross}, _detectors(), earth_rotation=False, **SKY
+        {"plus": plus, "cross": cross},
+        _detectors(),
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
+        **SKY,
     )
     for detector in _detectors():
         expected = _phase_shift_reference(plus, cross, detector, pad)
@@ -177,7 +181,11 @@ def test_the_rotating_branch_keeps_every_delayed_sample(backend, duration, toler
     plus, cross = _gaussian_burst(duration)
     pad = edge_padding(FS)
     projected = project_polarizations_to_network(
-        {"plus": plus, "cross": cross}, _detectors(), earth_rotation=True, backend=backend, **SKY
+        {"plus": plus, "cross": cross},
+        _detectors(),
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+        backend=backend,
+        **SKY,
     )
     for detector in _detectors():
         expected = _rotating_reference(plus, cross, detector, pad)
@@ -203,7 +211,12 @@ def test_a_tapered_burst_near_nyquist_is_projected_to_the_exact_interpolant(back
     plus, cross = _gaussian_burst(1e-4)
     pad = edge_padding(FS)
     projected = project_polarizations_to_network(
-        {"plus": plus, "cross": cross}, _detectors(), earth_rotation=True, backend=backend, tapered=True, **SKY
+        {"plus": plus, "cross": cross},
+        _detectors(),
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+        backend=backend,
+        tapered=True,
+        **SKY,
     )
     for detector in _detectors():
         expected = _rotating_reference(plus, cross, detector, pad)
@@ -216,7 +229,7 @@ def test_a_tapered_burst_near_nyquist_is_projected_to_the_exact_interpolant(back
 def test_the_phase_shift_branch_ignores_the_tapered_option():
     """With ``earth_rotation=False`` the delay is an exact phase shift already, and ``tapered`` changes nothing."""
     plus, cross = _gaussian_burst(1e-4)
-    common = {"earth_rotation": False, **SKY}
+    common = {"effects": ProjectionEffects.long_wavelength(), **SKY}
     tapered = project_polarizations_to_network({"plus": plus, "cross": cross}, _detectors(), tapered=True, **common)
     plain = project_polarizations_to_network({"plus": plus, "cross": cross}, _detectors(), **common)
     for detector in _detectors():
@@ -244,7 +257,11 @@ def test_a_short_burst_keeps_its_energy(earth_rotation, backend, tolerance):
     """
     plus, cross = _gaussian_burst(1e-4)
     projected = project_polarizations_to_network(
-        {"plus": plus, "cross": cross}, _detectors(), earth_rotation=earth_rotation, backend=backend, **SKY
+        {"plus": plus, "cross": cross},
+        _detectors(),
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
+        backend=backend,
+        **SKY,
     )
     for detector in _detectors():
         f_plus, f_cross, delay = _response(detector, PEAK)
@@ -269,7 +286,10 @@ def test_every_detector_shares_one_padded_span_on_the_input_lattice(earth_rotati
     }
     pad = edge_padding(fs)
     projected = project_polarizations_to_network(
-        polarizations, ["H1", "L1", "V1"], earth_rotation=earth_rotation, **SKY
+        polarizations,
+        ["H1", "L1", "V1"],
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
+        **SKY,
     )
     for series in projected.values():
         assert series.n_samples == n + 2 * pad
@@ -314,8 +334,7 @@ def test_padding_leaves_a_long_inspiral_unchanged_inside_its_span(backend, toler
     n = polarizations["plus"].n_samples
     pad = edge_padding(fs)
     common = {
-        "earth_rotation": True,
-        "precess_source_direction": False,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
         "backend": backend,
         "sinc_taps": DEFAULT_SINC_TAPS,
         "kaiser_beta": DEFAULT_KAISER_BETA,

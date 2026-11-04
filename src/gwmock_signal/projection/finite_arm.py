@@ -44,6 +44,7 @@ from __future__ import annotations
 import functools
 import math
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 from gwmock_data.resampling import resample_uniform_sinc
@@ -74,25 +75,25 @@ def _chebyshev_points(count: int) -> tuple[np.ndarray, np.ndarray]:
     return np.cos(np.pi * order / (count - 1)), weights
 
 
-def _interpolation_weights(alignment: np.ndarray, nodes: np.ndarray, weights: np.ndarray) -> Iterator[np.ndarray]:
+def _interpolation_weights(alignment: Any, nodes: np.ndarray, weights: np.ndarray, *, xp: Any = np) -> Iterator[Any]:
     """Yield, for each node in turn, its barycentric interpolation weight at every ``alignment``.
 
     The second barycentric form, which is exact at the nodes and stable for Chebyshev points. A sample
     whose ``alignment`` equals a node exactly takes that node's value. One node at a time, so a long
     series holds two arrays of its length here rather than one per node.
     """
-    alignment = np.asarray(alignment, dtype=float)
-    hit = np.full(alignment.shape, -1)
-    total = np.zeros(alignment.shape)
+    alignment = xp.asarray(alignment, dtype=xp.float64)
+    hit = xp.full(alignment.shape, -1)
+    total = xp.zeros(alignment.shape)
     for index, node in enumerate(nodes):
         difference = alignment - node
         exact = difference == 0.0
-        hit[exact] = index
-        total += weights[index] / np.where(exact, 1.0, difference)
+        hit = xp.where(exact, index, hit)
+        total = total + weights[index] / xp.where(exact, 1.0, difference)
     for index, node in enumerate(nodes):
         difference = alignment - node
-        term = weights[index] / np.where(difference == 0.0, 1.0, difference) / total
-        yield np.where(hit >= 0, (hit == index).astype(float), term)
+        term = weights[index] / xp.where(difference == 0.0, 1.0, difference) / total
+        yield xp.where(hit >= 0, (hit == index).astype(xp.float64), term)
 
 
 @functools.lru_cache(maxsize=64)
@@ -195,15 +196,16 @@ def residual_kernel(alignment: float, crossing_samples: float, *, taps: int, bet
 
 
 def apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel settings
-    arm_strain: np.ndarray,
-    alignment: np.ndarray,
+    arm_strain: Any,
+    alignment: Any,
     *,
     arm_length_m: float,
     sample_rate: float,
     tapered: bool,
     taps: int,
     beta: float,
-) -> np.ndarray:
+    xp: Any = np,
+) -> Any:
     """Return one arm's strain with the residual of its finite length applied, sample by sample.
 
     Args:
@@ -216,31 +218,35 @@ def apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel 
             finite filter of :func:`residual_kernel`, accurate to 0.8 of Nyquist.
         taps: Taps of the resampling kernel, which sizes the finite filter.
         beta: Kaiser window shape parameter of that kernel.
+        xp: Array namespace, :mod:`numpy` or :mod:`jax.numpy`. The nodes and the finite filters are
+            worked out on the host either way; only the filtering runs in ``xp``.
 
     Returns:
         The arm's strain, of the same length.
     """
-    count = len(arm_strain)
+    count = arm_strain.shape[0]
     crossing_samples = arm_length_m / SPEED_OF_LIGHT_M_S * sample_rate
     nodes = alignment_nodes(0.5 * crossing_samples)
-    interpolation = _interpolation_weights(alignment, nodes, _chebyshev_points(len(nodes))[1])
+    interpolation = _interpolation_weights(alignment, nodes, _chebyshev_points(len(nodes))[1], xp=xp)
     kernels = (
-        [] if tapered else [residual_kernel(float(node), crossing_samples, taps=taps, beta=beta) for node in nodes]
+        []
+        if tapered
+        else [residual_kernel(float(node), float(crossing_samples), taps=taps, beta=beta) for node in nodes]
     )
     reach = 0 if tapered else (len(kernels[0]) - 1) // 2
     # Twice the series, so the product of spectra is a linear convolution: what the residual spreads past
     # one end does not wrap round to the other.
     length = _fast_length(2 * count + 2 * reach)
-    spectrum = np.fft.rfft(arm_strain, n=length)
+    spectrum = xp.fft.rfft(arm_strain, n=length)
     crossings = np.fft.rfftfreq(length, d=1.0 / sample_rate) * (arm_length_m / SPEED_OF_LIGHT_M_S)
 
-    strain = np.array(arm_strain, dtype=float, copy=True)
+    strain = arm_strain
     for index, (node, weight) in enumerate(zip(nodes, interpolation, strict=True)):
         if tapered:
-            response = finite_arm_residual(crossings, node, xp=np) - 1.0
-            filtered = np.fft.irfft(spectrum * response, n=length)[:count]
+            response = xp.asarray(finite_arm_residual(crossings, node, xp=np) - 1.0)
+            filtered = xp.fft.irfft(spectrum * response, n=length)[:count]
         else:
-            response = np.fft.rfft(kernels[index], n=length)
-            filtered = np.fft.irfft(spectrum * response, n=length)[reach : reach + count]
-        strain += weight * filtered
+            response = xp.asarray(np.fft.rfft(kernels[index], n=length))
+            filtered = xp.fft.irfft(spectrum * response, n=length)[reach : reach + count]
+        strain = strain + weight * filtered
     return strain

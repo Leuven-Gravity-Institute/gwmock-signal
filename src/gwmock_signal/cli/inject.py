@@ -39,6 +39,7 @@ from gwmock_signal.detector import CustomDetector
 from gwmock_signal.io.hdf5 import write_hdf5
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.timeseries import TimeSeries
 from gwmock_signal.waveform.backends import GWSignalBackend, LALSimulationBackend, PyCBCBackend, RippleBackend
 from gwmock_signal.waveform.factory import default_waveform_backend
@@ -116,8 +117,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         typer.Option(
             "--earth-rotation/--no-earth-rotation",
             help=(
-                "Enable time-dependent antenna-pattern evaluation for Earth rotation. "
-                "Recommended for signals longer than a few seconds. "
+                "Evaluate the antenna pattern and delays sample by sample as the Earth rotates. "
                 "Set --no-earth-rotation for short waveforms where rotation is negligible."
             ),
         ),
@@ -127,12 +127,42 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         typer.Option(
             "--finite-arm-length/--no-finite-arm-length",
             help=(
-                "Use the finite-arm detector response: each arm responds to the strain averaged along "
-                "the light's round trip, not at the vertex. Matters for long arms at high frequency "
-                "(about 1e-2 at 100 Hz for 10 km arms) and for the ET triangle's null stream. Off by default."
+                "Each arm responds to the strain averaged along the light's round trip, not at the vertex: "
+                "about 1e-2 at 100 Hz for 10 km arms, and what makes the ET triangle's null stream cancel."
             ),
         ),
-    ] = False,
+    ] = True,
+    source_precession: Annotated[
+        bool,
+        typer.Option(
+            "--source-precession/--no-source-precession",
+            help=(
+                "Precess the source direction from J2000 to the epoch of date. --no-source-precession uses a J2000 "
+                "direction with sidereal time of date, as LAL, Bilby and PyCBC do for transients."
+            ),
+        ),
+    ] = True,
+    roemer_delay: Annotated[
+        bool,
+        typer.Option(
+            "--roemer-delay/--no-roemer-delay",
+            help=("Include the Roemer delay from the Earth's orbit, beyond its value and rate at coalescence."),
+        ),
+    ] = True,
+    einstein_delay: Annotated[
+        bool,
+        typer.Option(
+            "--einstein-delay/--no-einstein-delay",
+            help=("Include the Einstein delay, TDB minus TT, beyond its value and rate at coalescence."),
+        ),
+    ] = True,
+    shapiro_delay: Annotated[
+        bool,
+        typer.Option(
+            "--shapiro-delay/--no-shapiro-delay",
+            help=("Include the Sun's Shapiro delay, beyond its value and rate at coalescence."),
+        ),
+    ] = True,
     interpolate_if_offset: Annotated[
         bool,
         typer.Option(
@@ -242,9 +272,15 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         sampling_frequency=float(sample_rate),
         minimum_frequency=f_min,
         waveform_backend=waveform_backend,
-        earth_rotation=earth_rotation,
+        effects=ProjectionEffects(
+            earth_rotation=earth_rotation,
+            finite_arm_length=finite_arm_length,
+            source_precession=source_precession,
+            roemer_delay=roemer_delay,
+            einstein_delay=einstein_delay,
+            shapiro_delay=shapiro_delay,
+        ),
         interpolate_if_offset=interpolate_if_offset,
-        finite_arm_length=finite_arm_length,
     )
 
     if output is not None:

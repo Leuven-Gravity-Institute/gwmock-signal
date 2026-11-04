@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.resampling import edge_padding
 from gwmock_signal.simulator import CBCSimulator
 
@@ -56,7 +57,11 @@ def test_the_simulator_predicts_where_its_own_output_starts(params, sampling_fre
     # padding that keeps the geocentre delay inside the buffer. The phase-shift branch, because
     # where the output starts does not depend on the branch and it is the cheaper one.
     output = simulator.simulate(
-        params, ["H1"], sampling_frequency=sampling_frequency, minimum_frequency=20.0, earth_rotation=False
+        params,
+        ["H1"],
+        sampling_frequency=sampling_frequency,
+        minimum_frequency=20.0,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
     )
     actual = _TC - output.t0
 
@@ -188,7 +193,11 @@ def test_the_simulator_predicts_where_its_own_output_ends(sampling_frequency):
 
     predicted = simulator.post_coalescence_duration(params, sampling_frequency, 20.0)
     output = simulator.simulate(
-        params, ["H1"], sampling_frequency=sampling_frequency, minimum_frequency=20.0, earth_rotation=False
+        params,
+        ["H1"],
+        sampling_frequency=sampling_frequency,
+        minimum_frequency=20.0,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
     )
     # "One sample past the buffer's end", as the query documents.
     actual = output.t0 + output.data.shape[-1] / sampling_frequency - _TC

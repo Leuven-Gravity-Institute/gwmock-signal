@@ -7,6 +7,7 @@ result can discriminate, and by recording the call where generating the signal w
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import numpy as np
@@ -17,6 +18,7 @@ from gwmock_signal.cli.main import app
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import arm_lengths
 from gwmock_signal.simulator import CBCSimulator
 from gwmock_signal.stochastic.simulator import StochasticBackgroundSimulator
@@ -48,16 +50,24 @@ def test_inject_cbc_signal_applies_the_finite_arm_response():
     detectors = list(Network.from_preset("ET-Triangle-EMR").detector_names)
     names = [d.name for d in detectors]
     common = {"sampling_frequency": _FS, "minimum_frequency": 20.0}
-    finite = inject_cbc_signal("IMRPhenomD", _PARAMS, detectors, _zeros(names), finite_arm_length=True, **common)
-    vertex = inject_cbc_signal("IMRPhenomD", _PARAMS, detectors, _zeros(names), **common)
+    arms = dataclasses.replace(ProjectionEffects.long_wavelength(earth_rotation=True), finite_arm_length=True)
+    finite = inject_cbc_signal("IMRPhenomD", _PARAMS, detectors, _zeros(names), effects=arms, **common)
+    vertex = inject_cbc_signal(
+        "IMRPhenomD",
+        _PARAMS,
+        detectors,
+        _zeros(names),
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+        **common,
+    )
     peak = np.max(np.abs(vertex.data))
     assert np.max(np.abs(finite.data - vertex.data)) / peak > 1e-3
     null = np.max(np.abs(finite.data.sum(axis=0))) / peak
     assert null < np.max(np.abs(vertex.data.sum(axis=0))) / peak / 100
 
 
-def test_write_forwards_the_option(monkeypatch, tmp_path):
-    """``CBCSimulator.write`` passes the option on to ``simulate``."""
+def test_write_forwards_the_effects(monkeypatch, tmp_path):
+    """``CBCSimulator.write`` passes the effects on to ``simulate``."""
     seen = {}
 
     def recording(self, *args, **kwargs):
@@ -73,27 +83,37 @@ def test_write_forwards_the_option(monkeypatch, tmp_path):
             {},
             sampling_frequency=_FS,
             minimum_frequency=20.0,
-            finite_arm_length=True,
+            effects=ProjectionEffects(shapiro_delay=False),
         )
-    assert seen["finite_arm_length"] is True
+    assert seen["effects"] == ProjectionEffects(shapiro_delay=False)
 
 
 def test_the_cli_flag_reaches_the_pipeline(monkeypatch, tmp_path):
-    """``--finite-arm-length`` arrives at ``inject_cbc_signal``; without it the option is off."""
+    """Every effect is on by default, and each ``--no-...`` flag turns off exactly its own."""
     seen = []
 
     def recording(**kwargs):
-        seen.append(kwargs["finite_arm_length"])
+        seen.append(kwargs["effects"])
         raise RuntimeError("recorded")
 
     monkeypatch.setattr("gwmock_signal.cli.inject.inject_cbc_signal", recording)
     params = tmp_path / "params.json"
     params.write_text(json.dumps(_PARAMS))
     base = ["inject", "cbc", "--params", str(params), "--network", "H1L1", "--duration", "0.5"]
-    for extra in (["--finite-arm-length"], []):
+    flags = [
+        "earth-rotation",
+        "finite-arm-length",
+        "source-precession",
+        "roemer-delay",
+        "einstein-delay",
+        "shapiro-delay",
+    ]
+    for extra in [[]] + [[f"--no-{flag}"] for flag in flags]:
         result = CliRunner().invoke(app, base + extra)
         assert isinstance(result.exception, RuntimeError), result.output
-    assert seen == [True, False]
+    assert seen[0] == ProjectionEffects()
+    for flag, effects in zip(flags, seen[1:], strict=True):
+        assert effects == dataclasses.replace(ProjectionEffects(), **{flag.replace("-", "_"): False})
 
 
 def test_a_network_files_arm_length_reaches_the_detector(tmp_path):
@@ -115,12 +135,16 @@ def test_the_arm_length_survives_registration_with_lal():
     assert arm_lengths(prefix) == arm_lengths(detector) == (750.0, 750.0)
 
 
-def test_the_stochastic_simulator_refuses_finite_arms():
-    """The background comes from the long-wavelength overlap reduction function, so the option is refused."""
+def test_the_stochastic_simulator_accepts_and_ignores_projection_effects():
+    """Nothing is projected for a background, whose response is the overlap reduction function it is given."""
+    pytest.importorskip("gwmock_noise", reason="the sgwb extra is not installed")
     frequencies = np.fft.rfftfreq(256, d=1.0 / 128.0)
     overlap = {("H1", "L1"): np.full(np.count_nonzero(frequencies >= 8.0), 0.25)}
-    simulator = StochasticBackgroundSimulator(duration=2.0, seed=10, overlap_reduction=overlap)
-    with pytest.raises(ValueError, match="finite_arm_length"):
-        simulator.simulate(
-            {"omega_ref": 1.0e30}, ["H1", "L1"], sampling_frequency=128.0, minimum_frequency=8.0, finite_arm_length=True
+    common = {"sampling_frequency": 128.0, "minimum_frequency": 8.0}
+    stacks = [
+        StochasticBackgroundSimulator(duration=2.0, seed=10, overlap_reduction=overlap).simulate(
+            {"omega_ref": 1.0e30}, ["H1", "L1"], effects=effects, **common
         )
+        for effects in (None, ProjectionEffects.long_wavelength())
+    ]
+    np.testing.assert_array_equal(stacks[0].data, stacks[1].data)
