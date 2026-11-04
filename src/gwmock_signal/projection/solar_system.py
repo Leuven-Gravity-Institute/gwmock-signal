@@ -208,21 +208,25 @@ def cache_directory() -> Path:
 def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
     """Return a local path for a table, downloading a standard one into the cache if it is not there.
 
-    An existing path (with or without ``.gz``) is used as it is: a table the caller supplies is theirs,
-    whatever its name. A bare standard name, such as ``earth00-40-DE405.dat.gz``, is looked up in
-    :func:`cache_directory` and downloaded there from :data:`LALSUITE_EPHEMERIS_URL` if absent. Nothing
-    else is downloaded. A table served from the cache, downloaded or already there, must have the
-    content recorded for its name (:data:`RECORDED_SHA256`).
+    A bare standard name, such as ``earth00-40-DE405.dat.gz``, is looked up in the working directory, then
+    in :func:`cache_directory`, and downloaded there from :data:`LALSUITE_EPHEMERIS_URL` if absent; nothing
+    else is downloaded. Wherever it is found, a table looked up by a name with a recorded SHA-256
+    (:data:`RECORDED_SHA256`, the two default tables) must have that content. A path with a directory,
+    such as ``./earth00-40-DE405.dat.gz``, is the caller's own table and is used as it is.
 
     Raises:
-        FileNotFoundError: If the file is neither local nor a standard name, or the download failed.
-        ValueError: If a table served from the cache does not have the recorded content.
+        FileNotFoundError: If the file is neither local nor a standard name, the cache cannot be written,
+            or the download failed.
+        ValueError: If a table looked up by a recorded name does not have the recorded content.
     """
     path = Path(name_or_path)
+    by_name = path.parent == Path() and _STANDARD_NAME.match(path.name) is not None
     for candidate in (path, Path(f"{path}.gz")):
         if candidate.exists():
+            if by_name:
+                _require_recorded_content(candidate, candidate.name)
             return candidate
-    if path.parent != Path() or not _STANDARD_NAME.match(path.name):
+    if not by_name:
         raise FileNotFoundError(
             f"Ephemeris {str(name_or_path)!r} does not exist, and is not a standard LALPulsar name such as "
             f"{DEFAULT_EARTH_EPHEMERIS!r} that can be downloaded."
@@ -231,13 +235,18 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
     if cached.exists():
         _require_recorded_content(cached, path.name)
         return cached
-    partial = None
     try:
         cached.parent.mkdir(parents=True, exist_ok=True)
         handle, partial = tempfile.mkstemp(dir=cached.parent, prefix=f".{path.name}.", suffix=".part")
+    except OSError as exc:
+        raise FileNotFoundError(
+            f"Ephemeris {path.name!r} is not in {cached.parent}, which cannot be written to: {exc}. Set "
+            f"$GWMOCK_SIGNAL_CACHE_DIR to a writable directory, copy the table there, or pass its path."
+        ) from exc
+    try:
         with (
-            urllib.request.urlopen(f"{LALSUITE_EPHEMERIS_URL}/{path.name}", timeout=60) as response,  # noqa: S310
             os.fdopen(handle, "wb") as target,
+            urllib.request.urlopen(f"{LALSUITE_EPHEMERIS_URL}/{path.name}", timeout=60) as response,  # noqa: S310
         ):
             shutil.copyfileobj(response, target)
         _require_recorded_content(Path(partial), path.name)
@@ -246,8 +255,7 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
         Path(partial).unlink(missing_ok=True)
         raise
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        if partial is not None:
-            Path(partial).unlink(missing_ok=True)
+        Path(partial).unlink(missing_ok=True)
         raise FileNotFoundError(
             f"Ephemeris {path.name!r} is not in {cached.parent} and could not be downloaded from "
             f"{LALSUITE_EPHEMERIS_URL}: {exc}. On a machine without network access, copy it into that "
@@ -257,7 +265,7 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
 
 
 def _require_recorded_content(path: Path, name: str) -> None:
-    """Refuse a cached table named as a default one whose content is not the recorded one.
+    """Refuse a table looked up by a default table's name whose content is not the recorded one.
 
     Raises:
         ValueError: If ``name`` has a recorded SHA-256 and the file's differs.
@@ -282,8 +290,8 @@ def read_table(name_or_path: str) -> EphemerisTable:
 
     Raises:
         FileNotFoundError: See :func:`resolve_table`.
-        ValueError: If a table served from the cache is not the recorded one (see :func:`resolve_table`), the
-            header disagrees with the rows, or the rows are not evenly spaced.
+        ValueError: If a table looked up by a recorded name is not the recorded one (see
+            :func:`resolve_table`), the header disagrees with the rows, or the rows are not evenly spaced.
     """
     path = resolve_table(name_or_path)
     with path.open("rb") as raw:

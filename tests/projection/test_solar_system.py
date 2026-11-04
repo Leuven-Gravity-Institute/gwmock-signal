@@ -203,18 +203,26 @@ def test_a_cached_default_table_with_other_content_is_refused(tmp_path, monkeypa
         solar_system.read_table.__wrapped__("earth00-40-DE405.dat.gz")
 
 
+def test_a_default_name_in_the_working_directory_is_still_verified(tmp_path, monkeypatch):
+    """A bare default name is the default table wherever it is found, the working directory included."""
+    monkeypatch.chdir(tmp_path)
+    _one_row_table(tmp_path / "sun00-40-DE405.dat.gz")
+    with pytest.raises(ValueError, match=r"not the \w+ recorded for sun00-40-DE405\.dat\.gz"):
+        solar_system.read_table.__wrapped__("sun00-40-DE405.dat.gz")
+
+
 def test_a_table_passed_by_path_is_used_whatever_its_name(tmp_path):
     """A caller's own table is theirs: a default name on a path does not make it the recorded table."""
     table = solar_system.read_table.__wrapped__(str(_one_row_table(tmp_path / "earth00-40-DE405.dat.gz")))
     assert table.position.shape == (1, 3)
 
 
-def test_a_cache_that_cannot_be_written_is_a_download_failure(tmp_path, monkeypatch):
-    """Without a writable cache the error says the table is missing and what to do, not a raw OS error."""
+def test_a_cache_that_cannot_be_written_is_reported_as_such(tmp_path, monkeypatch):
+    """Without a writable cache the error names the cache and what to do, not a raw OS error or the network."""
     blocker = tmp_path / "not-a-directory"
     blocker.write_text("")
     monkeypatch.setenv("GWMOCK_SIGNAL_CACHE_DIR", str(blocker))
-    with pytest.raises(FileNotFoundError, match="could not be downloaded"):
+    with pytest.raises(FileNotFoundError, match="cannot be written to"):
         solar_system.resolve_table("earth00-40-DE405.dat.gz")
 
 

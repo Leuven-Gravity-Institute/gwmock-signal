@@ -57,6 +57,10 @@ _SOURCE = {
 
 
 def _simulator(**overrides) -> ContinuousWaveSimulator:
+    """The device backend, the package's default, unless a test asks otherwise.
+
+    Tests that never project build the NumPy one, so that they run where JAX is not installed.
+    """
     kwargs = {
         "earth_ephemeris": _EARTH,
         "sun_ephemeris": _SUN,
@@ -126,7 +130,7 @@ class TestPhaseCoherenceAcrossSegments:
         Every other test starts on a whole second, so a generator that floored its start would pass
         them all. Two starts 0.375 s apart within the same GPS second must give different output.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         n_samples = int(60 * _FS)
 
         # Deliberately against the private generator rather than `simulate`, whose output also differs
@@ -182,12 +186,12 @@ class TestConstruction:
     def test_a_non_finite_ssb_reference_is_refused(self):
         """A NaN or infinite reference would poison every sample without saying why."""
         with pytest.raises(ValueError, match="finite"):
-            _simulator(reference_time_ssb=float("nan"))
+            _simulator(reference_time_ssb=float("nan"), projection_backend="numpy")
 
     @pytest.mark.requires_gwpy
     def test_required_parameters_are_named_when_missing(self):
         """The error names the absent key, rather than failing later inside ripple."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         incomplete = {k: v for k, v in _SOURCE.items() if k != "frequency"}
 
         with pytest.raises(ValueError, match="frequency"):
@@ -207,7 +211,7 @@ class TestConstruction:
         reasonable trade for a sub-second merger and meaningless for a signal running for months --
         and the output would look entirely normal while being wrong.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="earth_rotation=False is not available"):
             simulator.simulate(
@@ -222,7 +226,7 @@ class TestConstruction:
     def test_non_finite_spindowns_are_refused(self):
         """A NaN spindown poisons every sample, with nothing in the output naming the cause."""
         with pytest.raises(ValueError, match="spindowns must all be finite"):
-            _simulator(spindowns=(-1.0e-10, float("nan")))
+            _simulator(spindowns=(-1.0e-10, float("nan")), projection_backend="numpy")
 
     @pytest.mark.requires_gwpy
     def test_background_channels_must_share_a_grid(self):
@@ -231,7 +235,7 @@ class TestConstruction:
         A channel describing a different stretch of time would silently receive a signal from the
         wrong interval, because only the first channel is consulted for the epoch and length.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = _zeros(_EPOCH, 640)
         background[_DETECTORS[1]] = TimeSeries(np.zeros(320), t0=_EPOCH, sample_rate=_FS, unit="strain")
 
@@ -241,7 +245,7 @@ class TestConstruction:
     @pytest.mark.requires_gwpy
     def test_background_channels_must_share_an_epoch(self):
         """Same hazard as the length check, and equally invisible in the output."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = _zeros(_EPOCH, 640)
         background[_DETECTORS[1]] = TimeSeries(np.zeros(640), t0=_EPOCH + 100.0, sample_rate=_FS, unit="strain")
 
@@ -256,7 +260,7 @@ class TestConstruction:
         complaint from gwpy -- the signal comes out time-stretched by the ratio while every channel
         still looks individually plausible.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="but the background is at"):
             simulator.simulate(
@@ -271,7 +275,7 @@ class TestConstruction:
     @pytest.mark.parametrize("key", sorted(_SOURCE.keys() - {"polarization_angle"}))
     def test_non_finite_source_parameters_are_refused(self, key: str):
         """A NaN anywhere in the source returns an all-NaN series with nothing naming the cause."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         params = dict(_SOURCE)
         params[key] = float("nan")
 
@@ -285,7 +289,7 @@ class TestConstruction:
     )
     def test_unrepresentable_frequencies_are_refused(self, frequency: float, expected: str):
         """Zero and negative are not signals; at or above Nyquist the tone aliases silently."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         params = dict(_SOURCE, frequency=frequency)
 
         with pytest.raises(ValueError, match=expected):
@@ -293,7 +297,7 @@ class TestConstruction:
 
     def test_a_background_of_plain_arrays_is_refused_clearly(self):
         """Otherwise it dies later with an AttributeError about `t0`, which names nothing useful."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = {name: np.zeros(64) for name in _DETECTORS}
 
         with pytest.raises(TypeError, match=r"must be gwmock_signal\.TimeSeries or GWpy TimeSeries"):
@@ -301,7 +305,7 @@ class TestConstruction:
 
     def test_a_background_is_required(self):
         """A continuous wave has no duration of its own; the segment comes from the background."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="requires a background"):
             simulator.simulate(_SOURCE, _DETECTORS, None, sampling_frequency=_FS, minimum_frequency=0.0)
@@ -446,7 +450,7 @@ class TestANonFinitePolarizationIsRefused:
         An extreme spindown far from the reference epoch overflows the phase; see
         ``test_an_out_of_range_spindown_overflows_the_phase`` for the mechanism.
         """
-        simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0)
+        simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0, projection_backend="numpy")
         background = {
             name: TimeSeries(np.zeros(64), t0=_EPOCH, sample_rate=64.0, unit="strain") for name in ("H1", "L1")
         }
@@ -462,7 +466,7 @@ class TestANonFinitePolarizationIsRefused:
 
     def test_a_finite_signal_is_returned_unchanged(self):
         """The guard must not reject an ordinary signal."""
-        plus, cross = _simulator()._ssb_polarizations(
+        plus, cross = _simulator(projection_backend="numpy")._ssb_polarizations(
             self._source(), start_ssb=_EPOCH, n_samples=64, sampling_frequency=64.0
         )
 
@@ -484,7 +488,7 @@ def test_an_out_of_range_spindown_overflows_the_phase():
     Absurd values, deliberately: the point is that ``_validate_source`` bounds finiteness and not
     magnitude, so this is reachable through the public interface rather than only in principle.
     """
-    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0)
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0, projection_backend="numpy")
 
     with pytest.raises(RuntimeError, match="not all finite"):
         simulator._ssb_polarizations(
@@ -508,7 +512,7 @@ def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
     Without this, the case above reads as "a large spindown produces NaN", which is false and would
     send someone bounding spindowns rather than looking at the epoch difference.
     """
-    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=_EPOCH)
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=_EPOCH, projection_backend="numpy")
 
     plus, _ = simulator._ssb_polarizations(
         {
