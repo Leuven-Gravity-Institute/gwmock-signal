@@ -166,6 +166,7 @@ class GWSimulator(ABC):
         minimum_frequency: float,
         earth_rotation: bool = True,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
         """Return detector strain for one source realization as a ``DetectorStrainStack``.
 
@@ -182,6 +183,8 @@ class GWSimulator(ABC):
                 detector response should vary across the signal duration.
             interpolate_if_offset: Optional backend-specific flag controlling
                 how off-grid injections should be handled.
+            finite_arm_length: Optional flag selecting the finite-arm detector response over the
+                long-wavelength one, for a source projected onto detectors.
 
         Returns:
             ``DetectorStrainStack`` containing one aligned strain channel per
@@ -298,6 +301,7 @@ class TransientSimulator(GWSimulator):
         minimum_frequency: float,
         earth_rotation: bool = True,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
@@ -324,6 +328,9 @@ class TransientSimulator(GWSimulator):
                 If ``False``, use a single reference time.
             interpolate_if_offset: If ``True``, interpolate the injection
                 when its start is not on a target sample boundary.
+            finite_arm_length: If ``True``, each arm responds to the strain averaged along the light's
+                round trip rather than at the vertex; see ``finite_arm_length`` on
+                :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
 
         Returns:
             ``DetectorStrainStack`` containing the simulated strain for each
@@ -359,6 +366,7 @@ class TransientSimulator(GWSimulator):
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
             tapered=self.polarizations_tapered(params, sampling_frequency),
+            finite_arm_length=finite_arm_length,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -647,6 +655,7 @@ class CBCSimulator(TransientSimulator):
         format: Literal["gwf", "hdf5", "npy", "txt"] = "hdf5",  # noqa: A002
         earth_rotation: bool = True,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
         """Simulate a CBC injection, write the result, and save the parameter dict.
 
@@ -665,6 +674,7 @@ class CBCSimulator(TransientSimulator):
                 ``'hdf5'``, ``'npy'``, or ``'txt'``.  Defaults to ``'hdf5'``.
             earth_rotation: Passed through to :meth:`simulate`.
             interpolate_if_offset: Passed through to :meth:`simulate`.
+            finite_arm_length: Passed through to :meth:`simulate`.
 
         Returns:
             The ``DetectorStrainStack`` that was written to disk.
@@ -677,6 +687,7 @@ class CBCSimulator(TransientSimulator):
             minimum_frequency=minimum_frequency,
             earth_rotation=earth_rotation,
             interpolate_if_offset=interpolate_if_offset,
+            finite_arm_length=finite_arm_length,
         )
         result.write(path, format=format)
 

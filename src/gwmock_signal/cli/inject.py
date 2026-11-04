@@ -122,6 +122,17 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
             ),
         ),
     ] = True,
+    finite_arm_length: Annotated[
+        bool,
+        typer.Option(
+            "--finite-arm-length/--no-finite-arm-length",
+            help=(
+                "Use the finite-arm detector response: each arm responds to the strain averaged along "
+                "the light's round trip, not at the vertex. Matters for long arms at high frequency "
+                "(about 1e-2 at 100 Hz for 10 km arms) and for the ET triangle's null stream. Off by default."
+            ),
+        ),
+    ] = False,
     interpolate_if_offset: Annotated[
         bool,
         typer.Option(
@@ -233,6 +244,7 @@ def cbc(  # noqa: PLR0912, PLR0913, PLR0915, PLR0917
         waveform_backend=waveform_backend,
         earth_rotation=earth_rotation,
         interpolate_if_offset=interpolate_if_offset,
+        finite_arm_length=finite_arm_length,
     )
 
     if output is not None:

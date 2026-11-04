@@ -8,6 +8,7 @@ detectors:
       yarm_azimuth_deg: 109.43260023445737
       xarm_tilt_rad: 2.64278457158e-10
       yarm_tilt_rad: -2.11594666113e-17
+      arm_length_m: 15000
     - name: ET2_2L_MISALIGNED_EMR
       latitude_deg: 50.72305555575918
       longitude_deg: 5.920555555458927
@@ -16,3 +17,4 @@ detectors:
       yarm_azimuth_deg: 154.43260023345766
       xarm_tilt_rad: -9.32242464849e-11
       yarm_tilt_rad: 1.01691246358e-17
+      arm_length_m: 15000

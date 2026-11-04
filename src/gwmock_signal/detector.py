@@ -105,6 +105,10 @@ class CustomDetector:
             projection always went through LAL and so always used single precision;
             the double default changes the projected strain at that rounding, about
             1.5e-7 of peak for an ET-like detector.
+        arm_length_m: Length of each arm in metres, from the vertex to the end mirror. Used only by
+            the finite-arm response (``finite_arm_length=True`` in projection), which refuses a
+            detector without one. ``None`` (the default) records none; the long-wavelength response
+            does not depend on it.
     """
 
     name: str
@@ -117,6 +121,7 @@ class CustomDetector:
     yarm_tilt_rad: float = 0.0
     prefix: str = ""
     precision: Literal["double", "single"] = "double"
+    arm_length_m: float | None = None
 
     # Cache for the constructed LAL detector; not exposed as a public attribute.
     _lal_prefix: str = field(default="", init=False, repr=False, compare=False)
@@ -152,6 +157,8 @@ class CustomDetector:
         if not (_elev_min <= self.elevation_m <= _elev_max):
             raise ValueError(f"elevation_m must be in [-1e4, 1e5] m; got {self.elevation_m!r}.")
         self._check_precision()
+        if self.arm_length_m is not None and not (math.isfinite(self.arm_length_m) and self.arm_length_m > 0.0):
+            raise ValueError(f"arm_length_m must be positive and finite when given; got {self.arm_length_m!r}.")
         if self.prefix:
             object.__setattr__(self, "_lal_prefix", self.prefix)
 
@@ -239,6 +246,9 @@ class CustomDetector:
             fr_detector.yArmAzimuthRadians = self.yarm_azimuth_rad
             fr_detector.xArmAltitudeRadians = self.xarm_tilt_rad
             fr_detector.yArmAltitudeRadians = self.yarm_tilt_rad
+            if self.arm_length_m is not None:
+                # LAL records an arm by the distance from the vertex to its midpoint.
+                fr_detector.xArmMidpoint = fr_detector.yArmMidpoint = 0.5 * self.arm_length_m
 
             detector = lal.CreateDetector(
                 lal.Detector(),

@@ -53,10 +53,10 @@ def test_the_shipped_file_is_what_the_script_writes():
 
 
 def test_the_table_fields_are_in_projection_order():
-    """The table's field order is the order the geometry reconstruction unpacks."""
+    """The table's field order is the order the geometry reconstruction unpacks, then the arm midpoints."""
     from lal_detector_table import FIELDS
 
-    assert tuple(FIELDS) == _detector_table.FIELDS
+    assert tuple(FIELDS) == _detector_table.FIELDS + _detector_table.ARM_FIELDS
 
 
 @pytest.mark.requires_lalsuite

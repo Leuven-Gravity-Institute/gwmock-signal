@@ -393,6 +393,7 @@ class ContinuousWaveSimulator(GWSimulator):
         minimum_frequency: float,
         earth_rotation: bool = True,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
         """Generate continuous-wave strain for one source over the background's span.
 
@@ -410,6 +411,8 @@ class ContinuousWaveSimulator(GWSimulator):
                 pattern across the segment, which is what a signal of this length needs.
             interpolate_if_offset: Unused; the polarizations are generated on the segment's own
                 grid, so there is never an offset to interpolate away.
+            finite_arm_length: Passed through to the projection: the finite-arm detector response
+                rather than the long-wavelength one. Needs ``projection_backend="numpy"``.
 
         Returns:
             ``DetectorStrainStack`` with the signal added to *background*.
@@ -482,6 +485,7 @@ class ContinuousWaveSimulator(GWSimulator):
             declination=float(params["declination"]),
             polarization_angle=float(params.get("polarization_angle", 0.0)),
             earth_rotation=earth_rotation,
+            finite_arm_length=finite_arm_length,
             # Not the projection's default, and not a preference. The SSB-to-geocentre part of this
             # signal's phase comes from a barycentering routine that applies lunisolar precession --
             # ripple's does, as LAL's ``XLALBarycenter`` does -- so the site term added to it has to

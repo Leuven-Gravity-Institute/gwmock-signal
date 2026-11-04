@@ -90,9 +90,20 @@ class StochasticBackgroundSimulator(GWSimulator):
         minimum_frequency: float,
         earth_rotation: bool = True,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
-        """Generate SGWB strain on a fixed detector network."""
+        """Generate SGWB strain on a fixed detector network.
+
+        Raises:
+            ValueError: If ``finite_arm_length`` is ``True``. The background is drawn from the
+                long-wavelength overlap reduction function, and has no finite-arm counterpart yet.
+        """
         del earth_rotation, interpolate_if_offset
+        if finite_arm_length:
+            raise ValueError(
+                "finite_arm_length=True is not available for a stochastic background: it is drawn from "
+                "the long-wavelength overlap reduction function, which has no finite-arm counterpart here."
+            )
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")

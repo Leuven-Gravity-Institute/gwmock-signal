@@ -158,16 +158,18 @@ def _detector_from_entry(entry: dict) -> str | CustomDetector:
     Raises:
         ValueError: If a required angle is absent, if both ``*_deg`` and
             ``*_rad`` variants of the same angle are present simultaneously, or
-            if ``precision`` is invalid or given for a detector code.
+            if ``precision`` is invalid, or ``precision`` or ``arm_length_m`` is given for a
+            detector code.
     """
     from gwmock_signal.detector import CustomDetector  # noqa: PLC0415
 
     det_name: str = entry["name"]
     if not _geometry_keys & set(entry.keys()):
-        if "precision" in entry:
-            raise ValueError(
-                f"Detector {det_name!r}: 'precision' applies only to a custom detector, one given by its geometry."
-            )
+        for key in ("precision", "arm_length_m"):
+            if key in entry:
+                raise ValueError(
+                    f"Detector {det_name!r}: {key!r} applies only to a custom detector, one given by its geometry."
+                )
         return det_name
 
     if "elevation_m" not in entry:
@@ -185,6 +187,7 @@ def _detector_from_entry(entry: dict) -> str | CustomDetector:
             yarm_azimuth_rad=_parse_angle(entry, "yarm_azimuth", required=True),
             xarm_tilt_rad=_parse_angle(entry, "xarm_tilt", required=False, default=0.0),
             yarm_tilt_rad=_parse_angle(entry, "yarm_tilt", required=False, default=0.0),
+            arm_length_m=None if entry.get("arm_length_m") is None else float(entry["arm_length_m"]),
         )
     except ValueError as exc:
         raise ValueError(f"Detector {det_name!r}: {exc}") from exc

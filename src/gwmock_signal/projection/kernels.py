@@ -87,6 +87,81 @@ def detector_geometry(fields: Any, *, xp: Any) -> tuple[Any, Any]:
     return responses[0] - responses[1], location
 
 
+def arm_directions(fields: Any, *, xp: Any) -> tuple[Any, Any]:
+    """Return the Earth-fixed unit vectors along the x and y arms, pointing from the vertex outwards.
+
+    Built from the local geodetic frame at the vertex as LAL's ``XLALCreateDetector`` builds it: an arm
+    at azimuth ``a`` (clockwise from North) and altitude ``h`` points along
+    ``cos h (cos a North + sin a East) + sin h Up``. Half the difference of their outer products is the
+    response tensor :func:`detector_geometry` returns. The sense of each arm, which the tensor does not
+    carry, is what the finite-arm response needs.
+
+    Args:
+        fields: The seven defining fields, in the order of :func:`detector_geometry`.
+        xp: Array namespace, :mod:`numpy` or :mod:`jax.numpy`.
+
+    Returns:
+        ``(x_arm, y_arm)``, each a unit 3-vector.
+    """
+    longitude, latitude, _, x_azimuth, y_azimuth, x_altitude, y_altitude = (
+        xp.asarray(value, dtype=xp.float64) for value in fields
+    )
+    sin_lat, cos_lat = xp.sin(latitude), xp.cos(latitude)
+    sin_lon, cos_lon = xp.sin(longitude), xp.cos(longitude)
+    north = xp.stack([-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat])
+    east = xp.stack([-sin_lon, cos_lon, xp.zeros_like(cos_lon)])
+    up = xp.stack([cos_lat * cos_lon, cos_lat * sin_lon, sin_lat])
+
+    def direction(azimuth: Any, altitude: Any) -> Any:
+        return xp.cos(altitude) * (xp.cos(azimuth) * north + xp.sin(azimuth) * east) + xp.sin(altitude) * up
+
+    return direction(x_azimuth, x_altitude), direction(y_azimuth, y_altitude)
+
+
+def finite_arm_residual(arm_light_crossings: Any, source_alignment: Any, *, xp: Any) -> Any:
+    """Return the part of one arm's finite-length response beyond a delay to the arm's midpoint.
+
+    An arm measures the gravitational-wave strain averaged along the light's round trip from the vertex
+    to the end mirror and back, not the strain at the vertex. For a wave of frequency ``f`` from a source
+    at cosine ``mu`` to an arm of length ``L``, the round trip multiplies the arm's long-wavelength
+    response by the single-arm transfer function of R. Essick, S. Vitale and M. Evans,
+    "Frequency-dependent responses in third generation gravitational-wave detectors", Phys. Rev. D 96,
+    084004 (2017), Eq. (4), also Eq. (7) of P. Baral et al., "Localization of binary neutron star
+    mergers with a single Cosmic Explorer", Phys. Rev. D 108, 043010 (2023). With ``x = f L / c`` and
+    the response timed at the reflection, the midpoint in time of the round trip, that function is
+    ``exp(i pi x mu)`` times
+
+    ``R(x, mu) = (exp(-i pi x) sinc(x (1 + mu)) + exp(i pi x) sinc(x (1 - mu))) / 2``,
+
+    with ``sinc(u) = sin(pi u) / (pi u)``. The first factor is a pure time shift: the strain taken at
+    the arm's midpoint rather than at the vertex. This function returns ``R``, the rest: half for each
+    leg of the trip, the strain averaged over the time the light spends on that leg. The outward leg
+    is centred ``L / (2c)`` before the reflection and lasts ``(1 + mu) L / c``; the return leg is
+    centred as much after it and lasts ``(1 - mu) L / c``. ``R`` is one at zero frequency and differs
+    from one only at second order in ``x``, so the long-wavelength response is recovered for short
+    arms or low frequencies.
+
+    The exponents follow the Fourier convention of :func:`numpy.fft.rfft`, in which a delay ``tau``
+    multiplies a spectrum by ``exp(-2 pi i f tau)``. PyCBC (``pycbc.detector.single_arm_frequency_response``)
+    and jim (``GroundBased3G._arm_transfer_function``) implement the same transfer function, both with
+    the midpoint shift included; PyCBC times the response when the light returns to the vertex, a
+    further delay of ``L / c`` common to every arm.
+
+    Args:
+        arm_light_crossings: ``x = f L / c``, the arm length in gravitational wavelengths.
+        source_alignment: ``mu``, the cosine of the angle between the arm (vertex to end mirror) and the
+            direction to the source, in ``[-1, 1]``.
+        xp: Array namespace, :mod:`numpy` or :mod:`jax.numpy`.
+
+    Returns:
+        ``R(x, mu)``, complex, of the broadcast shape of the inputs.
+    """
+    x, mu = arm_light_crossings, source_alignment
+    outward = xp.exp(-1j * math.pi * x) * xp.sinc(x * (1.0 + mu))
+    inward = xp.exp(1j * math.pi * x) * xp.sinc(x * (1.0 - mu))
+    return 0.5 * (outward + inward)
+
+
 def _polarization_basis(
     xp: Any, gmst: Any, right_ascension: Any, declination: Any, polarization_angle: Any
 ) -> tuple[Any, Any]:

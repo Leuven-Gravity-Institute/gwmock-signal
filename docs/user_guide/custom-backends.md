@@ -69,8 +69,9 @@ class ConstantBurstSimulator(GWSimulator):
         minimum_frequency: float,
         earth_rotation: bool = False,
         interpolate_if_offset: bool = True,
+        finite_arm_length: bool = False,
     ) -> DetectorStrainStack:
-        del minimum_frequency, earth_rotation, interpolate_if_offset
+        del minimum_frequency, earth_rotation, interpolate_if_offset, finite_arm_length
 
         self._validate_params(params)
         amplitude = float(params["amplitude"])

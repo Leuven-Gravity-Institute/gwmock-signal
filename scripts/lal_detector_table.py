@@ -14,7 +14,9 @@
 """Write LAL's built-in detector registry to the table ``gwmock_signal`` ships.
 
 Projection needs, for each detector, the seven numbers that fully determine its response tensor and
-location: the vertex longitude, latitude and elevation, and each arm's azimuth and altitude. For
+location: the vertex longitude, latitude and elevation, and each arm's azimuth and altitude. The
+finite-arm response also needs each arm's length, which LAL records as the distance from the vertex
+to the arm's midpoint. For
 LAL's built-in interferometer codes (``H1``, ``V1``, ...) these come from ``lalsuite``. The package
 ships them in ``src/gwmock_signal/data/lal_detectors.json`` so that projecting onto a built-in
 detector does not need ``lalsuite`` installed; ``tests/unit/test_detector_table.py`` requires the
@@ -47,6 +49,8 @@ FIELDS = {
     "yarm_azimuth_rad": "yArmAzimuthRadians",
     "xarm_altitude_rad": "xArmAltitudeRadians",
     "yarm_altitude_rad": "yArmAltitudeRadians",
+    "xarm_midpoint_m": "xArmMidpoint",
+    "yarm_midpoint_m": "yArmMidpoint",
 }
 
 
