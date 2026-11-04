@@ -8,6 +8,7 @@ detectors:
       yarm_azimuth_deg: 319.4326002345667
       xarm_tilt_rad: 2.64278457158e-10
       yarm_tilt_rad: 2.64278469515e-10
+      arm_length_m: 10000
     - name: ET2_SARD
       latitude_deg: 40.60158246647564
       longitude_deg: 9.455973799867088
@@ -16,6 +17,7 @@ detectors:
       yarm_azimuth_deg: 199.45815909933023
       xarm_tilt_rad: -0.000783862464265
       yarm_tilt_rad: -0.0015710370848
+      arm_length_m: 10000
     - name: ET3_SARD
       latitude_deg: 40.585048823916765
       longitude_deg: 9.339849816516432
@@ -24,3 +26,4 @@ detectors:
       yarm_azimuth_deg: 79.38262936387784
       xarm_tilt_rad: -0.00156913521227
       yarm_tilt_rad: -0.000781960584882
+      arm_length_m: 10000

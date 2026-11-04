@@ -7,7 +7,9 @@
         "xarm_azimuth_rad": -0.6981316804885864,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "B1": {
         "name": "NIOBE",
@@ -17,7 +19,9 @@
         "xarm_azimuth_rad": 0.0,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "C1": {
         "name": "CIT_40",
@@ -27,7 +31,9 @@
         "xarm_azimuth_rad": 3.1415927410125732,
         "yarm_azimuth_rad": 1.5707963705062866,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 19.125,
+        "yarm_midpoint_m": 19.125
     },
     "E0": {
         "name": "ET0_T1400308",
@@ -37,7 +43,9 @@
         "xarm_azimuth_rad": 0.0,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "E1": {
         "name": "ET1_T1400308",
@@ -47,7 +55,9 @@
         "xarm_azimuth_rad": 0.3391628563404083,
         "yarm_azimuth_rad": 5.575150489807129,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 5000.0,
+        "yarm_midpoint_m": 5000.0
     },
     "E2": {
         "name": "ET2_T1400308",
@@ -57,7 +67,9 @@
         "xarm_azimuth_rad": 4.528450965881348,
         "yarm_azimuth_rad": 3.481253147125244,
         "xarm_altitude_rad": -0.0007836215663701296,
-        "yarm_altitude_rad": -0.0015702445525676012
+        "yarm_altitude_rad": -0.0015702445525676012,
+        "xarm_midpoint_m": 5000.0,
+        "yarm_midpoint_m": 5000.0
     },
     "E3": {
         "name": "ET3_T1400308",
@@ -67,7 +79,9 @@
         "xarm_azimuth_rad": 2.4325857162475586,
         "yarm_azimuth_rad": 1.385387659072876,
         "xarm_altitude_rad": -0.0015685210237279534,
-        "yarm_altitude_rad": -0.0007818980957381427
+        "yarm_altitude_rad": -0.0007818980957381427,
+        "xarm_midpoint_m": 5000.0,
+        "yarm_midpoint_m": 5000.0
     },
     "G1": {
         "name": "GEO_600",
@@ -77,7 +91,9 @@
         "xarm_azimuth_rad": 1.1936010122299194,
         "yarm_azimuth_rad": 5.830392837524414,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 300.0,
+        "yarm_midpoint_m": 300.0
     },
     "H1": {
         "name": "LHO_4k",
@@ -87,7 +103,9 @@
         "xarm_azimuth_rad": 5.654877185821533,
         "yarm_azimuth_rad": 4.084080696105957,
         "xarm_altitude_rad": -0.0006195000023581088,
-        "yarm_altitude_rad": 1.249999968422344e-05
+        "yarm_altitude_rad": 1.249999968422344e-05,
+        "xarm_midpoint_m": 1997.5419921875,
+        "yarm_midpoint_m": 1997.52197265625
     },
     "H2": {
         "name": "LHO_2k",
@@ -97,7 +115,9 @@
         "xarm_azimuth_rad": 5.654877185821533,
         "yarm_azimuth_rad": 4.084080696105957,
         "xarm_altitude_rad": -0.0006195000023581088,
-        "yarm_altitude_rad": 1.249999968422344e-05
+        "yarm_altitude_rad": 1.249999968422344e-05,
+        "xarm_midpoint_m": 1004.5,
+        "yarm_midpoint_m": 1004.5
     },
     "I1": {
         "name": "LIO_4k",
@@ -107,7 +127,9 @@
         "xarm_azimuth_rad": 5.801201343536377,
         "yarm_azimuth_rad": 4.230390548706055,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 2000.0,
+        "yarm_midpoint_m": 2000.0
     },
     "K1": {
         "name": "KAGRA",
@@ -117,7 +139,9 @@
         "xarm_azimuth_rad": 1.0541130304336548,
         "yarm_azimuth_rad": -0.5166798233985901,
         "xarm_altitude_rad": 0.0031413999386131763,
-        "yarm_altitude_rad": -0.0036269999109208584
+        "yarm_altitude_rad": -0.0036269999109208584,
+        "xarm_midpoint_m": 1513.2535400390625,
+        "yarm_midpoint_m": 1511.6109619140625
     },
     "L1": {
         "name": "LLO_4k",
@@ -127,7 +151,9 @@
         "xarm_azimuth_rad": 4.403177738189697,
         "yarm_azimuth_rad": 2.8323814868927,
         "xarm_altitude_rad": -0.00031209998996928334,
-        "yarm_altitude_rad": -0.000610699993558228
+        "yarm_altitude_rad": -0.000610699993558228,
+        "xarm_midpoint_m": 1997.574951171875,
+        "yarm_midpoint_m": 1997.574951171875
     },
     "N1": {
         "name": "Nautilus",
@@ -137,7 +163,9 @@
         "xarm_azimuth_rad": 0.767944872379303,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "O1": {
         "name": "AURIGA",
@@ -147,7 +175,9 @@
         "xarm_azimuth_rad": 0.767944872379303,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "T1": {
         "name": "TAMA_300",
@@ -157,7 +187,9 @@
         "xarm_azimuth_rad": 4.71238899230957,
         "yarm_azimuth_rad": 3.1415927410125732,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 150.0,
+        "yarm_midpoint_m": 150.0
     },
     "U1": {
         "name": "ACIGA",
@@ -167,7 +199,9 @@
         "xarm_azimuth_rad": 0.0,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "V0": {
         "name": "VIRGO_CITF",
@@ -177,7 +211,9 @@
         "xarm_azimuth_rad": 0.3391628563404083,
         "yarm_azimuth_rad": 5.051551818847656,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     },
     "V1": {
         "name": "VIRGO",
@@ -187,7 +223,9 @@
         "xarm_azimuth_rad": 0.3391628563404083,
         "yarm_azimuth_rad": 5.051551818847656,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 1500.0,
+        "yarm_midpoint_m": 1500.0
     },
     "X1": {
         "name": "EXPLORER",
@@ -197,6 +235,8 @@
         "xarm_azimuth_rad": 0.6806784272193909,
         "yarm_azimuth_rad": 0.0,
         "xarm_altitude_rad": 0.0,
-        "yarm_altitude_rad": 0.0
+        "yarm_altitude_rad": 0.0,
+        "xarm_midpoint_m": 0.0,
+        "yarm_midpoint_m": 0.0
     }
 }

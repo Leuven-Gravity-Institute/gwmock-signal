@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 
 from gwmock_signal import _lalsuite
-from gwmock_signal._detector_table import builtin_detectors, unknown_code_help
+from gwmock_signal._detector_table import builtin_arm_lengths, builtin_detectors, unknown_code_help
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.projection.kernels import detector_geometry
 
@@ -166,6 +166,27 @@ def detector_fields(code: str) -> tuple[float, ...]:
             f"Unknown or unsupported detector {code!r}. {unknown_code_help(lal_available=lal is not None)}"
         )
     return _defining_fields(registered.frDetector)
+
+
+def arm_lengths(spec: DetectorSpec) -> tuple[float, float] | None:
+    """Return the x- and y-arm lengths of a detector in metres, or ``None`` where none is recorded.
+
+    For a built-in code, from the table shipped with the package; for a code registered with LAL at
+    run time, from LAL's registry; for a :class:`~gwmock_signal.detector.CustomDetector`, its
+    ``arm_length_m`` for both arms. LAL records an arm by the distance from the vertex to its midpoint,
+    and zero where it records none -- its resonant bars -- which is returned as ``None``.
+
+    Raises:
+        ValueError: If a code is not a known detector; see :func:`detector_fields`.
+    """
+    if isinstance(spec, CustomDetector):
+        return None if spec.arm_length_m is None else (float(spec.arm_length_m), float(spec.arm_length_m))
+    detector_fields(spec)
+    lengths = builtin_arm_lengths().get(spec)
+    if lengths is None:
+        fr_detector = get_lal_detector(spec).frDetector
+        lengths = (2.0 * float(fr_detector.xArmMidpoint), 2.0 * float(fr_detector.yArmMidpoint))
+    return lengths if min(lengths) > 0.0 else None
 
 
 def reconstructed_geometry(key: DetectorKey) -> tuple[np.ndarray, np.ndarray]:

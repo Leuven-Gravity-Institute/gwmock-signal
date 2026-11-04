@@ -640,3 +640,25 @@ def test_a_background_of_native_series_gives_the_same_strain_as_gwpy():
 
     assert np.array_equal(from_native.data, from_gwpy.data)
     assert np.any(from_native.data != 0.0)
+
+
+def test_the_finite_arm_option_reaches_the_projection(monkeypatch):
+    """``finite_arm_length`` is passed on to the projection, as ``earth_rotation`` is."""
+    seen = {}
+
+    def recording(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("recorded")
+
+    monkeypatch.setattr("gwmock_signal.continuous.simulator._project", recording)
+    simulator = _simulator(projection_backend="numpy")
+    with pytest.raises(RuntimeError, match="recorded"):
+        simulator.simulate(
+            _SOURCE,
+            _DETECTORS,
+            _zeros(_EPOCH, 64),
+            sampling_frequency=_FS,
+            minimum_frequency=0.0,
+            finite_arm_length=True,
+        )
+    assert seen["finite_arm_length"] is True

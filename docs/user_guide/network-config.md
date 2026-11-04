@@ -44,6 +44,7 @@ Each **detector object** is a mapping:
 | `xarm_tilt_rad`    | `float`  | No       | X-arm tilt in radians (default `0.0`).                           |
 | `yarm_tilt_deg`    | `float`  | No       | Y-arm tilt in degrees (default `0.0`).                           |
 | `yarm_tilt_rad`    | `float`  | No       | Y-arm tilt in radians (default `0.0`).                           |
+| `arm_length_m`     | `float`  | No       | Arm length in metres, for the finite-arm response.               |
 
 \* **Required only when defining a custom geometry.** If none of the geometry
 keys are present the entry is treated as a built-in LAL detector code and the

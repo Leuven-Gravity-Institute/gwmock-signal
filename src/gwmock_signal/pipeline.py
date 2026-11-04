@@ -44,6 +44,7 @@ def inject_cbc_signal(  # noqa: PLR0913
     waveform_backend: WaveformBackend | None = None,
     earth_rotation: bool = True,
     interpolate_if_offset: bool = True,
+    finite_arm_length: bool = False,
 ) -> DetectorStrainStack:
     """Inject a CBC signal into background strain for a network of detectors.
 
@@ -75,6 +76,9 @@ def inject_cbc_signal(  # noqa: PLR0913
             injection start is not on a target sample boundary. If ``False``
             and the injection is off-grid, the background is returned
             unchanged (``target.copy()``) rather than resampled.
+        finite_arm_length: If ``True``, each arm responds to the strain averaged along the light's
+            round trip rather than at the vertex; see ``finite_arm_length`` on
+            :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
 
     Returns:
         ``DetectorStrainStack`` with one injected strain channel per detector in
@@ -93,4 +97,5 @@ def inject_cbc_signal(  # noqa: PLR0913
         minimum_frequency=minimum_frequency,
         earth_rotation=earth_rotation,
         interpolate_if_offset=interpolate_if_offset,
+        finite_arm_length=finite_arm_length,
     )

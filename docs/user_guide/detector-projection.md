@@ -190,10 +190,84 @@ you select it. Calling the projection function directly does not: in 32-bit mode
 it raises rather than returning a series that is wrong by ~1% of peak while
 still looking like strain.
 
+## Finite-arm response
+
+By default each detector responds as a point at its vertex: the long-wavelength
+response of LAL, Bilby and PyCBC's default projection. A real arm measures the
+strain averaged along the light's round trip to its end mirror and back. For an
+arm of length `L` the two differ at order `f L / c`: about 1e-2 at 100 Hz and
+0.1 at 1 kHz for a 10 km arm. Pass `finite_arm_length=True` to use the
+round-trip response:
+
+```python
+from gwmock_signal.network import Network
+from gwmock_signal.projection import project_polarizations_to_network
+
+triangle = Network.from_preset("ET-Triangle-EMR")
+strain = project_polarizations_to_network(
+    {"plus": hp, "cross": hc},
+    triangle.detector_names,
+    right_ascension=ra,
+    declination=dec,
+    polarization_angle=psi,
+    tapered=True,
+    finite_arm_length=True,
+)
+```
+
+Each arm is weighted by the single-arm transfer function of Essick, Vitale &
+Evans, "Frequency-dependent responses in third generation gravitational-wave
+detectors",
+[Phys. Rev. D 96, 084004 (2017)](https://doi.org/10.1103/PhysRevD.96.084004),
+Eq. (4). PyCBC offers the same function as
+`Detector.antenna_pattern(..., frequency=f)` and jim as
+`finite_arm_length=True`; the formula is in the docstring of
+`gwmock_signal.projection.kernels.finite_arm_residual`.
+
+**Where it matters most: the triangle's null stream.** In a triangle each arm
+line is read by two interferometers with opposite signs, so a signal cancels in
+`E1 + E2 + E3` only if both read it as the same average. At their vertices they
+read it 10 km apart. For a 100 Hz wave packet on the `ET-Triangle-EMR` preset,
+at the sky position of `tests/projection/test_finite_arm.py`, the null stream
+holds 1.9e-2 of a single detector's peak with the long-wavelength response and
+7e-7 with the finite-arm one; at 700 Hz, 0.13 and 2.4e-4. What remains with
+finite arms grows as `f^3`, from the difference between the two ends of each
+round trip.
+
+**How it follows Earth's rotation.** On the `earth_rotation=True` branch each
+arm is resampled at its own midpoint delay, sample by sample, as the vertex is
+for the long-wavelength response, and the rest of the round trip is applied as a
+filter that follows the arm's changing angle to the source. Against the
+definition -- the strain of an analytic wave averaged by quadrature along each
+arm's light path, with Earth turning during the trip -- it agrees to 1e-11 of
+peak at 100 Hz, 4e-10 at 700 Hz and 3e-9 at 1.8 kHz. The difference is bounded
+by the Doppler shift of Earth's rotation (at most 1.5e-6) times the round trip's
+own correction, since the filter is applied in detector time. With
+`tapered=True` that filter is exact up to Nyquist; otherwise it is as accurate
+as the resampling kernel, to 0.8 of Nyquist. The `earth_rotation=False` branch
+applies the whole response exactly in the frequency domain, at the span's
+midpoint.
+
+**What it needs and costs.**
+
+- An arm length for every detector. A built-in code has LAL's (twice the
+  vertex-to-midpoint distance LAL records); the ET presets carry their design
+  lengths, 10 km for the triangles and 15 km for the 2L; a `CustomDetector`
+  takes `arm_length_m`. A detector without one is refused, as are LAL's resonant
+  bars.
+- The host backend. `backend="jax"` refuses the option, and so does the
+  stochastic-background simulator, whose overlap reduction function is the
+  long-wavelength one.
+- About twice the time of the long-wavelength projection on the rotating branch,
+  since each arm is resampled separately: 28.5 s against 14.0 s for 64 s of
+  signal at 8192 Hz on a three-detector triangle.
+
 ## Scientific notes
 
 - Antenna patterns and delays follow **PyCBC/LAL** conventions, consistent with
   many **Bilby** and **PyCBC** analyses, except for sidereal time (next note).
+  They are the long-wavelength response unless `finite_arm_length=True` (see
+  [above](#finite-arm-response)).
 - **Sidereal time follows the Earth's measured rotation (UT1), not UTC.** The
   orientation of a detector on the rotating Earth is set by the Earth Rotation
   Angle, which IAU 2000 Resolution B1.8 defines as a linear function of UT1;

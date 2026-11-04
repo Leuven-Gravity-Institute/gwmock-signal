@@ -14,8 +14,9 @@
 """LAL's built-in detectors, shipped with the package so projection does not need ``lalsuite``.
 
 Projection needs, for each detector, the seven numbers that fully determine its response tensor and
-location (:data:`FIELDS`). For LAL's built-in interferometer codes (``H1``, ``V1``, ...) the package
-reads them from ``data/lal_detectors.json``, a copy of LAL's registry written by
+location (:data:`FIELDS`), and, for the finite-arm response, the length of each arm. For LAL's
+built-in interferometer codes (``H1``, ``V1``, ...) the package reads them from
+``data/lal_detectors.json``, a copy of LAL's registry written by
 ``scripts/lal_detector_table.py``. The test suite requires the copy to equal LAL's registry exactly
 whenever ``lalsuite`` is installed, so a code resolves to the same geometry with or without it.
 
@@ -45,6 +46,10 @@ FIELDS = (
     "xarm_altitude_rad",
     "yarm_altitude_rad",
 )
+
+#: The table's further fields, after :data:`FIELDS`: the distance from the vertex to each arm's midpoint,
+#: as LAL records an arm's length. Only the finite-arm response reads them.
+ARM_FIELDS = ("xarm_midpoint_m", "yarm_midpoint_m")
 
 
 def lal_storage_precision(fields: tuple[float, ...]) -> tuple[float, ...]:
@@ -83,6 +88,19 @@ def builtin_detectors() -> Mapping[str, tuple[float, ...]]:
     """
     table = json.loads(files("gwmock_signal.data").joinpath("lal_detectors.json").read_text())
     return MappingProxyType({code: tuple(float(entry[field]) for field in FIELDS) for code, entry in table.items()})
+
+
+@cache
+def builtin_arm_lengths() -> Mapping[str, tuple[float, float]]:
+    """Return the x- and y-arm lengths of every built-in detector in metres, keyed by its LAL code.
+
+    LAL records each arm by the distance from the vertex to its midpoint, so an arm is twice that.
+    Zero where LAL records none, as for its resonant-bar detectors, which have no arms.
+    """
+    table = json.loads(files("gwmock_signal.data").joinpath("lal_detectors.json").read_text())
+    return MappingProxyType(
+        {code: tuple(2.0 * float(entry[field]) for field in ARM_FIELDS) for code, entry in table.items()}
+    )
 
 
 def unknown_code_help(*, lal_available: bool) -> str:

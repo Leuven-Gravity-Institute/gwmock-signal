@@ -514,6 +514,10 @@ def simulate_cbc_batch(  # noqa: PLR0913
             at 10 Hz and 16384 s at 5 Hz, over which the detector sweeps tens of
             degrees, so ``False`` is not appropriate for that population.
 
+    Both branches use the long-wavelength detector response: the device path has no finite-arm
+    response, which ``finite_arm_length=True`` selects on the host projection
+    (:func:`~gwmock_signal.projection.network.project_polarizations_to_network`).
+
     Returns:
         A :class:`BatchedDetectorStrain` with the ``(n_events, n_detectors,
         n_samples + 2 * edge_padding(sampling_frequency))`` strain, ``n_samples`` being the

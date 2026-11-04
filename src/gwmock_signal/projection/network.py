@@ -17,17 +17,33 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from gwmock_signal.projection.geometry import DetectorKey, DetectorSpec, reconstructed_geometry, resolve_detectors
-from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
+from gwmock_signal.projection import finite_arm
+from gwmock_signal.projection.geometry import (
+    DetectorKey,
+    DetectorSpec,
+    arm_lengths,
+    detector_fields,
+    reconstructed_geometry,
+    resolve_detectors,
+)
+from gwmock_signal.projection.kernels import (
+    antenna_pattern,
+    arm_directions,
+    finite_arm_residual,
+    time_delay_from_geocenter,
+)
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
+    EARTH_RADIUS_M,
     OVERSAMPLING_FACTOR,
+    SPEED_OF_LIGHT_M_S,
     edge_padding,
     oversample_fourier,
     require_terrestrial_location,
@@ -435,6 +451,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
     tapered: bool = False,
+    finite_arm_length: bool = False,
 ) -> dict[str, TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
@@ -515,6 +532,23 @@ def project_polarizations_to_network(  # noqa: PLR0913
             their Nyquist frequency rather than to 0.8 of it. Leave it ``False`` for a piece cut
             from a longer signal: the exact interpolation is global, and the cut ends would ring
             across the whole piece. The ``earth_rotation=False`` branch is unaffected.
+        finite_arm_length: Whether each arm responds to the strain averaged along the light's round
+            trip to its end mirror and back, rather than to the strain at the vertex. ``False`` (the
+            default) is the long-wavelength response of LAL, Bilby and PyCBC's default projection.
+            ``True`` uses the single-arm transfer function of R. Essick, S. Vitale and M. Evans,
+            "Frequency-dependent responses in third generation gravitational-wave detectors",
+            Phys. Rev. D 96, 084004 (2017), Eq. (4), which PyCBC offers as
+            ``Detector.antenna_pattern(..., frequency=f)`` and jim as ``finite_arm_length=True``; see
+            :func:`~gwmock_signal.projection.kernels.finite_arm_residual` for the formula and
+            :mod:`~gwmock_signal.projection.finite_arm` for how it follows Earth's rotation. The two
+            differ at order ``f L / c``: about 1e-2 at 100 Hz and 0.1 at 1 kHz for a 10 km arm. They
+            differ most where detectors share arms: in a triangle the signal cancels in the null stream
+            ``E1 + E2 + E3`` only with ``True``: for a 100 Hz wave packet on ``ET-Triangle-EMR``, at the sky
+            position of ``tests/projection/test_finite_arm.py``, the null stream holds 7e-7 of a single
+            detector's peak rather than 1.9e-2. Every detector needs an arm length -- a built-in code has LAL's, a
+            :class:`~gwmock_signal.detector.CustomDetector` its ``arm_length_m`` -- and the host
+            backend; ``backend="jax"`` refuses it. On the ``earth_rotation=True`` branch it resamples
+            each arm separately, about twice the cost.
 
     Returns:
             Mapping from each detector name to the projected strain as a
@@ -527,7 +561,9 @@ def project_polarizations_to_network(  # noqa: PLR0913
         ValueError: If keys are missing, time grids disagree, a detector name is not
             recognized, ``backend`` is unknown, ``backend="jax"`` is combined with
             ``earth_rotation=False``, or the resampling kernel (``sinc_taps``, ``kaiser_beta``)
-            is invalid -- checked on both branches, since it sizes the padding on both.
+            is invalid -- checked on both branches, since it sizes the padding on both, or
+            ``finite_arm_length=True`` is combined with ``backend="jax"`` or with a detector that
+            has no arm length.
     """
     return _project(
         polarizations,
@@ -541,7 +577,175 @@ def project_polarizations_to_network(  # noqa: PLR0913
         sinc_taps=sinc_taps,
         kaiser_beta=kaiser_beta,
         tapered=tapered,
+        finite_arm_length=finite_arm_length,
     )
+
+
+def _arm_lengths(detector_specs: Sequence[DetectorSpec]) -> dict[str, tuple[float, float]]:
+    """Return each detector's x- and y-arm lengths, keyed by its output name, for the finite-arm response.
+
+    Raises:
+        ValueError: If a detector has no arm length recorded.
+    """
+    lengths = {}
+    for spec in detector_specs:
+        name = spec if isinstance(spec, str) else spec.name
+        recorded = arm_lengths(spec)
+        if recorded is None:
+            raise ValueError(
+                f"finite_arm_length=True needs every detector's arm length, and {name!r} has none: give a "
+                f"CustomDetector its arm_length_m. LAL records none for its resonant bars."
+            )
+        lengths[name] = recorded
+    return lengths
+
+
+def _finite_arm_strain(  # noqa: PLR0913 -- one detector's geometry, the sky and the kernel settings
+    prefix: DetectorKey,
+    lengths: tuple[float, float],
+    *,
+    kernel_input: tuple[int, int, np.ndarray, np.ndarray] | None,
+    rfft_polarizations: tuple[np.ndarray, np.ndarray, int],
+    sky: tuple[np.ndarray | float, np.ndarray | float, np.ndarray | float],
+    polarization_angle: float,
+    sample_rate: float,
+    sinc_taps: int,
+    kaiser_beta: float,
+    tapered: bool,
+) -> np.ndarray:
+    """Return one detector's strain with the finite-arm response: the x arm's minus the y arm's.
+
+    Each arm is the long-wavelength response of that arm alone -- half the outer product of its
+    direction with itself, against the wave's polarization tensors -- taken at the arm's midpoint, with
+    the residual of its length applied (:mod:`~gwmock_signal.projection.finite_arm`). Their difference
+    is the detector's response, as the long-wavelength response tensor is half the difference of the
+    two outer products.
+
+    ``kernel_input`` is what :func:`_kernel_input` prepared for the rotating branch, where ``sky`` holds
+    sidereal time, right ascension and declination at every sample; ``None`` selects the constant branch,
+    where they are scalars at the reference time and each arm is a frequency-domain shift and filter of
+    ``rfft_polarizations``, the spectra of the padded polarizations.
+    """
+    gmst, right_ascension, declination = sky
+    _, location = reconstructed_geometry(prefix)
+    require_terrestrial_location(location, name=f"location of {prefix}")
+    fields = prefix if isinstance(prefix, tuple) else detector_fields(prefix)
+    arms = []
+    for direction, length in zip(arm_directions(fields, xp=np), lengths, strict=True):
+        f_plus, f_cross = antenna_pattern(
+            0.5 * np.outer(direction, direction), gmst, right_ascension, declination, polarization_angle, xp=np
+        )
+        midpoint_delay = time_delay_from_geocenter(
+            location + 0.5 * length * direction, gmst, right_ascension, declination, xp=np
+        )
+        # mu = cos(arm, source): the delay of a point one metre along the arm, in units of 1 / c.
+        alignment = -SPEED_OF_LIGHT_M_S * time_delay_from_geocenter(
+            direction, gmst, right_ascension, declination, xp=np
+        )
+        if kernel_input is None:
+            arm = _finite_arm_constant(
+                rfft_polarizations,
+                f_plus=f_plus,
+                f_cross=f_cross,
+                midpoint_delay=midpoint_delay,
+                alignment=alignment,
+                length=length,
+                sample_rate=sample_rate,
+            )
+        else:
+            arm = _finite_arm_rotating(
+                kernel_input, f_plus, f_cross, midpoint_delay, sample_rate, sinc_taps=sinc_taps, kaiser_beta=kaiser_beta
+            )
+            arm = finite_arm.apply_residual(
+                arm,
+                alignment,
+                arm_length_m=length,
+                sample_rate=sample_rate,
+                tapered=tapered,
+                taps=sinc_taps,
+                beta=kaiser_beta,
+            )
+        arms.append(arm)
+    x_arm, y_arm = arms
+    return x_arm - y_arm
+
+
+def _require_midpoint_within_padding(midpoint_delay: np.ndarray | float, sample_rate: float) -> None:
+    """Reject an arm-midpoint delay the edge padding does not cover.
+
+    The padding covers the largest vertex delay, Earth's radius over ``c``, rounded up to whole samples,
+    and one sample more (see :func:`~gwmock_signal.projection.resampling.edge_padding`). A midpoint lies up
+    to half an arm further from the geocentre, which that sample covers for arms shorter than
+    ``2 c / fs``: 73 km at 8192 Hz.
+
+    Raises:
+        ValueError: If the delay, in samples, exceeds that allowance.
+    """
+    allowed = math.ceil(EARTH_RADIUS_M / SPEED_OF_LIGHT_M_S * sample_rate) + 1
+    largest = float(np.max(np.abs(midpoint_delay)))
+    if largest * sample_rate > allowed:
+        raise ValueError(
+            f"An arm midpoint's delay from the geocentre reaches {largest * 1e3:.4f} ms, beyond the "
+            f"{allowed / sample_rate * 1e3:.4f} ms the edge padding covers at {sample_rate:g} Hz: an arm far longer "
+            f"than any ground-based detector's."
+        )
+
+
+def _finite_arm_rotating(  # noqa: PLR0913
+    kernel_input: tuple[int, int, np.ndarray, np.ndarray],
+    f_plus: np.ndarray,
+    f_cross: np.ndarray,
+    midpoint_delay: np.ndarray,
+    sample_rate: float,
+    *,
+    sinc_taps: int,
+    kaiser_beta: float,
+) -> np.ndarray:
+    """Return one arm's long-wavelength strain at its midpoint, sample by sample, on the rotating branch.
+
+    The polarizations are resampled at each sample's own midpoint delay exactly as the vertex delay is
+    resampled for the long-wavelength response.
+
+    Raises:
+        ValueError: If the midpoint delay reaches past the padding; see :func:`_require_midpoint_within_padding`.
+    """
+    _require_midpoint_within_padding(midpoint_delay, sample_rate)
+    pad, factor, hp_read, hc_read = kernel_input
+    index = factor * (pad + np.arange(len(midpoint_delay), dtype=np.int64))
+    fraction = factor * (-midpoint_delay * sample_rate)
+    hp_arm, hc_arm = (
+        resample_uniform_sinc(series, index, fraction=fraction, taps=sinc_taps, beta=kaiser_beta)
+        for series in (hp_read, hc_read)
+    )
+    return f_plus * hp_arm + f_cross * hc_arm
+
+
+def _finite_arm_constant(  # noqa: PLR0913
+    rfft_polarizations: tuple[np.ndarray, np.ndarray, int],
+    *,
+    f_plus: float,
+    f_cross: float,
+    midpoint_delay: float,
+    alignment: float,
+    length: float,
+    sample_rate: float,
+) -> np.ndarray:
+    """Return one arm's strain on the constant branch: its pattern, midpoint delay and residual at one time.
+
+    Exact in the frequency domain, and circular on the padded buffer, as the long-wavelength constant
+    branch's delay is.
+
+    Raises:
+        ValueError: If the midpoint delay reaches past the padding, where the shift would wrap round the
+            buffer; see :func:`_require_midpoint_within_padding`.
+    """
+    _require_midpoint_within_padding(midpoint_delay, sample_rate)
+    rfft_hp, rfft_hc, n_samples = rfft_polarizations
+    frequencies = np.fft.rfftfreq(n_samples, d=1.0 / sample_rate)
+    transfer = np.exp(-2j * np.pi * frequencies * midpoint_delay) * finite_arm_residual(
+        frequencies * (length / SPEED_OF_LIGHT_M_S), alignment, xp=np
+    )
+    return np.fft.irfft((f_plus * rfft_hp + f_cross * rfft_hc) * transfer, n=n_samples)
 
 
 def _kernel_input(
@@ -559,10 +763,27 @@ def _kernel_input(
     return pad, OVERSAMPLING_FACTOR, oversample_fourier(plus), oversample_fourier(cross)
 
 
-# PLR0915: this function was already at the 50-statement limit before the one-line call to
-# `_warn_if_constant_pattern_is_stretched` below. Splitting it further would mean reshaping
-# the two projection branches that the compact-binary path depends on, which is not worth
-# the risk for a diagnostic; the warning body itself already lives in its own function.
+def _require_backend_supports(backend: str, *, earth_rotation: bool, finite_arm_length: bool) -> None:
+    """Reject a backend name, or a combination of options the chosen backend does not implement."""
+    validate_projection_backend(backend)
+    if backend == "jax" and not earth_rotation:
+        # The constant-pattern branch is a frequency-domain phase shift, and no device
+        # counterpart exists. Refused rather than silently served from the host path, which
+        # would report a backend that did not run.
+        raise ValueError(
+            "backend='jax' is only available with earth_rotation=True. The constant-pattern "
+            "branch applies one frequency-domain phase shift for the whole span and has no "
+            "device implementation; it is also cheap, being the branch that skips the resampler."
+        )
+    if backend == "jax" and finite_arm_length:
+        # No device implementation yet; refused rather than served with the long-wavelength response.
+        raise ValueError(
+            "finite_arm_length=True is only available with backend='numpy'. The device projection "
+            "has no finite-arm response, and the long-wavelength one differs from it by 1e-2 at 100 Hz "
+            "for a 10 km arm."
+        )
+
+
 def _project(  # noqa: PLR0913
     polarizations: Mapping[str, TimeSeries | gwpy.timeseries.TimeSeries],
     detector_names: Sequence[DetectorSpec],
@@ -577,6 +798,7 @@ def _project(  # noqa: PLR0913
     kaiser_beta: float,
     keep_delayed_samples: bool = True,
     tapered: bool = False,
+    finite_arm_length: bool = False,
 ) -> dict[str, TimeSeries]:
     """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`.
 
@@ -585,21 +807,14 @@ def _project(  # noqa: PLR0913
     polarizations with that margin and trims it off itself -- the continuous-wave simulator,
     whose signal carries on beyond the buffer rather than ending in it.
     """
-    validate_projection_backend(backend)
-    if backend == "jax" and not earth_rotation:
-        # The constant-pattern branch is a frequency-domain phase shift, and no device
-        # counterpart exists. Refused rather than silently served from the host path, which
-        # would report a backend that did not run.
-        raise ValueError(
-            "backend='jax' is only available with earth_rotation=True. The constant-pattern "
-            "branch applies one frequency-domain phase shift for the whole span and has no "
-            "device implementation; it is also cheap, being the branch that skips the resampler."
-        )
+    _require_backend_supports(backend, earth_rotation=earth_rotation, finite_arm_length=finite_arm_length)
     hp, hc = _validate_polarizations(polarizations)
     normalized_names = [d if isinstance(d, str) else d.name for d in detector_names]
     if len(set(normalized_names)) != len(normalized_names):
         raise ValueError("detector_names must not contain duplicates.")
     detectors = _make_detectors(list(detector_names))
+    # Looked up before anything is computed, so a detector without an arm length fails at once.
+    lengths = _arm_lengths(list(detector_names)) if finite_arm_length else {}
 
     # The caller's span, not the padded one, for the two things that describe the input rather than
     # the projection grid: the duration warning, and where the sky-position line is anchored.
@@ -670,6 +885,46 @@ def _project(  # noqa: PLR0913
             tapered=tapered,
         )
 
+    return _project_on_host(
+        hp,
+        hc,
+        detectors,
+        time_array=time_array,
+        reference_time=reference_time,
+        sky_line=(input_start, right_ascension, declination, d_right_ascension, d_declination),
+        polarization_angle=polarization_angle,
+        earth_rotation=earth_rotation,
+        sinc_taps=sinc_taps,
+        kaiser_beta=kaiser_beta,
+        tapered=tapered,
+        finite_arm_length=finite_arm_length,
+        finite_arm_lengths=lengths,
+    )
+
+
+def _project_on_host(  # noqa: PLR0913
+    hp: TimeSeries,
+    hc: TimeSeries,
+    detectors: Sequence[tuple[str, DetectorKey]],
+    *,
+    time_array: np.ndarray,
+    reference_time: float,
+    sky_line: tuple[float, float, float, float, float],
+    polarization_angle: float,
+    earth_rotation: bool,
+    sinc_taps: int,
+    kaiser_beta: float,
+    tapered: bool,
+    finite_arm_length: bool,
+    finite_arm_lengths: Mapping[str, tuple[float, float]],
+) -> dict[str, TimeSeries]:
+    """Project on the host, for :func:`_project`, once the polarizations are padded and the sky resolved.
+
+    ``sky_line`` is ``(input_start, right_ascension, declination, d_right_ascension, d_declination)``: the
+    source position at the caller's first sample and its rates, as :func:`_project` resolved them.
+    ``finite_arm_lengths`` holds each detector's arm lengths, which ``finite_arm_length=True`` needs.
+    """
+    input_start, right_ascension, declination, d_right_ascension, d_declination = sky_line
     hp_vals = np.asarray(hp.data, dtype=float)
     hc_vals = np.asarray(hc.data, dtype=float)
 
@@ -689,13 +944,35 @@ def _project(  # noqa: PLR0913
         else None
     )
 
-    # Per sample, not per segment: see the anchor-and-rate comment above.
+    # Per sample, not per segment: see the anchor-and-rate comment in `_project`.
     precession_offsets = time_array - input_start
     right_ascension_array = right_ascension + d_right_ascension * precession_offsets
     declination_array = declination + d_declination * precession_offsets
     gmst_array = _gmst_accurate_array(time_array)
 
     for name, prefix in detectors:
+        if finite_arm_length:
+            # Every sample of the response is computed here, so the loop moves to the next detector.
+            strains[name] = TimeSeries(
+                _finite_arm_strain(
+                    prefix,
+                    finite_arm_lengths[name],
+                    kernel_input=kernel_input,
+                    rfft_polarizations=(rfft_hp, rfft_hc, n_samples),
+                    sky=(gmst_array, right_ascension_array, declination_array)
+                    if earth_rotation
+                    else (_gmst_accurate(reference_time), right_ascension, declination),
+                    polarization_angle=polarization_angle,
+                    sample_rate=hp.sample_rate,
+                    sinc_taps=sinc_taps,
+                    kaiser_beta=kaiser_beta,
+                    tapered=tapered,
+                ),
+                t0=float(time_array[0]),
+                sample_rate=hp.sample_rate,
+                name=name,
+            )
+            continue
         if earth_rotation:
             response, location = reconstructed_geometry(prefix)
 

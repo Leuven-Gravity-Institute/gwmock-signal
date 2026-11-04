@@ -60,7 +60,7 @@ from packaging.tags import Tag
 from packaging.version import Version
 
 from gwmock_signal import constants
-from gwmock_signal._detector_table import FIELDS, builtin_detectors
+from gwmock_signal._detector_table import ARM_FIELDS, FIELDS, builtin_arm_lengths, builtin_detectors
 
 GOOD = {"MSUN_SI": 1.9884098706980507e30, "PC_SI": 3.085677581491367e16}
 #: ``GOOD`` with the solar mass one ulp higher.
@@ -433,6 +433,9 @@ class TestTheDetectorTable:
         expected = {name: getattr(constants, name) for name in constants.CONSTANT_NAMES}
         for code, fields in builtin_detectors().items():
             expected |= {f"{code}.{field}": value for field, value in zip(FIELDS, fields, strict=True)}
+            # The table records each arm by its midpoint, half the length the package returns.
+            lengths = builtin_arm_lengths()[code]
+            expected |= {f"{code}.{field}": 0.5 * length for field, length in zip(ARM_FIELDS, lengths, strict=True)}
 
         assert builtin_values() == expected
 
