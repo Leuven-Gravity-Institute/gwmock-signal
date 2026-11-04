@@ -342,6 +342,7 @@ class ContinuousWaveSimulator(GWSimulator):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Generate continuous-wave strain for one source over the background's span.
 
@@ -363,6 +364,7 @@ class ContinuousWaveSimulator(GWSimulator):
             interpolate_if_offset: Unused; the polarizations are generated on the segment's own
                 grid, so there is never an offset to interpolate away.
             earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
         Returns:
             ``DetectorStrainStack`` with the signal added to *background*.
@@ -375,7 +377,12 @@ class ContinuousWaveSimulator(GWSimulator):
                 source parameter. Refused rather than written; see ``_ssb_polarizations``.
         """
         del minimum_frequency, interpolate_if_offset
-        effects = _resolve_effects(effects, earth_rotation=earth_rotation, caller="ContinuousWaveSimulator.simulate")
+        effects = _resolve_effects(
+            effects,
+            earth_rotation=earth_rotation,
+            finite_arm_length=finite_arm_length,
+            caller="ContinuousWaveSimulator.simulate",
+        )
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")
@@ -444,8 +451,10 @@ class ContinuousWaveSimulator(GWSimulator):
             effects=effects,
             # The device implementation of the same algorithm. Measured against the host path at
             # this class's own segment sizes, three detectors, 512 Hz: 2.0x over 256 s and 3.4x
-            # over 1024 s, agreeing to 1.4e-11 of peak. Not a choice about accuracy -- the two
-            # differ only by floating-point reassociation -- but the projection is 99% of a
+            # over 1024 s. With every effect on, the solar-system delay in full, they agree to 1.3e-11
+            # of peak at 512 Hz over 256 s and 1024 s (`test_the_device_and_host_projections_agree_with_
+            # every_effect`). Not a choice about accuracy -- the two differ only by floating-point
+            # reassociation -- but the projection is 99% of a
             # continuous-wave segment's cost, so it is the only part worth moving.
             #
             # Defaults to the device path; see ``projection_backend`` for why it can be changed.

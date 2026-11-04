@@ -661,3 +661,17 @@ def test_the_signal_is_the_pulsar_phase_at_lalpulsars_barycentric_time():
     interior = slice(n_samples // 20, -n_samples // 20)
     error = np.max(np.abs(strain[interior] - expected[interior])) / np.max(np.abs(expected))
     assert error < 1e-6, f"{error:.2e} of peak from the phase at LALPulsar's barycentric time"
+
+
+@pytest.mark.requires_gwpy
+def test_the_device_and_host_projections_agree_with_every_effect():
+    """The default device projection carries every effect, the solar-system delay in full, as the host does.
+
+    The difference left is float64 on a delay of up to 500 s, about 1e-13 s.
+    """
+    pytest.importorskip("jax", reason="the [jax] extra is not installed")
+    n_samples = int(256 * _FS)
+    device, host = (
+        _generate(_simulator(projection_backend=backend), _EPOCH, n_samples) for backend in ("jax", "numpy")
+    )
+    assert np.max(np.abs(device - host)) < 1e-9 * np.max(np.abs(host))

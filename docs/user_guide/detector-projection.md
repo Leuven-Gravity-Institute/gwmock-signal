@@ -138,11 +138,12 @@ transient the solar-system delay enters only through how it **changes** across
 the signal: its value and its rate at the reference time are taken out. What
 remains is the Earth's orbital acceleration -- for a binary neutron star in the
 Einstein Telescope band from 5 Hz, about 4.5 hours long, up to 2.7 ms of timing
-and 0.1 rad of phase; for anything lasting minutes, microseconds or less. The
-simulators pass the reference time themselves;
-`project_polarizations_to_network` takes `reference_time`, and without it the
-time of the polarizations' peak power. A continuous wave, whose parameters are
-defined at the barycentre, takes the delays in full.
+over the sky (2.5 ms at the sky position of the package's test) and 0.1 rad of
+phase; for anything lasting minutes, microseconds or less. The simulators pass
+the reference time themselves; `project_polarizations_to_network` takes
+`reference_time`, and without it the time of the polarizations' peak power. A
+continuous wave, whose parameters are defined at the barycentre, takes the
+delays in full.
 
 **The ephemeris.** The delays are LALPulsar's (`XLALBarycenter` in its original
 time system, with the site term from the projection's own geometry), computed

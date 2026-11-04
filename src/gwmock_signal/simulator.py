@@ -169,6 +169,7 @@ class GWSimulator(ABC):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Return detector strain for one source realization as a ``DetectorStrainStack``.
 
@@ -187,6 +188,7 @@ class GWSimulator(ABC):
             interpolate_if_offset: Optional backend-specific flag controlling
                 how off-grid injections should be handled.
             earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
         Returns:
             ``DetectorStrainStack`` containing one aligned strain channel per
@@ -317,6 +319,7 @@ class TransientSimulator(GWSimulator):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
@@ -345,6 +348,8 @@ class TransientSimulator(GWSimulator):
             interpolate_if_offset: If ``True``, interpolate the injection
                 when its start is not on a target sample boundary.
             earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``. Overrides
+                that field when given.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
                 that field when given.
 
         Returns:
@@ -375,7 +380,12 @@ class TransientSimulator(GWSimulator):
             right_ascension=params["right_ascension"],
             declination=params["declination"],
             polarization_angle=params["polarization_angle"],
-            effects=_resolve_effects(effects, earth_rotation=earth_rotation, caller=f"{type(self).__name__}.simulate"),
+            effects=_resolve_effects(
+                effects,
+                earth_rotation=earth_rotation,
+                finite_arm_length=finite_arm_length,
+                caller=f"{type(self).__name__}.simulate",
+            ),
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
@@ -676,6 +686,7 @@ class CBCSimulator(TransientSimulator):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Simulate a CBC injection, write the result, and save the parameter dict.
 
@@ -695,6 +706,7 @@ class CBCSimulator(TransientSimulator):
             effects: Passed through to :meth:`simulate`.
             interpolate_if_offset: Passed through to :meth:`simulate`.
             earth_rotation: Deprecated; passed through to :meth:`simulate`.
+            finite_arm_length: Deprecated; passed through to :meth:`simulate`.
 
         Returns:
             The ``DetectorStrainStack`` that was written to disk.
@@ -708,6 +720,7 @@ class CBCSimulator(TransientSimulator):
             effects=effects,
             interpolate_if_offset=interpolate_if_offset,
             earth_rotation=earth_rotation,
+            finite_arm_length=finite_arm_length,
         )
         result.write(path, format=format)
 

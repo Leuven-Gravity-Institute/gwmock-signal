@@ -434,11 +434,8 @@ def _project_rotating_on_device(  # noqa: PLR0913
         # is a traced argument and the check could not run there.
         require_terrestrial_location(location, name=f"location of {prefix}")
         arm_length = lengths.get(name) if arm_lengths is not None else None
-        arms = (
-            np.stack(arm_directions(prefix if isinstance(prefix, tuple) else detector_fields(prefix), xp=np))
-            if arm_length is not None
-            else np.zeros((2, 3))
-        )
+        terms = _response_terms(prefix, arm_length, sampling_frequency)
+        arms = np.stack([term.arm for term in terms]) if arm_length is not None else np.zeros((2, 3))
         compiled = _compiled_rotating_projection(
             sampling_frequency,
             n_samples,
@@ -489,6 +486,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     tapered: bool = False,
     earth_rotation: bool | None = None,
     precess_source_direction: bool | None = None,
+    finite_arm_length: bool | None = None,
 ) -> dict[str, TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
@@ -562,6 +560,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
         precess_source_direction: Deprecated; ``effects=ProjectionEffects(source_precession=...)``.
             Overrides that field when given. Which value suits which analysis is described on
             ``source_precession``.
+        finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
+            that field when given.
 
     Returns:
             Mapping from each detector name to the projected strain as a
@@ -585,7 +585,10 @@ def project_polarizations_to_network(  # noqa: PLR0913
         declination=declination,
         polarization_angle=polarization_angle,
         effects=_resolve_effects(
-            effects, earth_rotation=earth_rotation, precess_source_direction=precess_source_direction
+            effects,
+            earth_rotation=earth_rotation,
+            precess_source_direction=precess_source_direction,
+            finite_arm_length=finite_arm_length,
         ),
         backend=backend,
         sinc_taps=sinc_taps,
@@ -632,17 +635,30 @@ class _ResponseTerm:
     length: float | None = None
 
 
-def _response_terms(prefix: DetectorKey, lengths: tuple[float, float] | None) -> list[_ResponseTerm]:
-    """Return a detector's response terms: its vertex, or with ``lengths`` its two arms."""
+def _response_terms(
+    prefix: DetectorKey, lengths: tuple[float, float] | None, sample_rate: float
+) -> list[_ResponseTerm]:
+    """Return a detector's response terms: its vertex, or with ``lengths`` its two arms.
+
+    Shared by the host, device and batched projections, so each checks the same geometry: the vertex
+    within Earth's radius, and each arm's midpoint within what the padding covers, by its distance from
+    the geocentre, which bounds its delay for any sky position.
+
+    Raises:
+        ValueError: If the vertex or a midpoint lies beyond what the edge padding covers.
+    """
     response, location = reconstructed_geometry(prefix)
     require_terrestrial_location(location, name=f"location of {prefix}")
     if lengths is None:
         return [_ResponseTerm(1.0, response, location)]
     fields = prefix if isinstance(prefix, tuple) else detector_fields(prefix)
-    return [
+    terms = [
         _ResponseTerm(sign, 0.5 * np.outer(arm, arm), location + 0.5 * length * arm, arm, length)
         for sign, arm, length in zip((1.0, -1.0), arm_directions(fields, xp=np), lengths, strict=True)
     ]
+    for term in terms:
+        _require_midpoint_within_padding(float(np.linalg.norm(term.location)) / SPEED_OF_LIGHT_M_S, sample_rate)
+    return terms
 
 
 @dataclass(frozen=True)
@@ -716,7 +732,7 @@ def _kernel_input(
 
 
 def _require_midpoint_within_padding(midpoint_delay: np.ndarray | float, sample_rate: float) -> None:
-    """Reject a response term's site delay the edge padding does not cover.
+    """Reject a response term's delay, or a bound on it, that the edge padding does not cover.
 
     The padding covers the largest vertex delay, Earth's radius over ``c``, rounded up to whole samples,
     and one sample more (see :func:`~gwmock_signal.projection.resampling.edge_padding`). An arm's midpoint
@@ -741,11 +757,12 @@ def _resolve_effects(
     *,
     earth_rotation: bool | None = None,
     precess_source_direction: bool | None = None,
+    finite_arm_length: bool | None = None,
     caller: str = "project_polarizations_to_network",
 ) -> ProjectionEffects:
     """Return the effects to use: ``effects`` (all on by default), with any deprecated flag applied.
 
-    ``earth_rotation`` and ``precess_source_direction`` were separate arguments before
+    ``earth_rotation``, ``precess_source_direction`` and ``finite_arm_length`` were separate arguments before
     :class:`~gwmock_signal.projection.effects.ProjectionEffects` gathered every effect in one place. Given,
     each overrides the corresponding field and warns.
     """
@@ -753,6 +770,7 @@ def _resolve_effects(
     for old, new, value in (
         ("earth_rotation", "earth_rotation", earth_rotation),
         ("precess_source_direction", "source_precession", precess_source_direction),
+        ("finite_arm_length", "finite_arm_length", finite_arm_length),
     ):
         if value is not None:
             warnings.warn(
@@ -821,16 +839,17 @@ def _project(  # noqa: PLR0913
     input_start = float(hp.t0)
     input_end = input_start + (hp.n_samples - 1) * hp.dt
     _warn_if_constant_pattern_is_stretched(np.array([input_start, input_end]), earth_rotation=effects.earth_rotation)
+    if reference_time is None:
+        # A transient's peak power, on the unpadded input, which `input_start` labels: for a compact
+        # binary the merger, within milliseconds of coalescence, where absorbing the solar-system delay
+        # instead changes it by ~1e-12 s.
+        power = np.asarray(hp.data, dtype=float) ** 2 + np.asarray(hc.data, dtype=float) ** 2
+        reference_time = input_start + int(np.argmax(power)) * hp.dt
     if keep_delayed_samples:
         # Padded before anything reads the time axis, so both branches and both backends project
         # the padded span as if it were the input.
         hp, hc = _padded_for_delay(hp, hc, sinc_taps=sinc_taps, kaiser_beta=kaiser_beta)
 
-    if reference_time is None:
-        # A transient's peak power, before padding: for a compact binary the merger, within milliseconds
-        # of coalescence, where absorbing the solar-system delay instead changes it by ~1e-12 s.
-        power = np.asarray(hp.data, dtype=float) ** 2 + np.asarray(hc.data, dtype=float) ** 2
-        reference_time = input_start + int(np.argmax(power)) * hp.dt
     time_array = np.asarray(hp.times, dtype=float)
     reference = float(0.5 * (time_array[0] + time_array[-1]))
     # The J2000 position, before any precession below: the Earth's orbit is in that frame.
@@ -981,15 +1000,13 @@ def _project_on_host(  # noqa: PLR0913
     strains: dict[str, TimeSeries] = {}
     for name, prefix in detectors:
         response = 0.0
-        for term in _response_terms(prefix, None if arm_lengths is None else arm_lengths[name]):
+        for term in _response_terms(prefix, None if arm_lengths is None else arm_lengths[name], hp.sample_rate):
             f_plus, f_cross = antenna_pattern(term.tensor, *sky, polarization_angle, xp=np)
             # Antenna pattern at the detector-time sample, i.e. the same time coordinate the output series
             # is labelled with. Evaluating it at t + tau would mix the detector and geocenter time
             # coordinates; LALSuite and the bilby-x-g frequency-domain implementation both use a single
             # consistent coordinate.
             site = time_delay_from_geocenter(term.location, *sky, xp=np)
-            if term.arm is not None:
-                _require_midpoint_within_padding(site, hp.sample_rate)
             if earth_rotation:
                 shift = -site / dt
                 if timing is not None:

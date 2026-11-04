@@ -92,14 +92,15 @@ class StochasticBackgroundSimulator(GWSimulator):
         effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Generate SGWB strain on a fixed detector network.
 
-        ``effects`` and ``earth_rotation`` are accepted for the common signature and not used: nothing is
+        ``effects``, ``earth_rotation`` and ``finite_arm_length`` are accepted for the common signature and not used: nothing is
         projected here. The detector response is the overlap reduction function this simulator was given,
         which carries whatever detector model it was computed with.
         """
-        del effects, earth_rotation, interpolate_if_offset
+        del effects, earth_rotation, finite_arm_length, interpolate_if_offset
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")

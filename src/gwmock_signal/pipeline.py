@@ -46,6 +46,7 @@ def inject_cbc_signal(  # noqa: PLR0913
     effects: ProjectionEffects | None = None,
     interpolate_if_offset: bool = True,
     earth_rotation: bool | None = None,
+    finite_arm_length: bool | None = None,
 ) -> DetectorStrainStack:
     """Inject a CBC signal into background strain for a network of detectors.
 
@@ -78,6 +79,7 @@ def inject_cbc_signal(  # noqa: PLR0913
             and the injection is off-grid, the background is returned
             unchanged (``target.copy()``) rather than resampled.
         earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+        finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
     Returns:
         ``DetectorStrainStack`` with one injected strain channel per detector in
@@ -97,4 +99,5 @@ def inject_cbc_signal(  # noqa: PLR0913
         effects=effects,
         interpolate_if_offset=interpolate_if_offset,
         earth_rotation=earth_rotation,
+        finite_arm_length=finite_arm_length,
     )

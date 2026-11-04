@@ -29,7 +29,12 @@ def test_solar_system_is_any_of_the_three_delays():
 
 
 @pytest.mark.parametrize(
-    ("keyword", "field"), [("earth_rotation", "earth_rotation"), ("precess_source_direction", "source_precession")]
+    ("keyword", "field"),
+    [
+        ("earth_rotation", "earth_rotation"),
+        ("precess_source_direction", "source_precession"),
+        ("finite_arm_length", "finite_arm_length"),
+    ],
 )
 def test_a_deprecated_keyword_overrides_its_field_and_warns(keyword, field):
     """The separate keywords from before ``ProjectionEffects`` still work, and say what replaces them."""

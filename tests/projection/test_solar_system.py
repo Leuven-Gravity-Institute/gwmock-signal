@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import gzip
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -174,3 +175,47 @@ def test_effects_without_solar_system_delays_build_no_timing():
         )
         is None
     )
+
+
+def test_the_recorded_hashes_are_the_manifests():
+    """The package's record of the default tables is the one CI caches by; the two cannot drift apart."""
+    manifest = Path(__file__).parents[1] / "data" / "ephemeris.sha256"
+    recorded = dict(
+        reversed(line.split())
+        for line in manifest.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+    assert recorded == solar_system.RECORDED_SHA256
+
+
+def test_a_default_table_with_other_content_is_refused(tmp_path):
+    """A file named as a default table but holding anything else is refused, not read."""
+    path = tmp_path / "earth00-40-DE405.dat.gz"
+    with gzip.open(path, "wt") as handle:
+        handle.write("0 7200 1\n" + "0 " + "1 " * 9 + "\n")
+    with pytest.raises(ValueError, match=r"not the \w+ recorded for earth00-40-DE405\.dat\.gz"):
+        solar_system.read_table.__wrapped__(str(path))
+
+
+def test_the_default_reference_is_the_peak_of_the_unpadded_polarizations():
+    """Without ``reference_time`` the delay is absorbed at the polarizations' peak power, as given.
+
+    The peak is found on the input before it is padded against the geocentre delay; found on the padded
+    buffer but labelled from the input's start, it came out late by the padding, 25 ms here.
+    """
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.timeseries import TimeSeries
+
+    fs, start = 1024.0, 1.3e9
+    t = np.arange(int(64 * fs)) / fs
+    envelope = np.exp(-(((t - 40.0) / 4.0) ** 2))
+    plus, cross = envelope * np.cos(2 * np.pi * 50.0 * t), envelope * np.sin(2 * np.pi * 50.0 * t)
+    polarizations = {
+        "plus": TimeSeries(plus, t0=start, sample_rate=fs),
+        "cross": TimeSeries(cross, t0=start, sample_rate=fs),
+    }
+    common = {"right_ascension": 1.0, "declination": 0.2, "polarization_angle": 0.3}
+    peak = start + int(np.argmax(plus**2 + cross**2)) / fs
+    default = project_polarizations_to_network(polarizations, ["H1"], **common)
+    explicit = project_polarizations_to_network(polarizations, ["H1"], reference_time=peak, **common)
+    np.testing.assert_array_equal(default["H1"].data, explicit["H1"].data)

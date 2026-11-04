@@ -374,3 +374,18 @@ def test_a_midpoint_beyond_the_padding_is_refused():
         _require_midpoint_within_padding(np.full(8, sign * shift / FS), FS)
         with pytest.raises(ValueError, match="edge padding"):
             _require_midpoint_within_padding(np.full(8, sign * 1.001 * shift / FS), FS)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+def test_an_arm_beyond_the_padding_is_refused_by_every_backend(backend):
+    """An arm long enough to put its midpoint past the padding is refused on the device as on the host.
+
+    The bound is the midpoint's distance from the geocentre, and a level arm raises it slowly: the spare
+    sample of padding at 4096 Hz takes an arm of about 2700 km.
+    """
+    if backend == "jax":
+        jax = pytest.importorskip("jax")
+        jax.config.update("jax_enable_x64", True)
+    detector = CustomDetector("X1", 0.7, 0.16, 100.0, 1.23, 2.80, arm_length_m=3_000_000.0)
+    with pytest.raises(ValueError, match="edge padding"):
+        project_polarizations_to_network(_polarizations(100.0), [detector], **SKY, effects=_arms(), backend=backend)

@@ -43,6 +43,7 @@ LALSuite repository and cached; on a machine without network access, place the f
 from __future__ import annotations
 
 import gzip
+import hashlib
 import math
 import os
 import re
@@ -64,6 +65,14 @@ LALSUITE_EPHEMERIS_URL = "https://git.ligo.org/lscsoft/lalsuite/-/raw/master/lal
 #: The tables used unless others are given: JPL DE405, 2000 to 2040.
 DEFAULT_EARTH_EPHEMERIS = "earth00-40-DE405.dat.gz"
 DEFAULT_SUN_EPHEMERIS = "sun00-40-DE405.dat.gz"
+
+#: SHA-256 of the default tables as recorded on 2026-08-03 from the LALSuite repository. The tables are
+#: physics inputs fetched from an unpinned branch, so a copy with any other content -- a corrupt
+#: download, or a table changed upstream -- is refused rather than used; see :func:`read_table`.
+RECORDED_SHA256 = {
+    "earth00-40-DE405.dat.gz": "4995647b2c47617c90804ad0bc814ce42b426f1e5015a90cf939bcdd0c20ea67",
+    "sun00-40-DE405.dat.gz": "0b132dc5a712ebc16661a10cb88409e2577c16723c64f98e9b9b4d265510700f",
+}
 
 #: LALPulsar's naming of its standard tables; only such a bare name is ever downloaded.
 _STANDARD_NAME = re.compile(r"\A(earth|sun)\d{2}-\d{2}-DE\d{3}\.dat(\.gz)?\Z")
@@ -170,7 +179,8 @@ class EphemerisTable:
         if np.any(entry < 0) or np.any(entry >= len(self.position)):
             raise ValueError(
                 f"GPS times {float(np.min(gps)):.1f} to {float(np.max(gps)):.1f} reach outside the ephemeris "
-                f"{self.source or 'table'}, which covers {self.gps0:.1f} to {self.gps_end:.1f}."
+                f"{self.source or 'table'}, which covers {self.gps0:.1f} to {self.gps_end:.1f}. Turn the solar-system "
+                f"delays off in ProjectionEffects, or pass SolarSystemEphemeris(...) over tables that cover this epoch."
             )
         since = (offset - self.spacing * entry)[..., None]
         position = self.position[entry] + self.velocity[entry] * since + 0.5 * self.acceleration[entry] * since**2
@@ -225,7 +235,11 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
             os.fdopen(handle, "wb") as target,
         ):
             shutil.copyfileobj(response, target)
+        _require_recorded_content(Path(partial), path.name)
         os.replace(partial, cached)
+    except ValueError:
+        Path(partial).unlink(missing_ok=True)
+        raise
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         Path(partial).unlink(missing_ok=True)
         raise FileNotFoundError(
@@ -236,6 +250,24 @@ def resolve_table(name_or_path: str | os.PathLike[str]) -> Path:
     return cached
 
 
+def _require_recorded_content(path: Path, name: str) -> None:
+    """Refuse a table named as a default one whose content is not the recorded one.
+
+    Raises:
+        ValueError: If ``name`` has a recorded SHA-256 and the file's differs.
+    """
+    expected = RECORDED_SHA256.get(name)
+    if expected is None:
+        return
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise ValueError(
+            f"Ephemeris {path} has SHA-256 {actual}, not the {expected} recorded for {name}. Either the copy is "
+            f"corrupt -- delete it and it is downloaded again -- or the table changed upstream, which moves the "
+            f"reference trajectories and is worth understanding before using it."
+        )
+
+
 @cache
 def read_table(name_or_path: str) -> EphemerisTable:
     """Read a LALPulsar ephemeris table, once per process.
@@ -244,9 +276,11 @@ def read_table(name_or_path: str) -> EphemerisTable:
 
     Raises:
         FileNotFoundError: See :func:`resolve_table`.
-        ValueError: If the header disagrees with the rows, or the rows are not evenly spaced.
+        ValueError: If a default table's content is not the recorded one (:data:`RECORDED_SHA256`), the header
+            disagrees with the rows, or the rows are not evenly spaced.
     """
     path = resolve_table(name_or_path)
+    _require_recorded_content(path, path.name)
     with path.open("rb") as raw:
         compressed = raw.read(2) == b"\x1f\x8b"
     with gzip.open(path, "rt") if compressed else path.open() as text:

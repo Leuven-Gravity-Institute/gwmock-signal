@@ -556,3 +556,22 @@ def test_a_rate_too_fine_for_the_gps_time_is_refused_rather_than_judged():
     event = _event("ga-0.1ms", peak_time=2.0e9 + 17.0, coa_time=2.0e9 + 17.0)
     with pytest.raises(ValueError, match="cannot be resolved to within a sample"):
         simulator.pre_coalescence_duration(event, 4.0e6, 5.0)
+
+
+@pytest.mark.requires_lalsuite
+def test_a_burst_absorbs_the_solar_system_delays_at_its_peak():
+    """A burst's solar-system delay is absorbed at ``peak_time``: over a burst it changes nothing.
+
+    What a transient keeps of the delay is the Earth's orbital acceleration away from its reference time,
+    of order 1e-11 s over a second, so with the delays on the burst is the one without them to 1e-9 of
+    peak. The reference is ``peak_time`` even when a ``coa_time`` places the burst.
+    """
+    simulator = BurstSimulator()
+    event = _event("sg-q9", peak_time=1.3e9 + 17.0)
+    common = {"sampling_frequency": 4096.0, "minimum_frequency": 5.0}
+    without = simulator.simulate(event, ["H1"], effects=_PLACEMENT_EFFECTS, **common)["H1"]
+    with_delays = simulator.simulate(event, ["H1"], **common)["H1"]
+    assert with_delays.t0 == without.t0
+    peak = np.max(np.abs(without.value))
+    assert 0.0 < np.max(np.abs(np.asarray(with_delays.value) - np.asarray(without.value))) < 1e-9 * peak
+    assert simulator.timing_reference({**event, "coa_time": event["peak_time"] - 0.05}) == event["peak_time"]

@@ -1,14 +1,14 @@
-# SHA-256 of the LALPulsar ephemeris tables the continuous-wave tests generate against.
+# SHA-256 of the LALPulsar ephemeris tables the projection's solar-system delays use, for every source.
 #
 # These are physics inputs, not build artefacts: they define the Earth and Sun trajectories the
-# barycentring uses, so a change to their content changes generated strain. ripple fetches them
-# from lalsuite `master` -- an unpinned moving target -- and caches them by name only, so without
-# this file a changed upstream table, or a corrupted cached copy, would be used silently and show
-# up as a numerical difference nobody could attribute.
+# barycentring uses, so a change to their content changes generated strain. They are fetched from
+# lalsuite `master` -- an unpinned moving target -- and cached by name, so without a record a changed
+# upstream table, or a corrupted cached copy, would be used silently and show up as a numerical
+# difference nobody could attribute.
 #
-# Two things use it. CI derives its cache identifier from this file, so editing it invalidates
-# the cache; and a verification step rejects tables that do not match, rather than letting a bad
-# copy reach a test as a confusing parse error.
+# The package records the same values (`gwmock_signal.projection.solar_system.RECORDED_SHA256`) and
+# refuses a default table that does not match; `tests/projection/test_solar_system.py` requires the two
+# records to agree. CI derives its cache identifier from this file, so editing it invalidates the cache.
 #
 # Recorded 2026-08-03 from ripplegw's own download of
 # https://git.ligo.org/lscsoft/lalsuite/-/raw/master/lalpulsar/lib/<name>.

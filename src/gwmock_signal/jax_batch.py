@@ -40,7 +40,6 @@ from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import (
     DetectorKey,
     DetectorSpec,
-    detector_fields,
     reconstructed_geometry,
     resolve_detectors,
 )
@@ -51,8 +50,7 @@ from gwmock_signal.projection.jax_projection import (
     project_polarizations_td_rotating,
     time_delay_from_geocenter,
 )
-from gwmock_signal.projection.kernels import arm_directions
-from gwmock_signal.projection.network import _arm_lengths, _resolve_effects
+from gwmock_signal.projection.network import _arm_lengths, _resolve_effects, _response_terms
 from gwmock_signal.projection.resampling import (
     SPEED_OF_LIGHT_M_S,
     edge_padding,
@@ -555,6 +553,11 @@ def _event_sky(  # noqa: PLR0913
 
     The sky line is anchored at the event's first unpadded sample; the solar-system delay is absorbed at
     its coalescence and evaluated from the J2000 position.
+
+    One precession call and one delay model per event, in Python on the host: measured at 326 us per event
+    for a 16384 s span, so 30 s for 1e5 events and five minutes for 1e6, beside the device work it
+    prepares. The models share their shapes by construction, so the build could be vectorised if that
+    ever dominates.
     """
     count = len(coa_time)
     right_ascension = np.broadcast_to(right_ascension, (count,)).astype(float)
@@ -848,22 +851,14 @@ def _project_static(  # noqa: PLR0913
     angles = {"right_ascension": right_ascension_fd, "declination": declination_fd}
     per_detector = []
     for name, key in zip(output_names, lookup_keys, strict=True):
-        response, location = reconstructed_geometry(key)
-        # The same precondition the rotating path checks: the padding is sized for a terrestrial
-        # delay, and this phase shift is circular on the padded buffer, so a detector further out
-        # would move signal past an edge and wrap it round. Checked here, where the location is
-        # still a concrete host array.
-        require_terrestrial_location(location, name=f"location of {key}")
-        if lengths is None:
-            terms = [(1.0, response, location, None, None)]
-        else:
-            fields = key if isinstance(key, tuple) else detector_fields(key)
-            terms = [
-                (sign, 0.5 * np.outer(arm, arm), location + 0.5 * length * arm, arm, length)
-                for sign, arm, length in zip((1.0, -1.0), arm_directions(fields, xp=np), lengths[name], strict=True)
-            ]
+        # The padding is sized for a terrestrial delay, and this phase shift is circular on the padded
+        # buffer, so a point further out would move signal past an edge and wrap it round.
+        # `_response_terms` checks the vertex and any arm midpoint, here, where they are concrete.
+        terms = _response_terms(key, None if lengths is None else lengths[name], sampling_frequency)
         detector = 0.0
-        for sign, tensor, point, arm, length in terms:
+        for sign, tensor, point, arm, length in (
+            (term.sign, term.tensor, term.location, term.arm, term.length) for term in terms
+        ):
             f_plus, f_cross = antenna_pattern(tensor, gmst, polarization_angle=polarization_angle, **angles)
             # The alignment offset is a pure time shift, so it rides on the same exact phase factor as the
             # geocenter delay: no interpolation is involved on this branch at all.
@@ -980,11 +975,8 @@ def _project_rotating(  # noqa: PLR0913
     for name, key in zip(output_names or [None] * len(lookup_keys), lookup_keys, strict=True):
         response, location = reconstructed_geometry(key)
         lengths = None if arm_lengths is None else tuple(float(length) for length in arm_lengths[name])
-        arms = (
-            np.stack(arm_directions(key if isinstance(key, tuple) else detector_fields(key), xp=np))
-            if lengths is not None
-            else np.zeros((2, 3))
-        )
+        terms = _response_terms(key, lengths, sampling_frequency)
+        arms = np.stack([term.arm for term in terms]) if lengths is not None else np.zeros((2, 3))
         project_batch = _rotating_projection_kernel(n_samples + 2 * padding, sampling_frequency, lengths, components)
         per_detector.append(
             project_batch(
