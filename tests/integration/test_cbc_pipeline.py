@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 try:
+    import lal
     import lalsimulation
 except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet; its tests are skipped
-    if exc.name != "lalsimulation":
+    if exc.name not in {"lal", "lalsimulation"}:
         raise
-    lalsimulation = None
+    lal = lalsimulation = None
 import numpy as np
 import pytest
 
@@ -53,11 +54,10 @@ RA = PARAMS["right_ascension"]
 DEC = PARAMS["declination"]
 TC = PARAMS["coa_time"]
 
-# Historical PyCBC reference for the H1 matched-filter SNR against the aLIGO
-# design PSD (P1200087). The LAL-only regression keeps the same value to better
-# than 1e-6 relative precision.
-_PYCBC_REFERENCE_SNR = 4.884168e01
-_REFERENCE_SNR = 4.884168e01
+# PyCBC's optimal SNR of the H1 strain against the aLIGO design PSD (P1200087):
+# pycbc.filter.sigma (pycbc 2.11.0) from 20 Hz, in the long-wavelength convention.
+# The LAL-only sum below reproduces it to the last digit, so it is the reference.
+_PYCBC_REFERENCE_SNR = 4.884173e01
 
 
 def _time_delay_from_earth_center_lal(prefix, *, right_ascension, declination, t_gps):
@@ -87,20 +87,20 @@ def _make_background(detector_names: tuple[str, ...]) -> dict[str, TimeSeries]:
 
 
 def _matched_filter_sigma_lal(ts: TimeSeries) -> float:
-    """Return the matched-filter sigma using the LAL design PSD helper."""
+    """Return the optimal SNR against LAL's aLIGO design PSD, over PyCBC's frequency bins.
+
+    The sum runs over the bins ``pycbc.filter.sigma`` uses: from ``int(FMIN / df)``, which is one bin
+    below ``FMIN`` when ``FMIN`` is off the grid, to the last bin below Nyquist.
+    """
     data = np.asarray(ts.value, dtype=float)
     dt = ts.dt
     freqs = np.fft.rfftfreq(len(data), d=dt)
-    if len(freqs) < 2:
-        return 0.0
     hf = np.fft.rfft(data) * dt
     df = freqs[1] - freqs[0]
-    psd = np.array(
-        [lalsimulation.SimNoisePSDaLIGODesignSensitivityP1200087(float(f)) if f > 0 else np.inf for f in freqs],
-        dtype=float,
-    )
-    mask = freqs >= FMIN
-    sigma_sq = 4.0 * np.sum(np.abs(hf[mask]) ** 2 / psd[mask]) * df
+    psd = lal.CreateREAL8FrequencySeries("psd", 0, 0.0, df, lal.DimensionlessUnit, len(freqs))
+    lalsimulation.SimNoisePSDaLIGODesignSensitivityP1200087(psd, 0.0)
+    bins = slice(int(FMIN / df), len(freqs) - 1)
+    sigma_sq = 4.0 * np.sum(np.abs(hf[bins]) ** 2 / psd.data.data[bins]) * df
     return float(np.sqrt(sigma_sq))
 
 
@@ -186,7 +186,7 @@ def test_h1l1_time_delay_consistent():
 @pytest.mark.requires_lalsuite
 @pytest.mark.integration
 def test_snr_regression():
-    """Matched-filter SNR on H1 channel matches the LAL-only regression reference."""
+    """The H1 optimal SNR against the aLIGO design PSD is PyCBC's, computed without PyCBC."""
     detectors = Network.from_name("H1L1V1").detector_names
     background = _make_background(detectors)
 
@@ -204,9 +204,7 @@ def test_snr_regression():
 
     snr_computed = _matched_filter_sigma_lal(stack["H1"])
 
-    assert _REFERENCE_SNR > 0.0, f"_REFERENCE_SNR is not set. Update it to {snr_computed:.6e} in this file."
-    assert abs(_REFERENCE_SNR - _PYCBC_REFERENCE_SNR) / _PYCBC_REFERENCE_SNR < 1e-6
-    assert abs(snr_computed - _REFERENCE_SNR) / _REFERENCE_SNR < 1e-6
+    assert abs(snr_computed - _PYCBC_REFERENCE_SNR) / _PYCBC_REFERENCE_SNR < 1e-6
 
 
 @pytest.mark.requires_gwpy
