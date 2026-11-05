@@ -33,7 +33,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import itertools
-import pathlib
 
 import numpy as np
 import pytest
@@ -42,6 +41,7 @@ from astropy.time import Time
 from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import reconstructed_geometry
 from gwmock_signal.projection.sidereal import gmst_rad_astropy, lunisolar_precession_angles, precess_to_epoch
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 
 #: Worst-case agreement required with LAL's ``erot``, in seconds.
 #:
@@ -71,16 +71,10 @@ def _ephemeris():
     lalpulsar = pytest.importorskip("lalpulsar", reason="lalpulsar is not installed")
 
     try:
-        from ripplegw.waveforms.cw.ephemeris import _cache_dir
-    except ImportError:  # pragma: no cover - exercised only without the jax extra
-        pytest.skip("ripplegw is needed to locate the DE405 ephemeris tables")
-
-    cache = pathlib.Path(_cache_dir())
-    earth_file = cache / "earth00-40-DE405.dat.gz"
-    sun_file = cache / "sun00-40-DE405.dat.gz"
-    if not earth_file.is_file() or not sun_file.is_file():
-        pytest.skip(f"DE405 ephemeris tables are not in {cache}; fetch with ripplegw-fetch-ephemeris")
-    return lalpulsar.InitBarycenter(str(earth_file), str(sun_file))
+        earth, sun = SolarSystemEphemeris().tables()
+    except FileNotFoundError as exc:
+        pytest.skip(f"the default ephemeris is unavailable: {exc}")
+    return lalpulsar.InitBarycenter(earth.source, sun.source)
 
 
 def _lal_erot(prefix: str, right_ascension: float, declination: float, t_gps: float) -> float:
@@ -382,10 +376,14 @@ def test_the_host_and_device_rotating_paths_agree_when_precessing():
     continuous-wave coherence tests reach that path, but they compare the device against itself at
     different segmentations, so a rate applied wrongly but *consistently* survives them.
     """
-    pytest.importorskip("jax", reason="jax not installed")
+    jax = pytest.importorskip("jax", reason="jax not installed")
     from gwpy.timeseries import TimeSeries
 
     from gwmock_signal.projection.network import project_polarizations_to_network
+
+    # The device projection refuses 32-bit JAX; switched on here, not left to whichever module ran first.
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
 
     detectors = ["H1", "V1"]
     t_gps, sampling_frequency, n_samples = 1.75e9, 512.0, 4096
@@ -395,18 +393,23 @@ def test_the_host_and_device_rotating_paths_agree_when_precessing():
         "cross": TimeSeries(1e-24 * np.cos(2 * np.pi * 40.0 * times), t0=t_gps, sample_rate=sampling_frequency),
     }
 
-    projected = {
-        backend: project_polarizations_to_network(
-            polarizations,
-            detectors,
-            right_ascension=1.1,
-            declination=0.3,
-            polarization_angle=0.4,
-            effects=dataclasses.replace(ProjectionEffects.long_wavelength(earth_rotation=True), source_precession=True),
-            backend=backend,
-        )
-        for backend in ("numpy", "jax")
-    }
+    try:
+        projected = {
+            backend: project_polarizations_to_network(
+                polarizations,
+                detectors,
+                right_ascension=1.1,
+                declination=0.3,
+                polarization_angle=0.4,
+                effects=dataclasses.replace(
+                    ProjectionEffects.long_wavelength(earth_rotation=True), source_precession=True
+                ),
+                backend=backend,
+            )
+            for backend in ("numpy", "jax")
+        }
+    finally:
+        jax.config.update("jax_enable_x64", previous)
 
     for name in detectors:
         host = projected["numpy"][name].value

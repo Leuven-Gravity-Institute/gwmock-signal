@@ -19,6 +19,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.snr._pycbc import matched_filter_snr, optimal_snr
 from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
 from gwmock_signal.waveform.backends import LALSimulationBackend
@@ -91,6 +92,8 @@ def test_optimal_snr_h1_matches_reference() -> None:
         sampling_frequency=FS,
         minimum_frequency=FMIN,
         waveform_backend=LALSimulationBackend(),
+        # The PyCBC reference is in the long-wavelength convention, with the Earth rotating.
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
     )
 
     h1_strain = stack["H1"]

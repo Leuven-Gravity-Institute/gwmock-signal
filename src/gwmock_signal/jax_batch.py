@@ -685,6 +685,15 @@ def simulate_cbc_batch(  # noqa: PLR0913
         + 2 * edge_padding(sampling_frequency),
         earth_rotation=earth_rotation,
     )
+    ephemeris = SolarSystemEphemeris() if ephemeris is None else ephemeris
+    _require_ephemeris_span(
+        effects,
+        ephemeris,
+        backend,
+        parameters,
+        minimum_frequency=minimum_frequency,
+        sampling_frequency=sampling_frequency,
+    )
 
     fd = backend.generate_fd_polarizations_batch(
         approximant,
@@ -727,7 +736,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
 
     sky = _event_sky(
         effects,
-        SolarSystemEphemeris() if ephemeris is None else ephemeris,
+        ephemeris,
         right_ascension=np.asarray(right_ascension, dtype=float),
         declination=np.asarray(declination, dtype=float),
         coa_time=coa_time,
@@ -1462,8 +1471,22 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
         output_grid = SamplingGrid(epoch=float(start_time), sampling_frequency=sampling_frequency)
         segment_start_times = output_grid.time_of(np.arange(n_segments, dtype=np.int64) * round(samples_per_segment))
 
+    bins = _chirp_mass_bins(parameters, n_chirp_mass_bins)
+    # Every bin before the first is generated: chunks run lightest first, so an event outside the
+    # ephemeris in a heavy bin would otherwise fail after the lighter bins had all been generated.
+    ephemeris = SolarSystemEphemeris() if ephemeris is None else ephemeris
+    for bin_indices in bins:
+        _require_ephemeris_span(
+            effects,
+            ephemeris,
+            _bin_backend(backend, parameters, bin_indices, minimum_frequency, sampling_frequency),
+            {key: np.asarray(values)[bin_indices] for key, values in parameters.items()},
+            minimum_frequency=minimum_frequency,
+            sampling_frequency=sampling_frequency,
+        )
+
     segments: list[DetectorStrainStack] | None = None
-    for bin_indices in _chirp_mass_bins(parameters, n_chirp_mass_bins):
+    for bin_indices in bins:
         # Pin the grid to this bin's worst case so every chunk of the bin shares it
         # (so chunking within the bin does not change the model). A user-pinned backend is left as-is.
         bin_backend = _bin_backend(backend, parameters, bin_indices, minimum_frequency, sampling_frequency)
@@ -1559,6 +1582,40 @@ def _bin_backend(
             eta=_symmetric_mass_ratio(parameters)[bin_indices],
         )
     )
+
+
+def _require_ephemeris_span(  # noqa: PLR0913
+    effects: ProjectionEffects,
+    ephemeris: SolarSystemEphemeris,
+    backend: RippleBackend,
+    parameters: Mapping[str, object],
+    *,
+    minimum_frequency: float,
+    sampling_frequency: float,
+) -> None:
+    """Refuse, before any waveform is generated, events whose buffers reach outside the ephemeris.
+
+    The span is the one :func:`_event_sky` builds its delay models over -- the padded buffer placed by
+    ``coa_time``, one sample earlier for a grid alignment and 0.1 s wider at each end -- taken over
+    every event at once, since the tables are contiguous.
+
+    Raises:
+        ValueError: If any event's span reaches outside the tables.
+    """
+    if not effects.solar_system:
+        return
+    n_samples = _planned_n_samples(backend, parameters, minimum_frequency, sampling_frequency)
+    _, waveform_epoch = backend.coalescence_placement(n_samples, sampling_frequency)
+    padding = edge_padding(sampling_frequency)
+    coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
+    span = np.array(
+        [
+            coa_time.min() + waveform_epoch - (padding + 1) / sampling_frequency - 0.1,
+            coa_time.max() + waveform_epoch + (n_samples + padding) / sampling_frequency + 0.1,
+        ]
+    )
+    for table in ephemeris.tables():
+        table.state(span)
 
 
 def _planned_n_samples(

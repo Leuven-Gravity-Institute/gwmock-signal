@@ -247,7 +247,6 @@ def test_device_projection_matches_host_pipeline() -> None:
         declination=dec,
         polarization_angle=psi,
         effects=ProjectionEffects.long_wavelength(earth_rotation=False),
-        precess_source_direction=False,
         backend="numpy",
         sinc_taps=DEFAULT_SINC_TAPS,
         kaiser_beta=DEFAULT_KAISER_BETA,

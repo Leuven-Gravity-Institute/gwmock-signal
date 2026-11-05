@@ -20,6 +20,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.waveform.backends import LALSimulationBackend
 
 # SciPy arrives with GWpy, which does not install on Python 3.15 yet; every test here also needs lalsuite.
@@ -197,6 +198,8 @@ def test_snr_regression():
         sampling_frequency=FS,
         minimum_frequency=FMIN,
         waveform_backend=LALSimulationBackend(),
+        # The PyCBC reference is in the long-wavelength convention, with the Earth rotating.
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
     )
 
     snr_computed = _matched_filter_sigma_lal(stack["H1"])

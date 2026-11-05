@@ -175,6 +175,8 @@ _WIDE_MASS_CATALOGUE = {
     "polarization_angle": np.array([2.659, 0.0, 1.0, 0.5]),
     "coa_time": np.array([200.0, 260.0, 320.0, 380.0]),
 }
+# The catalogue above sits at GPS 200 to 380 s, before the solar-system tables (2000 to 2040).
+_BEFORE_THE_TABLES = ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False)
 
 
 @pytest.mark.integration
@@ -186,6 +188,7 @@ def test_simulate_cbc_catalogue_binning_agrees_with_single_grid() -> None:
         "sampling_frequency": 2048.0,
         "minimum_frequency": 30.0,
         "parameters": _WIDE_MASS_CATALOGUE,
+        "effects": _BEFORE_THE_TABLES,
         "segment_duration": 64.0,
         "start_time": 0.0,
         "end_time": 512.0,
@@ -238,10 +241,50 @@ def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
         end_time=512.0,
         n_chirp_mass_bins=5,  # > 2 events
         backend=RippleBackend(segment_duration=8.0),
-        # GPS 0 lies before the solar-system tables (2000 to 2040).
-        effects=ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False),
+        effects=_BEFORE_THE_TABLES,
     )
     assert len(segments) == 8
+
+
+def _refuse_generation(*args, **kwargs):
+    raise AssertionError("a waveform was generated")
+
+
+def test_an_event_outside_the_ephemeris_is_refused_before_generation(monkeypatch) -> None:
+    """A batch with an event past the tables' end is refused before any waveform is generated."""
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", _refuse_generation)
+    catalogue = {**_CATALOGUE, "coa_time": np.array([1.1262594624e9, 1.1262594640e9, 1.95e9])}
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        simulate_cbc_batch(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters=catalogue,
+            backend=RippleBackend(segment_duration=8.0),
+        )
+
+
+def test_a_catalogue_checks_every_bin_against_the_ephemeris_before_generating(monkeypatch) -> None:
+    """The heaviest bin runs last, so its event outside the tables is refused before the lighter bins run."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", _refuse_generation)
+    start = 1.1262594e9
+    # Event 0 has the largest chirp mass, so it lands in the last of the two bins.
+    catalogue = {**_WIDE_MASS_CATALOGUE, "coa_time": start + np.array([1.95e9 - start, 260.0, 320.0, 380.0])}
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=2048.0,
+            minimum_frequency=30.0,
+            parameters=catalogue,
+            segment_duration=64.0,
+            start_time=start,
+            end_time=start + 512.0,
+            n_chirp_mass_bins=2,
+        )
 
 
 @pytest.mark.integration
@@ -265,6 +308,7 @@ def test_simulate_cbc_catalogue_chunking_does_not_change_the_model() -> None:
         "sampling_frequency": 2048.0,
         "minimum_frequency": 30.0,
         "parameters": _WIDE_MASS_CATALOGUE,
+        "effects": _BEFORE_THE_TABLES,
         "segment_duration": 64.0,
         "start_time": 0.0,
         "end_time": 512.0,
