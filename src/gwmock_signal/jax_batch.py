@@ -582,9 +582,8 @@ def _event_sky(  # noqa: PLR0913
         }
         models, rows = [], []
         for ra, dec, start, coalescence in zip(right_ascension, declination, padded_start, coa_time, strict=True):
-            model = solar_system.DelayModel.build(
-                float(start) - 0.1, float(start) + span + 0.1, float(ra), float(dec), ephemeris, **components
-            )
+            first, last = _delay_model_bounds(float(start), span)
+            model = solar_system.DelayModel.build(first, last, float(ra), float(dec), ephemeris, **components)
             value, rate = solar_system.delay(np.array([coalescence]), float(ra), float(dec), ephemeris, **components)
             models.append(model)
             rows.append((float(coalescence) - model.epoch, float(value[0]), float(rate[0])))
@@ -693,6 +692,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
         parameters,
         minimum_frequency=minimum_frequency,
         sampling_frequency=sampling_frequency,
+        output_grid=output_grid,
     )
 
     fd = backend.generate_fd_polarizations_batch(
@@ -718,21 +718,7 @@ def simulate_cbc_batch(  # noqa: PLR0913
     polarization_angle = jnp.asarray(_required(parameters, "polarization_angle"), dtype=jnp.float64)
     coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
 
-    # Split each event's desired start into a lattice index and the sub-sample remainder the
-    # projection must absorb. Without a grid there is nothing to align to and the remainder is
-    # zero, which leaves both branches exactly as they were.
-    if output_grid is None:
-        start_index = None
-        alignment_shift = np.zeros_like(coa_time)
-    else:
-        if output_grid.sampling_frequency != sampling_frequency:
-            raise ValueError(
-                f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal "
-                f"sampling_frequency ({sampling_frequency})."
-            )
-        start_index, alignment_shift = output_grid.split_index(coa_time + waveform_epoch)
-        # Whole samples, so the padded buffer stays on the lattice the unpadded one was put on.
-        start_index = start_index - padding
+    start_index, alignment_shift = _alignment(coa_time, waveform_epoch, output_grid, sampling_frequency)
 
     sky = _event_sky(
         effects,
@@ -1483,6 +1469,7 @@ def simulate_cbc_catalogue(  # noqa: PLR0913
             {key: np.asarray(values)[bin_indices] for key, values in parameters.items()},
             minimum_frequency=minimum_frequency,
             sampling_frequency=sampling_frequency,
+            output_grid=output_grid,
         )
 
     segments: list[DetectorStrainStack] | None = None
@@ -1584,6 +1571,34 @@ def _bin_backend(
     )
 
 
+def _alignment(
+    coa_time: np.ndarray,
+    waveform_epoch: float,
+    output_grid: SamplingGrid | None,
+    sampling_frequency: float,
+) -> tuple[np.ndarray | None, np.ndarray]:
+    """Split each event's padded start into a lattice index and the sub-sample remainder to absorb.
+
+    Without a grid there is nothing to align to and the remainder is zero, which leaves both projection
+    branches exactly as they were. Returns ``(start_index, alignment_shift)``, the shift in samples.
+    """
+    if output_grid is None:
+        return None, np.zeros_like(coa_time)
+    if output_grid.sampling_frequency != sampling_frequency:
+        raise ValueError(
+            f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal "
+            f"sampling_frequency ({sampling_frequency})."
+        )
+    start_index, alignment_shift = output_grid.split_index(coa_time + waveform_epoch)
+    # Whole samples, so the padded buffer stays on the lattice the unpadded one was put on.
+    return start_index - edge_padding(sampling_frequency), alignment_shift
+
+
+def _delay_model_bounds(padded_start: np.ndarray | float, span: float) -> tuple[np.ndarray | float, np.ndarray | float]:
+    """Return the times an event's delay model is built over: its padded buffer, 0.1 s wider at each end."""
+    return padded_start - 0.1, padded_start + span + 0.1
+
+
 def _require_ephemeris_span(  # noqa: PLR0913
     effects: ProjectionEffects,
     ephemeris: SolarSystemEphemeris,
@@ -1592,13 +1607,12 @@ def _require_ephemeris_span(  # noqa: PLR0913
     *,
     minimum_frequency: float,
     sampling_frequency: float,
+    output_grid: SamplingGrid | None,
 ) -> None:
-    """Refuse, before any waveform is generated, events whose buffers reach outside the ephemeris.
+    """Refuse, before any waveform is generated, events whose delay models would reach outside the ephemeris.
 
-    The span is the one :func:`_event_sky` builds its delay models over -- the padded buffer placed by
-    ``coa_time`` and 0.1 s wider at each end -- taken over every event at once, since the tables are
-    contiguous. A grid alignment moves a buffer up to one sample earlier, so the start allows for it;
-    the end is the unaligned buffer's, which no alignment passes.
+    Each event's span is the one :func:`_event_sky` will build its model over, from the same planned
+    buffer, alignment and bounds, so the check refuses exactly the events the models would.
 
     Raises:
         ValueError: If any event's span reaches outside the tables.
@@ -1609,14 +1623,13 @@ def _require_ephemeris_span(  # noqa: PLR0913
     _, waveform_epoch = backend.coalescence_placement(n_samples, sampling_frequency)
     padding = edge_padding(sampling_frequency)
     coa_time = np.asarray(_required(parameters, "coa_time"), dtype=float)
-    span = np.array(
-        [
-            coa_time.min() + waveform_epoch - (padding + 1) / sampling_frequency - 0.1,
-            coa_time.max() + waveform_epoch + (n_samples + padding - 1) / sampling_frequency + 0.1,
-        ]
-    )
+    _, alignment_shift = _alignment(coa_time, waveform_epoch, output_grid, sampling_frequency)
+    # Each step in the order simulate_cbc_batch and _event_sky take it, so the times are the same floats.
+    dt = 1.0 / sampling_frequency
+    padded_start = (coa_time + waveform_epoch - alignment_shift / sampling_frequency) - padding * dt
+    first, last = _delay_model_bounds(padded_start, (n_samples + 2 * padding - 1) * dt)
     for table in ephemeris.tables():
-        table.state(span)
+        table.state(np.concatenate([first, last]))
 
 
 def _planned_n_samples(

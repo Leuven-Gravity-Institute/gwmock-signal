@@ -265,29 +265,50 @@ def test_an_event_outside_the_ephemeris_is_refused_before_generation(monkeypatch
         )
 
 
-def test_an_event_whose_buffer_ends_just_inside_the_tables_reaches_generation(monkeypatch) -> None:
-    """The pre-check refuses no event the delay models would accept: its span ends where theirs does.
+class _GeneratedError(Exception):
+    """Raised in place of generation: the event got past the ephemeris check."""
 
-    The event is placed so its padded buffer, 0.1 s wider as the models build it, ends a quarter of a
-    sample before the last time the tables accept; one sample later it is refused.
+
+def _table_edge_event(edge: str, shift: float, backend: RippleBackend) -> float:
+    """Return a ``coa_time`` whose delay model ends (or starts) a quarter sample inside the tables.
+
+    A table accepts a time while its nearest entry is in the table: from ``gps0 - spacing / 2`` to
+    ``gps0 + (N - 1/2) spacing``. The model covers the padded buffer, ``shift`` samples earlier on a grid,
+    and 0.1 s more at each end.
     """
     from gwmock_signal.projection.resampling import edge_padding
     from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 
-    class _GeneratedError(Exception):
-        pass
+    n_samples, dt, padding = round(8.0 * _FS), 1.0 / _FS, edge_padding(_FS)
+    _, waveform_epoch = backend.coalescence_placement(n_samples, _FS)
+    tables = SolarSystemEphemeris().tables()
+    model_start = waveform_epoch - (shift + padding) * dt - 0.1  # relative to coa_time
+    if edge == "end":
+        last = min(table.gps0 + (len(table.position) - 0.5) * table.spacing for table in tables)
+        return last - (model_start + (n_samples + 2 * padding - 1) * dt + 0.2) - 0.25 * dt
+    first = max(table.gps0 - 0.5 * table.spacing for table in tables)
+    return first - model_start + 0.25 * dt
+
+
+@pytest.mark.parametrize("aligned", [False, True], ids=["unaligned", "aligned"])
+@pytest.mark.parametrize("edge", ["start", "end"])
+def test_an_event_just_inside_the_tables_reaches_generation(monkeypatch, edge: str, aligned: bool) -> None:
+    """The check refuses exactly the events the delay models would: a quarter sample inside the tables passes.
+
+    The event's model starts or ends a quarter sample inside the tables' range, and on a grid its buffer is
+    aligned half a sample earlier; one sample further out it is refused.
+    """
+    from gwmock_signal.sampling_grid import SamplingGrid
 
     def generated(*args, **kwargs):
         raise _GeneratedError
 
     monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", generated)
     backend = RippleBackend(segment_duration=8.0)
-    n_samples, dt = round(8.0 * _FS), 1.0 / _FS
-    _, waveform_epoch = backend.coalescence_placement(n_samples, _FS)
-    # A table accepts a time while its nearest entry is still in the table.
-    last = min(table.gps0 + (len(table.position) - 0.5) * table.spacing for table in SolarSystemEphemeris().tables())
-    model_end = waveform_epoch + (n_samples + edge_padding(_FS) - 1) * dt + 0.1
-    coa_time = last - model_end - 0.25 * dt
+    shift, dt = (0.5 if aligned else 0.0), 1.0 / _FS
+    coa_time = _table_edge_event(edge, shift, backend)
+    _, waveform_epoch = backend.coalescence_placement(round(8.0 * _FS), _FS)
+    grid = SamplingGrid(epoch=coa_time + waveform_epoch - shift * dt, sampling_frequency=_FS) if aligned else None
 
     def run(coa: float) -> None:
         simulate_cbc_batch(
@@ -297,12 +318,46 @@ def test_an_event_whose_buffer_ends_just_inside_the_tables_reaches_generation(mo
             minimum_frequency=_F_MIN,
             parameters={key: value[:1] for key, value in {**_CATALOGUE, "coa_time": np.array([coa])}.items()},
             backend=backend,
+            output_grid=grid,
         )
 
     with pytest.raises(_GeneratedError):
         run(coa_time)
     with pytest.raises(ValueError, match="outside the ephemeris"):
-        run(coa_time + dt)
+        run(coa_time + (dt if edge == "end" else -dt))
+
+
+def test_a_catalogue_checks_an_aligned_event_at_the_tables_start_as_its_model_will(monkeypatch) -> None:
+    """The catalogue's check aligns each event to the catalogue's grid, as its batches will."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    def generated(*args, **kwargs):
+        raise _GeneratedError
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", generated)
+    backend = RippleBackend(segment_duration=8.0)
+    dt = 1.0 / _FS
+    coa_time = _table_edge_event("start", 0.5, backend)
+    _, waveform_epoch = backend.coalescence_placement(round(8.0 * _FS), _FS)
+
+    def run(coa: float) -> None:
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters={key: value[:1] for key, value in {**_CATALOGUE, "coa_time": np.array([coa])}.items()},
+            # The catalogue's grid starts at start_time, half a sample before the buffer's unaligned start.
+            segment_duration=64.0,
+            start_time=coa_time + waveform_epoch - 0.5 * dt,
+            end_time=coa_time + waveform_epoch - 0.5 * dt + 64.0,
+            backend=backend,
+        )
+
+    with pytest.raises(_GeneratedError):
+        run(coa_time)
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        run(coa_time - dt)
 
 
 def test_a_catalogue_checks_every_bin_against_the_ephemeris_before_generating(monkeypatch) -> None:
