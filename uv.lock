@@ -793,7 +793,7 @@ wheels = [
 
 [[package]]
 name = "gwmock-noise"
-version = "0.18.3"
+version = "0.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gwmock-data" },
@@ -803,9 +803,9 @@ dependencies = [
     { name = "scipy" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/ef/a84e17057bf9d2af53890aa0b1beb6f1b3ec3671131d1000f2116aed5e60/gwmock_noise-0.18.3.tar.gz", hash = "sha256:fd7d37fa98f009beabd5818e7f8fc12b06904632181305f238553146e4a7b4da", size = 1717925, upload-time = "2026-10-27T03:28:35.838Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/dd/13f15ecc1b82beaab81ab583c4f17a05b2d64215f0430afa64865d4b8f9e/gwmock_noise-0.20.0.tar.gz", hash = "sha256:514b0e21d72d6c3b015fb1746d3a03637abc87b3b9f603d8092d1604b4e33b59", size = 1777254, upload-time = "2026-11-05T07:50:48.811Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/e4/bb2e094a955d2c5b74241641dd27311970a77f922b896d4738a2cde728d2/gwmock_noise-0.18.3-py3-none-any.whl", hash = "sha256:0abe4c5b1fdf44cafa125de0d7f7387546b11b7c6f8ec806671f0cbcc99153a1", size = 1304409, upload-time = "2026-10-27T03:28:33.936Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/0a/7d4f6d5270b6f46cb8d33d726b3eef205b0fc6537732eec5c270d45d01a1/gwmock_noise-0.20.0-py3-none-any.whl", hash = "sha256:41360bbc393d0b50e5df2213f1b66f15770529254eeb78149d3df5f4a70b99cf", size = 1336687, upload-time = "2026-11-05T07:50:47.172Z" },
 ]
 
 [[package]]
@@ -864,7 +864,7 @@ release = [
 requires-dist = [
     { name = "astropy", specifier = ">=7.0" },
     { name = "gwmock-data", specifier = ">=0.4.7" },
-    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.18.3" },
+    { name = "gwmock-noise", marker = "extra == 'sgwb'", specifier = ">=0.20.0" },
     { name = "gwpy", marker = "extra == 'gwpy'", specifier = ">=4.0.0" },
     { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.13.0" },
     { name = "lalsuite", marker = "python_full_version < '3.15'", specifier = ">=7.26" },
