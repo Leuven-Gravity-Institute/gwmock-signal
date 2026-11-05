@@ -1596,8 +1596,9 @@ def _require_ephemeris_span(  # noqa: PLR0913
     """Refuse, before any waveform is generated, events whose buffers reach outside the ephemeris.
 
     The span is the one :func:`_event_sky` builds its delay models over -- the padded buffer placed by
-    ``coa_time``, one sample earlier for a grid alignment and 0.1 s wider at each end -- taken over
-    every event at once, since the tables are contiguous.
+    ``coa_time`` and 0.1 s wider at each end -- taken over every event at once, since the tables are
+    contiguous. A grid alignment moves a buffer up to one sample earlier, so the start allows for it;
+    the end is the unaligned buffer's, which no alignment passes.
 
     Raises:
         ValueError: If any event's span reaches outside the tables.
@@ -1611,7 +1612,7 @@ def _require_ephemeris_span(  # noqa: PLR0913
     span = np.array(
         [
             coa_time.min() + waveform_epoch - (padding + 1) / sampling_frequency - 0.1,
-            coa_time.max() + waveform_epoch + (n_samples + padding) / sampling_frequency + 0.1,
+            coa_time.max() + waveform_epoch + (n_samples + padding - 1) / sampling_frequency + 0.1,
         ]
     )
     for table in ephemeris.tables():

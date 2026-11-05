@@ -265,6 +265,46 @@ def test_an_event_outside_the_ephemeris_is_refused_before_generation(monkeypatch
         )
 
 
+def test_an_event_whose_buffer_ends_just_inside_the_tables_reaches_generation(monkeypatch) -> None:
+    """The pre-check refuses no event the delay models would accept: its span ends where theirs does.
+
+    The event is placed so its padded buffer, 0.1 s wider as the models build it, ends a quarter of a
+    sample before the last time the tables accept; one sample later it is refused.
+    """
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.projection.solar_system import SolarSystemEphemeris
+
+    class _GeneratedError(Exception):
+        pass
+
+    def generated(*args, **kwargs):
+        raise _GeneratedError
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", generated)
+    backend = RippleBackend(segment_duration=8.0)
+    n_samples, dt = round(8.0 * _FS), 1.0 / _FS
+    _, waveform_epoch = backend.coalescence_placement(n_samples, _FS)
+    # A table accepts a time while its nearest entry is still in the table.
+    last = min(table.gps0 + (len(table.position) - 0.5) * table.spacing for table in SolarSystemEphemeris().tables())
+    model_end = waveform_epoch + (n_samples + edge_padding(_FS) - 1) * dt + 0.1
+    coa_time = last - model_end - 0.25 * dt
+
+    def run(coa: float) -> None:
+        simulate_cbc_batch(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters={key: value[:1] for key, value in {**_CATALOGUE, "coa_time": np.array([coa])}.items()},
+            backend=backend,
+        )
+
+    with pytest.raises(_GeneratedError):
+        run(coa_time)
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        run(coa_time + dt)
+
+
 def test_a_catalogue_checks_every_bin_against_the_ephemeris_before_generating(monkeypatch) -> None:
     """The heaviest bin runs last, so its event outside the tables is refused before the lighter bins run."""
     from gwmock_signal.jax_batch import simulate_cbc_catalogue
