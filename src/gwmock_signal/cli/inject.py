@@ -23,6 +23,7 @@ __lazy_modules__ = [
     "gwmock_signal.io.hdf5",
     "gwmock_signal.network",
     "gwmock_signal.pipeline",
+    "gwmock_signal.projection.effects",
     "gwmock_signal.timeseries",
     "gwmock_signal.waveform.backends",
     "gwmock_signal.waveform.factory",
