@@ -589,6 +589,8 @@ def test_a_background_of_native_series_gives_the_same_strain_as_gwpy():
 
 def test_the_finite_arm_option_reaches_the_projection(monkeypatch):
     """The effects are passed on to the projection."""
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
     seen = {}
 
     def recording(*args, **kwargs):
@@ -601,7 +603,7 @@ def test_the_finite_arm_option_reaches_the_projection(monkeypatch):
         simulator.simulate(
             _SOURCE,
             _DETECTORS,
-            _zeros(_EPOCH, 64),
+            {name: NativeTimeSeries(np.zeros(64), t0=_EPOCH, sample_rate=_FS, unit="strain") for name in _DETECTORS},
             sampling_frequency=_FS,
             minimum_frequency=0.0,
             effects=ProjectionEffects(shapiro_delay=False),
