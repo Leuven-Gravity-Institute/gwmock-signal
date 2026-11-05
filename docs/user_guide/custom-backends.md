@@ -19,8 +19,10 @@ def simulate(
     *,
     sampling_frequency,
     minimum_frequency,
-    earth_rotation=False,
+    effects=None,
     interpolate_if_offset=True,
+    earth_rotation=None,
+    finite_arm_length=None,
 ) -> DetectorStrainStack: ...
 ```
 
@@ -51,6 +53,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 
 from gwmock_signal import DetectorStrainStack, GWSimulator, TimeSeries
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.timeseries import as_timeseries
 
 
@@ -67,11 +70,12 @@ class ConstantBurstSimulator(GWSimulator):
         *,
         sampling_frequency: float,
         minimum_frequency: float,
-        earth_rotation: bool = False,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
-        del minimum_frequency, earth_rotation, interpolate_if_offset, finite_arm_length
+        del minimum_frequency, effects, interpolate_if_offset, earth_rotation, finite_arm_length
 
         self._validate_params(params)
         amplitude = float(params["amplitude"])

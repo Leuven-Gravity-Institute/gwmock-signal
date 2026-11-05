@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.multichannel.stack import DetectorStrainStack
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.simulator import CBCSimulator
 from gwmock_signal.waveform import WaveformBackend
 
@@ -42,9 +43,10 @@ def inject_cbc_signal(  # noqa: PLR0913
     sampling_frequency: float,
     minimum_frequency: float,
     waveform_backend: WaveformBackend | None = None,
-    earth_rotation: bool = True,
+    effects: ProjectionEffects | None = None,
     interpolate_if_offset: bool = True,
-    finite_arm_length: bool = False,
+    earth_rotation: bool | None = None,
+    finite_arm_length: bool | None = None,
 ) -> DetectorStrainStack:
     """Inject a CBC signal into background strain for a network of detectors.
 
@@ -69,16 +71,15 @@ def inject_cbc_signal(  # noqa: PLR0913
             :func:`~gwmock_signal.waveform.factory.default_waveform_backend`: LAL where lalsuite is
             installed, ripple where it is not and the ``jax`` extra is, and an ``ImportError`` naming
             both when neither is.
-        earth_rotation: If ``True``, evaluate antenna patterns at
-            time-dependent GPS times (recommended for longer signals). If
-            ``False``, use a single reference time at the segment midpoint.
+        effects: Which physical effects the projection includes; see
+            :class:`~gwmock_signal.projection.effects.ProjectionEffects`. ``None``, the default, means
+            all of them.
         interpolate_if_offset: If ``True``, resample with a windowed-sinc kernel when the
             injection start is not on a target sample boundary. If ``False``
             and the injection is off-grid, the background is returned
             unchanged (``target.copy()``) rather than resampled.
-        finite_arm_length: If ``True``, each arm responds to the strain averaged along the light's
-            round trip rather than at the vertex; see ``finite_arm_length`` on
-            :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
+        earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+        finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
     Returns:
         ``DetectorStrainStack`` with one injected strain channel per detector in
@@ -95,7 +96,8 @@ def inject_cbc_signal(  # noqa: PLR0913
         background,
         sampling_frequency=sampling_frequency,
         minimum_frequency=minimum_frequency,
-        earth_rotation=earth_rotation,
+        effects=effects,
         interpolate_if_offset=interpolate_if_offset,
+        earth_rotation=earth_rotation,
         finite_arm_length=finite_arm_length,
     )

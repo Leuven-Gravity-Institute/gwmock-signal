@@ -10,6 +10,7 @@ import yaml
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
+from gwmock_signal.projection.effects import ProjectionEffects
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,6 +83,8 @@ def test_load_et_triangle_passes_through_project_polarizations() -> None:
         right_ascension=0.0,
         declination=0.0,
         polarization_angle=0.0,
+        # GPS 0 lies before the solar-system tables (2000 to 2040).
+        effects=ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False),
     )
     assert set(projected.keys()) == {"E1", "E2", "E3"}
 

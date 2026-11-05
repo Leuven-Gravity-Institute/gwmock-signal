@@ -22,6 +22,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
 import gwmock_signal
 from gwmock_signal import GWSimulator, register_simulator_backend, resolve_simulator_backend
 from gwmock_signal.multichannel.stack import DetectorStrainStack
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import _project
 from gwmock_signal.simulator import CBCSimulator, TransientSimulator, _json_default
 from gwmock_signal.waveform import LALSimulationBackend
@@ -921,5 +922,5 @@ class TestTheProjectionBackend:
                 ["H1"],
                 sampling_frequency=self._SAMPLING_FREQUENCY,
                 minimum_frequency=20.0,
-                earth_rotation=False,
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
             )

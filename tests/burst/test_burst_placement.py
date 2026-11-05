@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from gwmock_signal.burst import BurstSimulator, WaveformFile
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.resampling import edge_padding
 
 PEAK = 1_000_000_000.0
@@ -64,6 +65,10 @@ _FAMILIES = {
     },
 }
 
+#: Placement is tested out to GPS 2e9, past the default solar-system tables (2000 to 2040), so these
+#: projections leave the solar-system delays out; everything else is as by default.
+_PLACEMENT_EFFECTS = ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False)
+
 
 def _event(family: str, **overrides):
     event = {**_FAMILIES[family], "hrss": 1e-21, "peak_time": PEAK, **SKY}
@@ -92,7 +97,9 @@ def _assert_extent_matches_output(simulator, event, rate):
     lead = simulator.pre_coalescence_duration(event, rate, 5.0)
     tail = simulator.post_coalescence_duration(event, rate, 5.0)
     hp, hc = simulator.generate_polarizations(event, rate, 5.0)
-    strain = simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+    strain = simulator.simulate(
+        event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+    )["H1"]
     pad = edge_padding(rate) / rate
 
     assert lead >= 0
@@ -170,7 +177,9 @@ def _calls(simulator, rate=4096.0):
         "pre": lambda event: simulator.pre_coalescence_duration(event, rate, 5.0),
         "post": lambda event: simulator.post_coalescence_duration(event, rate, 5.0),
         "polarizations": lambda event: simulator.generate_polarizations(event, rate, 5.0),
-        "simulate": lambda event: simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0),
+        "simulate": lambda event: simulator.simulate(
+            event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+        ),
     }
 
 
@@ -214,10 +223,14 @@ def test_a_coa_time_at_the_edge_of_the_output_is_accepted_everywhere(edge):
         "last sample": PEAK + tail - 1.0 / 4096.0,
     }[edge]
     placed = {**event, "coa_time": coa_time}
-    expected = simulator.simulate(event, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)["H1"]
+    expected = simulator.simulate(
+        event, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+    )["H1"]
     for call in _calls(simulator).values():
         call(placed)
-    strain = simulator.simulate(placed, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)["H1"]
+    strain = simulator.simulate(
+        placed, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+    )["H1"]
     assert strain.t0 == expected.t0
     np.testing.assert_array_equal(np.asarray(strain.value), np.asarray(expected.value))
 
@@ -239,13 +252,17 @@ def test_a_coa_time_on_the_returned_strains_own_edges_is_accepted(edge, epoch, r
     refused = []
     for offset in np.linspace(0.0, 1.0, 9):
         event = _event("sg-q9", peak_time=epoch + 17.0 + offset * 0.987654321)
-        strain = simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+        strain = simulator.simulate(
+            event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+        )["H1"]
         coa_time = strain.t0 if edge == "start" else strain.t0 + strain.n_samples / rate
         placed = {**event, "coa_time": coa_time}
         try:
             pre = simulator.pre_coalescence_duration(placed, rate, 5.0)
             post = simulator.post_coalescence_duration(placed, rate, 5.0)
-            again = simulator.simulate(placed, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+            again = simulator.simulate(
+                placed, ["H1"], sampling_frequency=rate, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+            )["H1"]
         except ValueError:
             refused.append(offset)
             continue
@@ -292,7 +309,9 @@ def test_a_valid_coa_time_never_changes_the_strain(family):
         **{placement: _placed(simulator, event, 4096.0, placement) for placement in _PLACEMENTS},
     }
     outputs = {
-        name: simulator.simulate(variant, ["H1", "L1"], sampling_frequency=4096.0, minimum_frequency=5.0)
+        name: simulator.simulate(
+            variant, ["H1", "L1"], sampling_frequency=4096.0, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+        )
         for name, variant in variants.items()
     }
     reference = outputs["peak_time only"]
@@ -334,7 +353,9 @@ def test_simulate_still_refuses_an_event_without_a_usable_peak_time(peak_time):
     else:
         event["peak_time"] = peak_time
     with pytest.raises(ValueError, match="peak_time"):
-        BurstSimulator().simulate(event, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0)
+        BurstSimulator().simulate(
+            event, ["H1"], sampling_frequency=4096.0, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -509,11 +530,19 @@ def test_at_a_megahertz_an_exact_edge_is_accepted_and_one_sample_outside_is_refu
     simulator = BurstSimulator()
     for offset in (0.0, 0.123456789, 0.987654321):
         event = _event("ga-2.5ms", peak_time=2.0e9 + 17.0 + offset)
-        strain = simulator.simulate(event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)["H1"]
+        strain = simulator.simulate(
+            event, ["H1"], sampling_frequency=rate, minimum_frequency=5.0, effects=_PLACEMENT_EFFECTS
+        )["H1"]
         exact = strain.t0 if edge == "start" else strain.t0 + strain.n_samples / rate
         outside = exact - 1.0 / rate if edge == "start" else exact + 1.0 / rate
         simulator.pre_coalescence_duration({**event, "coa_time": exact}, rate, 5.0)
-        again = simulator.simulate({**event, "coa_time": exact}, ["H1"], sampling_frequency=rate, minimum_frequency=5.0)
+        again = simulator.simulate(
+            {**event, "coa_time": exact},
+            ["H1"],
+            sampling_frequency=rate,
+            minimum_frequency=5.0,
+            effects=_PLACEMENT_EFFECTS,
+        )
         np.testing.assert_array_equal(np.asarray(again["H1"].value), np.asarray(strain.value))
         for call in _calls(simulator, rate).values():
             with pytest.raises(ValueError, match="lies outside this burst's output"):
@@ -527,3 +556,22 @@ def test_a_rate_too_fine_for_the_gps_time_is_refused_rather_than_judged():
     event = _event("ga-0.1ms", peak_time=2.0e9 + 17.0, coa_time=2.0e9 + 17.0)
     with pytest.raises(ValueError, match="cannot be resolved to within a sample"):
         simulator.pre_coalescence_duration(event, 4.0e6, 5.0)
+
+
+@pytest.mark.requires_lalsuite
+def test_a_burst_absorbs_the_solar_system_delays_at_its_peak():
+    """A burst's solar-system delay is absorbed at ``peak_time``: over a burst it changes nothing.
+
+    What a transient keeps of the delay is the Earth's orbital acceleration away from its reference time,
+    of order 1e-11 s over a second, so with the delays on the burst is the one without them to 1e-9 of
+    peak. The reference is ``peak_time`` even when a ``coa_time`` places the burst.
+    """
+    simulator = BurstSimulator()
+    event = _event("sg-q9", peak_time=1.3e9 + 17.0)
+    common = {"sampling_frequency": 4096.0, "minimum_frequency": 5.0}
+    without = simulator.simulate(event, ["H1"], effects=_PLACEMENT_EFFECTS, **common)["H1"]
+    with_delays = simulator.simulate(event, ["H1"], **common)["H1"]
+    assert with_delays.t0 == without.t0
+    peak = np.max(np.abs(without.value))
+    assert 0.0 < np.max(np.abs(np.asarray(with_delays.value) - np.asarray(without.value))) < 1e-9 * peak
+    assert simulator.timing_reference({**event, "coa_time": event["peak_time"] - 0.05}) == event["peak_time"]

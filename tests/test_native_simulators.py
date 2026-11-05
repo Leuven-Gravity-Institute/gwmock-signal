@@ -139,8 +139,8 @@ class TestAddStrain:
         assert background.data.tolist() == [1.0, 1.0, 1.0, 1.0]
 
 
-def test_the_cbc_path_does_not_precess_the_source_direction():
-    """Compact-binary searches use the source direction as given; only the continuous-wave path precesses."""
+def test_the_cbc_path_uses_the_shared_effects_all_on_by_default():
+    """A compact binary is projected with the same effects as every source, all on unless turned off."""
     from unittest.mock import patch
 
     from gwmock_signal.projection.network import _project
@@ -150,4 +150,6 @@ def test_the_cbc_path_does_not_precess_the_source_direction():
         simulator.simulate(_PARAMS, ["H1"], sampling_frequency=_FS, minimum_frequency=20.0)
 
     assert spy.call_count == 1
-    assert spy.call_args.kwargs["precess_source_direction"] is False
+    from gwmock_signal.projection.effects import ProjectionEffects
+
+    assert spy.call_args.kwargs["effects"] == ProjectionEffects()

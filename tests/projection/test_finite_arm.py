@@ -8,6 +8,7 @@ along each arm's light path, with Earth's orientation at every sample.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -17,6 +18,7 @@ from gwmock_signal._detector_table import builtin_arm_lengths, builtin_detectors
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
 from gwmock_signal.projection import finite_arm, kernels
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import arm_lengths, reconstructed_geometry
 from gwmock_signal.projection.network import _gmst_accurate_array, project_polarizations_to_network
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, SPEED_OF_LIGHT_M_S, edge_padding
@@ -25,6 +27,11 @@ from gwmock_signal.timeseries import TimeSeries
 C = SPEED_OF_LIGHT_M_S
 T0 = 1_000_000_000.0
 SKY = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+
+
+def _arms(*, earth_rotation=True):
+    """The finite-arm response alone: no solar-system delays or precession, which the definition omits."""
+    return dataclasses.replace(ProjectionEffects.long_wavelength(earth_rotation=earth_rotation), finite_arm_length=True)
 
 
 def _jim_transfer(x, y):
@@ -247,7 +254,7 @@ def test_the_rotating_projection_is_the_arm_average_along_the_light_path(frequen
     """
     detectors = _triangle()
     projected = project_polarizations_to_network(
-        _polarizations(frequency), detectors, **SKY, earth_rotation=True, tapered=tapered, finite_arm_length=True
+        _polarizations(frequency), detectors, **SKY, effects=_arms(), tapered=tapered
     )
     pad = edge_padding(FS)
     samples = np.arange(pad + int((TC - 0.15) * FS), pad + int((TC + 0.15) * FS), 5)
@@ -262,7 +269,7 @@ def test_the_constant_projection_is_the_arm_average_with_earth_held_at_the_midpo
     """The constant branch is the same average with Earth's orientation fixed at the span's midpoint."""
     detectors = _triangle()
     projected = project_polarizations_to_network(
-        _polarizations(700.0), detectors, **SKY, earth_rotation=False, finite_arm_length=True
+        _polarizations(700.0), detectors, **SKY, effects=_arms(earth_rotation=False)
     )
     pad = edge_padding(FS)
     samples = np.arange(pad + int((TC - 0.15) * FS), pad + int((TC + 0.15) * FS), 5)
@@ -278,9 +285,16 @@ def test_the_constant_projection_is_the_arm_average_with_earth_held_at_the_midpo
 def test_the_triangle_null_stream_cancels_only_with_finite_arms(earth_rotation):
     """Each arm line is read by two interferometers; only finite arms read it at the same place."""
     detectors = _triangle()
-    common = {**SKY, "earth_rotation": earth_rotation, "tapered": True}
-    finite = project_polarizations_to_network(_polarizations(100.0), detectors, **common, finite_arm_length=True)
-    vertex = project_polarizations_to_network(_polarizations(100.0), detectors, **common)
+    common = {**SKY, "tapered": True}
+    finite = project_polarizations_to_network(
+        _polarizations(100.0), detectors, **common, effects=_arms(earth_rotation=earth_rotation)
+    )
+    vertex = project_polarizations_to_network(
+        _polarizations(100.0),
+        detectors,
+        **common,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
+    )
     peak = np.max(np.abs(finite[detectors[0].name].data))
     assert np.max(np.abs(sum(finite[d.name].data for d in detectors))) / peak < 2e-6
     assert np.max(np.abs(sum(vertex[d.name].data for d in detectors))) / peak > 1e-2
@@ -294,19 +308,27 @@ def test_a_short_arm_recovers_the_long_wavelength_response(earth_rotation):
     real difference of 2 pi f L / (2c), 3e-9 at 300 Hz.
     """
     detector = CustomDetector("X1", 0.7, 0.16, 100.0, 1.23, 2.80, arm_length_m=1e-6)
-    common = {**SKY, "earth_rotation": earth_rotation, "tapered": True}
-    finite = project_polarizations_to_network(_polarizations(300.0), [detector], **common, finite_arm_length=True)
-    vertex = project_polarizations_to_network(_polarizations(300.0), [detector], **common)
+    common = {**SKY, "tapered": True}
+    finite = project_polarizations_to_network(
+        _polarizations(300.0), [detector], **common, effects=_arms(earth_rotation=earth_rotation)
+    )
+    vertex = project_polarizations_to_network(
+        _polarizations(300.0),
+        [detector],
+        **common,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
+    )
     peak = np.max(np.abs(vertex["X1"].data))
     assert np.max(np.abs(finite["X1"].data - vertex["X1"].data)) / peak < 1e-10
 
 
-def test_the_option_is_off_by_default():
-    """The default is the long-wavelength response, unchanged."""
+def test_the_defaults_include_every_effect():
+    """Every effect is on unless turned off, and leaving ``effects`` out means exactly that."""
+    assert all(getattr(ProjectionEffects(), field.name) for field in dataclasses.fields(ProjectionEffects))
     detectors = _triangle()
     default = project_polarizations_to_network(_polarizations(300.0), detectors, **SKY, tapered=True)
     explicit = project_polarizations_to_network(
-        _polarizations(300.0), detectors, **SKY, tapered=True, finite_arm_length=False
+        _polarizations(300.0), detectors, **SKY, tapered=True, effects=ProjectionEffects()
     )
     for detector in detectors:
         np.testing.assert_array_equal(default[detector.name].data, explicit[detector.name].data)
@@ -317,48 +339,53 @@ def test_the_option_is_off_by_default():
 # --------------------------------------------------------------------------------------------------
 
 
-def test_the_device_backend_refuses_finite_arms():
-    """The device projection has no finite-arm response, so it refuses the option."""
-    with pytest.raises(ValueError, match="backend='numpy'"):
-        project_polarizations_to_network(_polarizations(100.0), ["E1"], **SKY, backend="jax", finite_arm_length=True)
+@pytest.mark.parametrize("tapered", [True, False])
+def test_the_device_backend_agrees_with_the_host_with_every_effect(tapered):
+    """The device kernel includes every effect, and agrees with the host to the float64 floor of a 500 s delay."""
+    jax = pytest.importorskip("jax")
+    jax.config.update("jax_enable_x64", True)
+    detectors = _triangle()
+    common = {**SKY, "tapered": tapered, "effects": ProjectionEffects(earth_rotation=True)}
+    host = project_polarizations_to_network(_polarizations(300.0), detectors, **common)
+    device = project_polarizations_to_network(_polarizations(300.0), detectors, **common, backend="jax")
+    for detector in detectors:
+        peak = np.max(np.abs(host[detector.name].data))
+        assert np.max(np.abs(host[detector.name].data - device[detector.name].data)) / peak < 1e-9
 
 
 @pytest.mark.parametrize("detector", ["A1", CustomDetector("X1", 0.7, 0.16, 100.0, 1.23, 2.80)])
 def test_a_detector_without_an_arm_length_is_refused(detector):
     """A bar, or a custom detector given no arm length, cannot have a finite-arm response."""
     with pytest.raises(ValueError, match="arm length"):
-        project_polarizations_to_network(_polarizations(100.0), [detector], **SKY, finite_arm_length=True)
+        project_polarizations_to_network(_polarizations(100.0), [detector], **SKY)
 
 
 def test_a_midpoint_beyond_the_padding_is_refused():
-    """A midpoint delay past the padding is refused on both branches, and one at its edge is read exactly.
+    """A midpoint delay past the padding is refused, and one at its edge is accepted.
 
-    The padding covers the largest vertex delay and one sample more. At that limit the delay is a whole
-    number of samples, so the resampled arm is the series shifted by it, not a partly zeroed copy.
+    The padding covers the largest vertex delay and one sample more; the projection reads an accepted
+    delay whole, since the resampling kernel at a whole-sample shift is the sample itself.
     """
-    from gwmock_signal.projection.network import _finite_arm_constant, _finite_arm_rotating, _kernel_input
+    from gwmock_signal.projection.network import _require_midpoint_within_padding
     from gwmock_signal.projection.resampling import EARTH_RADIUS_M
 
-    pad = edge_padding(FS)
-    series = np.random.default_rng(3).standard_normal(512)
-    kernel_input = _kernel_input(series, np.zeros(512), pad, tapered=False)
-    padded = kernel_input[2]
     shift = math.ceil(EARTH_RADIUS_M / C * FS) + 1
-    kernel = {"sinc_taps": DEFAULT_SINC_TAPS, "kaiser_beta": DEFAULT_KAISER_BETA}
-    ones, rows = np.ones(512), np.arange(512)
     for sign in (1.0, -1.0):
-        arm = _finite_arm_rotating(kernel_input, ones, ones, np.full(512, sign * shift / FS), FS, **kernel)
-        np.testing.assert_array_equal(arm, padded[pad + rows - int(sign) * shift])
+        _require_midpoint_within_padding(np.full(8, sign * shift / FS), FS)
+        with pytest.raises(ValueError, match="edge padding"):
+            _require_midpoint_within_padding(np.full(8, sign * 1.001 * shift / FS), FS)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+def test_an_arm_beyond_the_padding_is_refused_by_every_backend(backend):
+    """An arm long enough to put its midpoint past the padding is refused on the device as on the host.
+
+    The bound is the midpoint's distance from the geocentre, and a level arm raises it slowly: the spare
+    sample of padding at 4096 Hz takes an arm of about 2700 km.
+    """
+    if backend == "jax":
+        jax = pytest.importorskip("jax")
+        jax.config.update("jax_enable_x64", True)
+    detector = CustomDetector("X1", 0.7, 0.16, 100.0, 1.23, 2.80, arm_length_m=3_000_000.0)
     with pytest.raises(ValueError, match="edge padding"):
-        _finite_arm_rotating(kernel_input, ones, ones, np.full(512, -1.001 * shift / FS), FS, **kernel)
-    spectra = (np.fft.rfft(series), np.fft.rfft(series), 512)
-    with pytest.raises(ValueError, match="edge padding"):
-        _finite_arm_constant(
-            spectra,
-            f_plus=1.0,
-            f_cross=0.0,
-            midpoint_delay=1.001 * shift / FS,
-            alignment=0.0,
-            length=10_000.0,
-            sample_rate=FS,
-        )
+        project_polarizations_to_network(_polarizations(100.0), [detector], **SKY, effects=_arms(), backend=backend)

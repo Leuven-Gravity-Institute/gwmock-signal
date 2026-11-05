@@ -32,6 +32,7 @@ rules, and method contracts** are documented only under
 import numpy as np
 
 from gwmock_signal import DetectorStrainStack
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.waveform import WaveformFactory
 from gwmock_signal.projection import project_polarizations_to_network
 
@@ -58,7 +59,7 @@ strains = project_polarizations_to_network(
     right_ascension=1.1,
     declination=-0.2,
     polarization_angle=0.4,
-    earth_rotation=False,
+    effects=ProjectionEffects(earth_rotation=False),
 )
 
 stack = DetectorStrainStack.from_mapping(names, strains)

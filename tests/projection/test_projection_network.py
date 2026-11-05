@@ -15,6 +15,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
         raise
     TimeSeries = None
 
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import (
     _CONSTANT_PATTERN_ERROR_PER_SECOND,
     _CONSTANT_PATTERN_SATURATION,
@@ -186,8 +187,8 @@ def test_unknown_detector_name():
 
 
 @pytest.mark.requires_gwpy
-@patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0))
-@patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal", return_value=0.0)
+@patch("gwmock_signal.projection.network.antenna_pattern", return_value=(1.0, 0.0))
+@patch("gwmock_signal.projection.network.time_delay_from_geocenter", return_value=0.0)
 def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
     """Each built-in detector name resolves through the LAL detector path."""
     t0 = 0.0
@@ -207,7 +208,7 @@ def test_delegates_to_lal(mock_time_delay, mock_antenna_pattern):
             right_ascension=0.1,
             declination=0.2,
             polarization_angle=0.3,
-            earth_rotation=False,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         )
     assert set(out) == set(names)
     assert mock_time_delay.call_count == len(names)
@@ -253,7 +254,7 @@ def test_matches_pycbc_reference_on_gw150914_like_case() -> None:
     projected = project_polarizations_to_network(
         {"plus": hp, "cross": hc},
         detector_names,
-        earth_rotation=False,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         **kwargs,
     )
     pad = edge_padding(fs)
@@ -280,8 +281,8 @@ def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
     hp = TimeSeries(signal, t0=0.0, sample_rate=fs)
     hc = TimeSeries(np.zeros(n), t0=0.0, sample_rate=fs)
     with (
-        patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal", return_value=3e-3),
-        patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0)),
+        patch("gwmock_signal.projection.network.time_delay_from_geocenter", return_value=3e-3),
+        patch("gwmock_signal.projection.network.antenna_pattern", return_value=(1.0, 0.0)),
     ):
         out = project_polarizations_to_network(
             {"plus": hp, "cross": hc},
@@ -289,7 +290,7 @@ def test_fd_shift_earth_rotation_false_rms_amplitude_retention() -> None:
             right_ascension=0.0,
             declination=0.0,
             polarization_angle=0.0,
-            earth_rotation=False,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         )
     # Summed rather than averaged: the output is padded at both ends, so a mean over it would be
     # diluted by the padding rather than measuring what the shift retained.
@@ -309,8 +310,8 @@ def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
     hc = TimeSeries(np.zeros(n), t0=0.0, sample_rate=fs)
     delay = 3e-3
     with (
-        patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal", return_value=delay),
-        patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0)),
+        patch("gwmock_signal.projection.network.time_delay_from_geocenter", return_value=delay),
+        patch("gwmock_signal.projection.network.antenna_pattern", return_value=(1.0, 0.0)),
     ):
         out = project_polarizations_to_network(
             {"plus": hp, "cross": hc},
@@ -318,7 +319,7 @@ def test_fd_shift_earth_rotation_false_matches_direct_fd_reference() -> None:
             right_ascension=0.0,
             declination=0.0,
             polarization_angle=0.0,
-            earth_rotation=False,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         )
     # The projection shifts the zero-padded series, so the reference does too.
     pad = edge_padding(fs)
@@ -338,8 +339,8 @@ def test_fd_shift_earth_rotation_false_no_circular_wrap_leakage() -> None:
     hp = TimeSeries(sig, t0=0.0, sample_rate=fs)
     hc = TimeSeries(np.zeros(n), t0=0.0, sample_rate=fs)
     with (
-        patch("gwmock_signal.projection.network._time_delay_from_earth_center_lal", return_value=3e-3),
-        patch("gwmock_signal.projection.network._antenna_pattern_lal", return_value=(1.0, 0.0)),
+        patch("gwmock_signal.projection.network.time_delay_from_geocenter", return_value=3e-3),
+        patch("gwmock_signal.projection.network.antenna_pattern", return_value=(1.0, 0.0)),
     ):
         out = project_polarizations_to_network(
             {"plus": hp, "cross": hc},
@@ -347,7 +348,7 @@ def test_fd_shift_earth_rotation_false_no_circular_wrap_leakage() -> None:
             right_ascension=0.0,
             declination=0.0,
             polarization_angle=0.0,
-            earth_rotation=False,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         )
     vals = out["H1"].value
     edge_rms = float(np.sqrt(np.mean(np.concatenate([vals[:5], vals[-5:]]) ** 2)))
@@ -385,7 +386,7 @@ class TestConstantPatternDurationWarning:
             right_ascension=1.1,
             declination=0.3,
             polarization_angle=0.2,
-            earth_rotation=earth_rotation,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
         )
 
     @pytest.mark.requires_gwpy
@@ -459,7 +460,7 @@ class TestConstantPatternDurationWarning:
                 right_ascension=1.1,
                 declination=0.3,
                 polarization_angle=0.2,
-                earth_rotation=False,
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
             )
 
         assert "earth_rotation=False" in caplog.text
@@ -513,7 +514,11 @@ class TestTheBackendArgumentValidation:
         """Serving it from the host would report a backend that did not run."""
         with pytest.raises(ValueError, match="backend='jax' is only available with earth_rotation=True"):
             project_polarizations_to_network(
-                _flat_polarizations(1.0), ["H1"], earth_rotation=False, backend="jax", **_SKY
+                _flat_polarizations(1.0),
+                ["H1"],
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
+                backend="jax",
+                **_SKY,
             )
 
 
@@ -550,8 +555,16 @@ class TestTheDeviceBackend:
         polarizations = self._polarizations(64.0)
         detectors = ["H1", "L1"]
 
-        host = project_polarizations_to_network(polarizations, detectors, earth_rotation=True, **_SKY)
-        device = project_polarizations_to_network(polarizations, detectors, earth_rotation=True, backend="jax", **_SKY)
+        host = project_polarizations_to_network(
+            polarizations, detectors, effects=ProjectionEffects.long_wavelength(earth_rotation=True), **_SKY
+        )
+        device = project_polarizations_to_network(
+            polarizations,
+            detectors,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **_SKY,
+        )
 
         for name in detectors:
             peak = float(np.max(np.abs(host[name].value)))
@@ -570,8 +583,12 @@ class TestTheDeviceBackend:
         """
         polarizations = self._polarizations(duration, sampling_frequency)
 
-        host = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, **_SKY)
-        device = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, backend="jax", **_SKY)
+        host = project_polarizations_to_network(
+            polarizations, ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), **_SKY
+        )
+        device = project_polarizations_to_network(
+            polarizations, ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), backend="jax", **_SKY
+        )
 
         peak = float(np.max(np.abs(host["H1"].value)))
         assert peak > 0.0
@@ -584,9 +601,16 @@ class TestTheDeviceBackend:
         polarizations = self._polarizations(16.0)
         kernel = {"sinc_taps": 63, "kaiser_beta": 8.0}
 
-        host = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, **kernel, **_SKY)
+        host = project_polarizations_to_network(
+            polarizations, ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), **kernel, **_SKY
+        )
         device = project_polarizations_to_network(
-            polarizations, ["H1"], earth_rotation=True, backend="jax", **kernel, **_SKY
+            polarizations,
+            ["H1"],
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **kernel,
+            **_SKY,
         )
 
         peak = float(np.max(np.abs(host["H1"].value)))
@@ -598,9 +622,9 @@ class TestTheDeviceBackend:
         """A device path returning bare arrays could lose the time coordinate silently."""
         polarizations = self._polarizations(8.0)
 
-        device = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, backend="jax", **_SKY)[
-            "H1"
-        ]
+        device = project_polarizations_to_network(
+            polarizations, ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), backend="jax", **_SKY
+        )["H1"]
 
         pad = edge_padding(512.0)
         assert device.t0 == 1.4e9 - pad / 512.0
@@ -620,7 +644,11 @@ class TestTheDeviceBackend:
         with patch.object(network, "_project_rotating_on_device") as device:
             device.return_value = {}
             network.project_polarizations_to_network(
-                self._polarizations(4.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+                self._polarizations(4.0),
+                ["H1"],
+                effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+                backend="jax",
+                **_SKY,
             )
 
         device.assert_called_once()
@@ -639,7 +667,11 @@ class TestTheDeviceBackend:
 
         with patch.object(network, "_gmst_accurate_array", side_effect=AssertionError("host GMST ran")) as gmst:
             network.project_polarizations_to_network(
-                self._polarizations(4.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+                self._polarizations(4.0),
+                ["H1"],
+                effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+                backend="jax",
+                **_SKY,
             )
 
         gmst.assert_not_called()
@@ -658,7 +690,11 @@ class TestTheDeviceBackend:
 
         network._compiled_rotating_projection.cache_clear()
         network.project_polarizations_to_network(
-            self._polarizations(4.0), ["H1", "L1", "V1"], earth_rotation=True, backend="jax", **_SKY
+            self._polarizations(4.0),
+            ["H1", "L1", "V1"],
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **_SKY,
         )
         after_first = network._compiled_rotating_projection.cache_info()
         assert after_first.currsize == 1, (
@@ -667,12 +703,20 @@ class TestTheDeviceBackend:
         )
 
         network.project_polarizations_to_network(
-            self._polarizations(4.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+            self._polarizations(4.0),
+            ["H1"],
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **_SKY,
         )
         assert network._compiled_rotating_projection.cache_info().hits > after_first.hits
 
         network.project_polarizations_to_network(
-            self._polarizations(8.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+            self._polarizations(8.0),
+            ["H1"],
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **_SKY,
         )
         assert network._compiled_rotating_projection.cache_info().currsize == 2, (
             "a different segment length must compile its own kernel"
@@ -699,7 +743,9 @@ class TestTheDeviceBackend:
         # could run without touching the patched symbol, hiding a mutated default.
         network._compiled_rotating_projection.cache_clear()
         with patch.object(network, "_project_rotating_on_device") as device:
-            network.project_polarizations_to_network(self._polarizations(4.0), ["H1"], earth_rotation=True, **_SKY)
+            network.project_polarizations_to_network(
+                self._polarizations(4.0), ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), **_SKY
+            )
 
         device.assert_not_called()
 
@@ -715,7 +761,11 @@ class TestTheDeviceBackend:
         """
         with pytest.raises(ValueError, match="accepts spans up to"):
             project_polarizations_to_network(
-                self._polarizations(90000.0, 1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+                self._polarizations(90000.0, 1.0),
+                ["H1"],
+                effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+                backend="jax",
+                **_SKY,
             )
 
     @pytest.mark.requires_gwpy
@@ -728,7 +778,11 @@ class TestTheDeviceBackend:
         test failure.
         """
         result = project_polarizations_to_network(
-            self._polarizations(80000.0, 1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+            self._polarizations(80000.0, 1.0),
+            ["H1"],
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            backend="jax",
+            **_SKY,
         )
 
         assert np.all(np.isfinite(result["H1"].value))
@@ -747,7 +801,11 @@ class TestTheDeviceBackend:
 
         with pytest.raises(RuntimeError, match="requires JAX in 64-bit mode"):
             project_polarizations_to_network(
-                self._polarizations(1.0), ["H1"], earth_rotation=True, backend="jax", **_SKY
+                self._polarizations(1.0),
+                ["H1"],
+                effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+                backend="jax",
+                **_SKY,
             )
 
     @pytest.mark.requires_gwpy
@@ -766,7 +824,9 @@ class TestTheDeviceBackend:
         from gwmock_signal.projection.sidereal import gmst_anchor_and_rate
 
         polarizations = self._polarizations(256.0)
-        reference = project_polarizations_to_network(polarizations, ["H1"], earth_rotation=True, **_SKY)["H1"]
+        reference = project_polarizations_to_network(
+            polarizations, ["H1"], effects=ProjectionEffects.long_wavelength(earth_rotation=True), **_SKY
+        )["H1"]
         plus = np.asarray(polarizations["plus"].value)
         cross = np.asarray(polarizations["cross"].value)
         response, location = reconstructed_geometry("H1")
@@ -816,7 +876,7 @@ def test_native_polarizations_give_the_same_strain_as_gwpy(earth_rotation: bool)
         "right_ascension": 1.1,
         "declination": -0.3,
         "polarization_angle": 0.4,
-        "earth_rotation": earth_rotation,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
     }
 
     native = project_polarizations_to_network({"plus": plus, "cross": cross}, ["H1", "V1"], **kwargs)
@@ -856,7 +916,7 @@ def test_a_detector_beyond_the_padding_bound_is_refused_on_both_branches(earth_r
             right_ascension=0.1,
             declination=0.2,
             polarization_angle=0.3,
-            earth_rotation=earth_rotation,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
         )
 
 
@@ -884,7 +944,7 @@ def test_the_rotating_projection_passes_whole_samples_and_the_delay_apart(monkey
         right_ascension=1.1,
         declination=-0.3,
         polarization_angle=0.4,
-        earth_rotation=True,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
     )
     assert len(seen) == 2
     for dtype, fraction in seen:

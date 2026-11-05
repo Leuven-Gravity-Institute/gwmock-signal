@@ -44,8 +44,9 @@ needs neither `lalsuite` nor a LAL prefix. Three optional parameters remain:
   1e7 of the strain.
 - `prefix` — the two-character prefix used by `to_lal()` to register the
   detector with LAL; see [below](#lal-registration).
-- `arm_length_m` — the length of each arm in metres. Only the finite-arm
-  response uses it, and refuses a detector without one; see
+- `arm_length_m` — the length of each arm in metres. The finite-arm response, on
+  by default, needs it and refuses a detector without one; pass it, or turn
+  `finite_arm_length` off in `ProjectionEffects`. See
   [Finite-arm response](detector-projection.md#finite-arm-response).
 
 !!! tip "Degrees vs. radians" The `CustomDetector` constructor uses radians.
@@ -98,6 +99,7 @@ cd1 = CustomDetector(
     elevation_m=50.0,
     xarm_azimuth_rad=math.radians(70.0),
     yarm_azimuth_rad=math.radians(130.0),
+    arm_length_m=10_000.0,
 )
 cd2 = CustomDetector(
     name="CUST_B",
@@ -106,6 +108,7 @@ cd2 = CustomDetector(
     elevation_m=55.0,
     xarm_azimuth_rad=math.radians(190.0),
     yarm_azimuth_rad=math.radians(250.0),
+    arm_length_m=10_000.0,
 )
 
 # Build a network from custom detectors
@@ -156,12 +159,13 @@ cust = CustomDetector(
     elevation_m=100.0,
     xarm_azimuth_rad=1.23,
     yarm_azimuth_rad=2.28,
+    arm_length_m=10_000.0,
 )
 
 # Mix: built-in H1 and L1 plus a custom ET1
 net = Network.from_detectors(["H1", "L1", cust], name="HL + ET")
 print(net.detector_names)
-# ('H1', 'L1', CustomDetector(name='ET1', latitude_rad=0.7, longitude_rad=0.16, elevation_m=100.0, xarm_azimuth_rad=1.23, yarm_azimuth_rad=2.28, xarm_tilt_rad=0.0, yarm_tilt_rad=0.0, prefix='', precision='double', arm_length_m=None))
+# ('H1', 'L1', CustomDetector(name='ET1', latitude_rad=0.7, longitude_rad=0.16, elevation_m=100.0, xarm_azimuth_rad=1.23, yarm_azimuth_rad=2.28, xarm_tilt_rad=0.0, yarm_tilt_rad=0.0, prefix='', precision='double', arm_length_m=10000.0))
 ```
 
 When a `Network` contains `CustomDetector` instances, the projection layer

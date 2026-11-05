@@ -11,6 +11,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 from gwmock_signal.jax_batch import BatchedDetectorStrain, simulate_cbc_batch  # noqa: E402
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.waveform.backends import RippleBackend  # noqa: E402
 
 _FS = 2048.0
@@ -109,7 +110,7 @@ def test_simulate_cbc_batch_matches_host_pipeline() -> None:
                 right_ascension=float(_CATALOGUE["right_ascension"][i]),
                 declination=float(_CATALOGUE["declination"][i]),
                 polarization_angle=float(_CATALOGUE["polarization_angle"][i]),
-                earth_rotation=False,
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
             )[detector]
             # Both are padded at each end against the geocentre delay, by the same amount.
             assert host.t0 == pytest.approx(float(_CATALOGUE["coa_time"][i]) + result.epoch, rel=0, abs=1e-6)
@@ -146,6 +147,8 @@ def test_simulate_cbc_catalogue_tiles_span_and_places_signals() -> None:
         start_time=start_time,
         end_time=end_time,
         backend=RippleBackend(segment_duration=8.0),  # 8 s generation buffer
+        # GPS 100 lies before the solar-system tables (2000 to 2040).
+        effects=ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False),
     )
 
     assert len(segments) == 6  # ceil((160 - 64) / 16)
@@ -172,6 +175,8 @@ _WIDE_MASS_CATALOGUE = {
     "polarization_angle": np.array([2.659, 0.0, 1.0, 0.5]),
     "coa_time": np.array([200.0, 260.0, 320.0, 380.0]),
 }
+# The catalogue above sits at GPS 200 to 380 s, before the solar-system tables (2000 to 2040).
+_BEFORE_THE_TABLES = ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False)
 
 
 @pytest.mark.integration
@@ -183,6 +188,7 @@ def test_simulate_cbc_catalogue_binning_agrees_with_single_grid() -> None:
         "sampling_frequency": 2048.0,
         "minimum_frequency": 30.0,
         "parameters": _WIDE_MASS_CATALOGUE,
+        "effects": _BEFORE_THE_TABLES,
         "segment_duration": 64.0,
         "start_time": 0.0,
         "end_time": 512.0,
@@ -235,8 +241,145 @@ def test_simulate_cbc_catalogue_more_bins_than_events() -> None:
         end_time=512.0,
         n_chirp_mass_bins=5,  # > 2 events
         backend=RippleBackend(segment_duration=8.0),
+        effects=_BEFORE_THE_TABLES,
     )
     assert len(segments) == 8
+
+
+def _refuse_generation(*args, **kwargs):
+    raise AssertionError("a waveform was generated")
+
+
+def test_an_event_outside_the_ephemeris_is_refused_before_generation(monkeypatch) -> None:
+    """A batch with an event past the tables' end is refused before any waveform is generated."""
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", _refuse_generation)
+    catalogue = {**_CATALOGUE, "coa_time": np.array([1.1262594624e9, 1.1262594640e9, 1.95e9])}
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        simulate_cbc_batch(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters=catalogue,
+            backend=RippleBackend(segment_duration=8.0),
+        )
+
+
+class _GeneratedError(Exception):
+    """Raised in place of generation: the event got past the ephemeris check."""
+
+
+def _table_edge_event(edge: str, shift: float, backend: RippleBackend) -> float:
+    """Return a ``coa_time`` whose delay model ends (or starts) a quarter sample inside the tables.
+
+    A table accepts a time while its nearest entry is in the table: from ``gps0 - spacing / 2`` to
+    ``gps0 + (N - 1/2) spacing``. The model covers the padded buffer, ``shift`` samples earlier on a grid,
+    and 0.1 s more at each end.
+    """
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.projection.solar_system import SolarSystemEphemeris
+
+    n_samples, dt, padding = round(8.0 * _FS), 1.0 / _FS, edge_padding(_FS)
+    _, waveform_epoch = backend.coalescence_placement(n_samples, _FS)
+    tables = SolarSystemEphemeris().tables()
+    model_start = waveform_epoch - (shift + padding) * dt - 0.1  # relative to coa_time
+    if edge == "end":
+        last = min(table.gps0 + (len(table.position) - 0.5) * table.spacing for table in tables)
+        return last - (model_start + (n_samples + 2 * padding - 1) * dt + 0.2) - 0.25 * dt
+    first = max(table.gps0 - 0.5 * table.spacing for table in tables)
+    return first - model_start + 0.25 * dt
+
+
+@pytest.mark.parametrize("aligned", [False, True], ids=["unaligned", "aligned"])
+@pytest.mark.parametrize("edge", ["start", "end"])
+def test_an_event_just_inside_the_tables_reaches_generation(monkeypatch, edge: str, aligned: bool) -> None:
+    """The check refuses exactly the events the delay models would: a quarter sample inside the tables passes.
+
+    The event's model starts or ends a quarter sample inside the tables' range, and on a grid its buffer is
+    aligned half a sample earlier; one sample further out it is refused.
+    """
+    from gwmock_signal.sampling_grid import SamplingGrid
+
+    def generated(*args, **kwargs):
+        raise _GeneratedError
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", generated)
+    backend = RippleBackend(segment_duration=8.0)
+    shift, dt = (0.5 if aligned else 0.0), 1.0 / _FS
+    coa_time = _table_edge_event(edge, shift, backend)
+    _, waveform_epoch = backend.coalescence_placement(round(8.0 * _FS), _FS)
+    grid = SamplingGrid(epoch=coa_time + waveform_epoch - shift * dt, sampling_frequency=_FS) if aligned else None
+
+    def run(coa: float) -> None:
+        simulate_cbc_batch(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters={key: value[:1] for key, value in {**_CATALOGUE, "coa_time": np.array([coa])}.items()},
+            backend=backend,
+            output_grid=grid,
+        )
+
+    with pytest.raises(_GeneratedError):
+        run(coa_time)
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        run(coa_time + (dt if edge == "end" else -dt))
+
+
+def test_a_catalogue_checks_an_aligned_event_at_the_tables_start_as_its_model_will(monkeypatch) -> None:
+    """The catalogue's check aligns each event to the catalogue's grid, as its batches will."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    def generated(*args, **kwargs):
+        raise _GeneratedError
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", generated)
+    backend = RippleBackend(segment_duration=8.0)
+    dt = 1.0 / _FS
+    coa_time = _table_edge_event("start", 0.5, backend)
+    _, waveform_epoch = backend.coalescence_placement(round(8.0 * _FS), _FS)
+
+    def run(coa: float) -> None:
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=_FS,
+            minimum_frequency=_F_MIN,
+            parameters={key: value[:1] for key, value in {**_CATALOGUE, "coa_time": np.array([coa])}.items()},
+            # The catalogue's grid starts at start_time, half a sample before the buffer's unaligned start.
+            segment_duration=64.0,
+            start_time=coa_time + waveform_epoch - 0.5 * dt,
+            end_time=coa_time + waveform_epoch - 0.5 * dt + 64.0,
+            backend=backend,
+        )
+
+    with pytest.raises(_GeneratedError):
+        run(coa_time)
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        run(coa_time - dt)
+
+
+def test_a_catalogue_checks_every_bin_against_the_ephemeris_before_generating(monkeypatch) -> None:
+    """The heaviest bin runs last, so its event outside the tables is refused before the lighter bins run."""
+    from gwmock_signal.jax_batch import simulate_cbc_catalogue
+
+    monkeypatch.setattr(RippleBackend, "generate_fd_polarizations_batch", _refuse_generation)
+    start = 1.1262594e9
+    # Event 0 has the largest chirp mass, so it lands in the last of the two bins.
+    catalogue = {**_WIDE_MASS_CATALOGUE, "coa_time": start + np.array([1.95e9 - start, 260.0, 320.0, 380.0])}
+    with pytest.raises(ValueError, match="outside the ephemeris"):
+        simulate_cbc_catalogue(
+            "IMRPhenomD",
+            _DETECTORS,
+            sampling_frequency=2048.0,
+            minimum_frequency=30.0,
+            parameters=catalogue,
+            segment_duration=64.0,
+            start_time=start,
+            end_time=start + 512.0,
+            n_chirp_mass_bins=2,
+        )
 
 
 @pytest.mark.integration
@@ -260,6 +403,7 @@ def test_simulate_cbc_catalogue_chunking_does_not_change_the_model() -> None:
         "sampling_frequency": 2048.0,
         "minimum_frequency": 30.0,
         "parameters": _WIDE_MASS_CATALOGUE,
+        "effects": _BEFORE_THE_TABLES,
         "segment_duration": 64.0,
         "start_time": 0.0,
         "end_time": 512.0,
@@ -296,7 +440,7 @@ _EQUIVALENCE_CATALOGUE = {
 }
 
 
-def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None):
+def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None, effects=None):
     """Yield ``(event, detector_index, name, expected)`` from the per-event host projection.
 
     Rebuilds the same time-domain polarizations the device path projects -- one shared frequency
@@ -336,13 +480,14 @@ def _host_reference(*, earth_rotation: bool, backend=None, catalogue=None):
             right_ascension=float(catalogue["right_ascension"][event]),
             declination=float(catalogue["declination"][event]),
             polarization_angle=float(catalogue["polarization_angle"][event]),
-            earth_rotation=earth_rotation,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation) if effects is None else effects,
+            reference_time=float(catalogue["coa_time"][event]),
         )
         for index, name in enumerate(_EQUIVALENCE_DETECTORS):
             yield event, index, name, reference[name]
 
 
-def _batched(*, earth_rotation: bool, backend=None, catalogue=None):
+def _batched(*, earth_rotation: bool, backend=None, catalogue=None, effects=None):
     """Return the batched device result for the shared catalogue."""
     from gwmock_signal.jax_batch import simulate_cbc_batch
 
@@ -352,7 +497,7 @@ def _batched(*, earth_rotation: bool, backend=None, catalogue=None):
         sampling_frequency=_EQUIVALENCE_FS,
         minimum_frequency=_EQUIVALENCE_F_MIN,
         parameters=_EQUIVALENCE_CATALOGUE if catalogue is None else catalogue,
-        earth_rotation=earth_rotation,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation) if effects is None else effects,
         backend=backend,
     )
 
@@ -433,6 +578,28 @@ def test_simulate_cbc_batch_static_pattern_matches_numpy_path():
         assert np.asarray(batch.strain).shape[-1] == expected.n_samples
 
 
+@pytest.mark.requires_gwpy
+@pytest.mark.parametrize("earth_rotation", [True, False])
+def test_simulate_cbc_batch_matches_the_host_with_every_effect(earth_rotation):
+    """With every effect on, the batched device path is the host projection, event by event.
+
+    Finite arms, precession and the three solar-system delays, absorbed at each event's ``coa_time`` on
+    both paths. The rotating branch's difference is the float64 floor of a 500 s solar-system delay,
+    about 1e-13 s; the static branch evaluates the same delay at one time on both.
+    """
+    pytest.importorskip("jax", reason="jax not installed")
+    pytest.importorskip("ripplegw", reason="ripple not installed")
+
+    effects = ProjectionEffects(earth_rotation=earth_rotation)
+    batch = _batched(earth_rotation=earth_rotation, effects=effects)
+
+    for event, index, name, expected in _host_reference(earth_rotation=earth_rotation, effects=effects):
+        scale = np.max(np.abs(expected.value))
+        assert scale > 0.0, f"event {event} {name} has a null response"
+        difference = np.abs(_placed_on(expected, batch, event, index) - expected.value)
+        assert np.max(difference) < 1e-9 * scale, f"event {event} {name}: {np.max(difference) / scale:.1e}"
+
+
 #: Two sky positions on opposite sides of the Earth from the Einstein Telescope site, so the
 #: geocentre delay moves the signal later at one and earlier at the other.
 _ANTIPODAL_CATALOGUE = {
@@ -465,8 +632,18 @@ def test_simulate_cbc_batch_keeps_signal_the_delay_moves_past_an_end(earth_rotat
     # an inspiral occupying a sliver of it. The merger is then two samples from the chosen end.
     ringdown_fraction = 0.0001 if merger_at == "end" else 0.9999
     backend = RippleBackend(segment_duration=4.0, ringdown_fraction=ringdown_fraction)
-    batch = _batched(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE)
-    reference = list(_host_reference(earth_rotation=earth_rotation, backend=backend, catalogue=_ANTIPODAL_CATALOGUE))
+    batch = _batched(
+        earth_rotation=earth_rotation,
+        backend=backend,
+        catalogue=_ANTIPODAL_CATALOGUE,
+    )
+    reference = list(
+        _host_reference(
+            earth_rotation=earth_rotation,
+            backend=backend,
+            catalogue=_ANTIPODAL_CATALOGUE,
+        )
+    )
 
     padding = edge_padding(_EQUIVALENCE_FS)
     beyond = slice(-padding, None) if merger_at == "end" else slice(0, padding)

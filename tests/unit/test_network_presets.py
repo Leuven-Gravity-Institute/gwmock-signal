@@ -22,6 +22,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
 
 from gwmock_signal.detector import CustomDetector
 from gwmock_signal.network import Network
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import project_polarizations_to_network
 
 _PRESET_NAMES = {
@@ -144,7 +145,8 @@ def test_triangle_sardinia_projection_matches_reference_geometry() -> None:
         "right_ascension": 1.375,
         "declination": -1.211,
         "polarization_angle": 0.0,
-        "earth_rotation": False,
+        # The reference geometry carries no arm lengths, and the comparison is of geometry alone.
+        "effects": ProjectionEffects.long_wavelength(),
     }
 
     projected = project_polarizations_to_network({"plus": hp, "cross": hc}, preset.detector_names, **kwargs)

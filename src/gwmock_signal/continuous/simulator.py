@@ -21,50 +21,39 @@ segment boundary destroys the signal it is looking for.
 
 That constraint drives the design of this class:
 
-* **The reference epoch is fixed for the run, not derived per call.** Ripple's
-  ``ref_time_ssb`` defaults to the SSB time of the first sample it is given. Called once per
-  segment, that silently restarts the phase at every boundary. Measured with three ten-minute
-  segments, the default reproduces the first segment exactly and then diverges by of order the
-  signal amplitude itself; with the reference fixed, segmented and continuous generation agree
-  *bit for bit*. Because the failure is invisible -- each segment on its own is a perfectly good
+* **The reference epoch is fixed for the run, not derived per call.** A reference taken from the
+  SSB time of each segment's first sample, as ripple's generator defaults to, silently restarts
+  the phase at every boundary. Measured with three ten-minute segments, that reproduces the first
+  segment exactly and then diverges by of order the signal amplitude itself; with the reference
+  fixed, segmented and continuous generation agree to 1e-9 of peak. Because the failure is invisible -- each segment on its own is a perfectly good
   CW signal -- :class:`ContinuousWaveSimulator` requires ``reference_time_ssb`` rather than
   defaulting it.
-* **Polarizations are generated at the geocentre.** The detector delay and antenna pattern are
-  then applied by :func:`~gwmock_signal.projection.network.project_polarizations_to_network`, the
-  same route the compact-binary path uses. Generating per detector instead would mean applying
-  ripple's own detector delay *and* this package's, double-counting it -- and would leave two
-  implementations of the same geometry to drift apart.
-* **The ephemeris is an explicit input.** ``read_ephemeris_file`` will download a named LALPulsar
-  table and cache it, which makes the physics depend on a file nobody chose deliberately. Paths
-  are required here so a run records what it used.
+* **Polarizations are generated in SSB time, and every delay is applied by the projection.** The
+  isolated-pulsar phase is evaluated on an even grid of solar-system-barycentre times; the
+  projection maps each detector sample to its SSB time -- the site delay, then the solar-system
+  delay of :mod:`~gwmock_signal.projection.solar_system` -- through the same code every source
+  uses, with the same :class:`~gwmock_signal.projection.effects.ProjectionEffects`. One
+  implementation of each delay, so none can drift from another.
+* **The ephemeris is an explicit input.** A standard LALPulsar table name is downloaded and cached
+  when not found locally, which makes the physics depend on a file nobody chose deliberately.
+  Paths are required here so a run records what it used.
 
 .. note::
-   **The geocentre composition is validated against LAL; one residual is known.** Checked with
-   ``lalpulsar.Barycenter`` (DE405, alpha=1.1, delta=0.3, GPS 1577491218), whose ``EmissionTime``
-   separates the site term from the barycentric part:
-
-   * ``erot`` at the geocentre is exactly ``0``, so generating there gives the pure SSB-to-Earth-
-     centre delay and nothing of the detector's position leaks in.
-   * ``deltaT(H1) - deltaT(geocentre)`` equals LAL's own ``erot(H1)`` to 5.5e-15 s, confirming that
-     the site term is the *only* difference between the two -- which is exactly the split this
-     module relies on. Nothing is double-counted or dropped at the seam.
-
-   The residual: this package's geocentre-to-detector delay differs from LAL's ``erot`` by
-   **8.7e-07 s** worst case over detectors, sky positions and epochs. What remains is nutation, the
-   short-period part of a motion whose secular part
-   :func:`~gwmock_signal.projection.sidereal.precess_to_epoch` now applies and LAL applies in full.
-   The size fits: nutation's amplitude is ~17 arcseconds, which over an Earth radius is ~5e-07 s.
-
-   It was **1.8e-04 s** before that rotation existed, from combining plain GMST -- which measures
-   the Earth's rotation from the mean equinox *of date* -- with a J2000 source direction. Like the
-   residual it replaced, this applies to every source type, not only continuous waves, but matters
-   most here because a coherent search integrates for months. It is a near-constant timing offset,
-   so most of it is absorbed into the initial phase; the part that is not scales with frequency,
-   which at the current 8.7e-07 s reaches about 5e-03 rad at 1 kHz.
+   **Validated against LALPulsar; one residual is known.** The solar-system delay equals
+   ``lalpulsar.Barycenter``'s ``deltaT`` for a detector at the geocentre to 1e-13 s, and the projected
+   signal equals the pulsar phase evaluated at the site delay plus that ``deltaT`` to within the
+   resampling kernel's error. The residual is in the site term: this package's geocentre-to-detector
+   delay differs from LAL's ``erot`` by **8.7e-07 s** worst case over detectors, sky positions and
+   epochs. What remains is nutation, the short-period part of a motion whose secular part
+   :func:`~gwmock_signal.projection.sidereal.precess_to_epoch` applies and LAL applies in full. The
+   size fits: nutation's amplitude is ~17 arcseconds, which over an Earth radius is ~5e-07 s. It is a
+   near-constant timing offset, so most of it is absorbed into the initial phase; the part that is
+   not scales with frequency, reaching about 5e-03 rad at 1 kHz.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -72,8 +61,11 @@ import numpy as np
 
 from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import _project, validate_projection_backend
+from gwmock_signal.projection import solar_system
+from gwmock_signal.projection.effects import ProjectionEffects
+from gwmock_signal.projection.network import _project, _resolve_effects, validate_projection_backend
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.simulator import GWSimulator
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
@@ -134,8 +126,7 @@ class ContinuousWaveSimulator(GWSimulator):
             spindowns: Spindown terms ``f1, f2, ...`` in Hz/s, Hz/s^2, ...
             projection_backend: Which projection implementation to use, ``"jax"`` (the default)
                 or ``"numpy"``. The device path is the default because the projection is ~99% of
-                a segment's cost here and this class already requires ripple, so JAX is present
-                either way. It is an argument rather than a constant because "JAX imports" and
+                a segment's cost here. It is an argument rather than a constant because "JAX imports" and
                 "JAX runs" are different claims: device memory can be exhausted, a driver can be
                 misconfigured, or a backend can have a defect, and in any of those the host path
                 still works and the caller needs to be able to reach it.
@@ -155,13 +146,8 @@ class ContinuousWaveSimulator(GWSimulator):
         """
         self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
         if projection_backend == "jax":
-            # Enabled here rather than relied upon. The device projection refuses to run without
-            # x64, and it has always happened to be on because importing ``ripplegw`` sets it --
-            # which this class does, for the polarizations. Depending on an unrelated package's
-            # import side effect for a correctness precondition is a latent break: if ripple
-            # stopped doing it, every default-configured call would raise instead of quietly
-            # degrading, but it would still be a needless failure. Idempotent, and the same value
-            # ripple sets, so nothing changes for callers who already have it on.
+            # Enabled here rather than relied upon: the device projection refuses to run without x64.
+            # Idempotent, so nothing changes for callers who already have it on.
             import jax  # noqa: PLC0415 — optional [jax] dep, and only needed for this backend
 
             jax.config.update("jax_enable_x64", True)
@@ -172,119 +158,81 @@ class ContinuousWaveSimulator(GWSimulator):
             raise ValueError(f"spindowns must all be finite, got {spindown_terms}.")
         self.earth_ephemeris = str(earth_ephemeris)
         self.sun_ephemeris = str(sun_ephemeris)
+        self.ephemeris = SolarSystemEphemeris(self.earth_ephemeris, self.sun_ephemeris)
         self.reference_time_ssb = float(reference_time_ssb)
         self.spindowns = spindown_terms
-        self._ephemeris_tables: tuple[Any, Any] | None = None
 
     @property
     def required_params(self) -> frozenset[str]:
         """Return the parameter keys a continuous-wave source must supply."""
         return _REQUIRED_PARAMETERS
 
-    def _load_ephemeris(self) -> tuple[Any, Any]:
-        """Return the (earth, sun) ephemeris tables, reading them at most once per instance."""
-        if self._ephemeris_tables is None:
-            from ripplegw.waveforms.cw.ephemeris import read_ephemeris_file  # noqa: PLC0415
-
-            self._ephemeris_tables = (
-                read_ephemeris_file(self.earth_ephemeris),
-                read_ephemeris_file(self.sun_ephemeris),
-            )
-        return self._ephemeris_tables
-
-    def _geocentre_polarizations(
+    def _ssb_polarizations(
         self,
         params: Mapping[str, Any],
         *,
-        epoch: float,
+        start_ssb: float,
         n_samples: int,
         sampling_frequency: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return plus and cross polarizations at the geocentre for one source.
+        """Return plus and cross polarizations on an even grid of SSB times from ``start_ssb``.
 
-        The epoch is split into an integer GPS second and a remainder folded into the sample
-        offsets, because ripple takes ``start_gps`` as an integer and the phase is accumulated
-        from ``dt_rel``. Rounding the fraction away would shift the whole segment; carrying it in
-        the offsets keeps the split exact.
+        The phase is ``phi0 + 2 pi sum_k f_k tau^(k+1) / (k+1)!`` with ``tau`` the SSB time since
+        :attr:`reference_time_ssb`, and the polarizations ``A+ cos(phase)`` and ``Ax sin(phase)``: the
+        isolated-pulsar model of LALPulsar's ``XLALGeneratePulsarSignal`` before its barycentring, which
+        projection now applies with every other source's (:mod:`~gwmock_signal.projection.solar_system`).
+
+        Raises:
+            RuntimeError: If the polarizations are not all finite, which an extreme spindown can cause
+                far from the reference epoch: its term grows as a power of the time from it.
         """
-        from ripplegw.waveforms.cw.PulsarSignal import (  # noqa: PLC0415
-            generate_pulsar_polarizations,
-        )
-
-        earth, sun = self._load_ephemeris()
-        start_gps = int(np.floor(epoch))
-        offset = epoch - start_gps
-        sample_times = offset + np.arange(n_samples, dtype=float) / sampling_frequency
-
-        plus, cross = generate_pulsar_polarizations(
-            dt_rel=sample_times,
-            start_gps=start_gps,
-            alpha=float(params["right_ascension"]),
-            delta=float(params["declination"]),
-            f0=float(params["frequency"]),
-            phi0=float(params["initial_phase"]),
-            aplus=float(params["amplitude_plus"]),
-            across=float(params["amplitude_cross"]),
-            # The geocentre. Ripple applies the barycentring delay for whatever location it is
-            # given; asking for the Earth centre leaves the geocentre-to-detector leg to the
-            # projection below, so that geometry lives in exactly one place.
-            det_location_m=(0.0, 0.0, 0.0),
-            earth_gps0=earth.gps0,
-            earth_dt=earth.dt,
-            earth_pos=earth.pos,
-            earth_vel=earth.vel,
-            earth_acc=earth.acc,
-            sun_gps0=sun.gps0,
-            sun_dt=sun.dt,
-            sun_pos=sun.pos,
-            sun_vel=sun.vel,
-            sun_acc=sun.acc,
-            fkdot=self.spindowns,
-            ref_time_ssb=self.reference_time_ssb,
-        )
-        plus_values = np.asarray(plus, dtype=float)
-        cross_values = np.asarray(cross, dtype=float)
-
-        # Refuse a non-finite signal rather than writing it. The motivating case is released
-        # ripplegw before 0.3.1, which could not generate at the geocentre -- `barycenter.py`
-        # computed the detector latitude as `arccos(lz / rd)`, which is 0/0 when the location is the
-        # Earth centre, exactly what this class asks for so the projection can own the
-        # geocentre-to-detector leg. Fixed in GW-JAX-Team/ripple#141, released in 0.3.1, and the
-        # `jax` extra now floors ripplegw there -- so this is no longer reachable without a
-        # deliberate downgrade.
-        #
-        # The check stays regardless. The floor closes one cause; the other has nothing to do with
-        # ripple and is still live -- an out-of-range spindown overflowing the phase. Reachable
-        # only when the reference epoch is also far from the data, because the term grows as the
-        # square of the time from it: measured, `f1 = 1e300` stays finite with the reference beside
-        # the data and produces NaN with it at GPS 0. Extreme, but demonstrable rather than
-        # asserted, and `_validate_source` does not bound magnitudes.
-        #
-        # The condition is the general one, not a test for that bug, so the message must not
-        # assert the cause. A finite but extreme spindown overflows the phase and produces NaN on
-        # a *fixed* ripple too -- `_validate_source` checks that inputs are finite, not that they
-        # are in range -- and telling that caller to go and install a fix they already have would
-        # send them the wrong way entirely.
-        #
-        # Scope: this covers the polarizations only. Anything the projection, the antenna pattern
-        # or the background introduces downstream is not checked here and nothing else checks it
-        # either.
-        if not np.all(np.isfinite(plus_values)) or not np.all(np.isfinite(cross_values)):
-            import ripplegw  # noqa: PLC0415
-
+        tau = (start_ssb - self.reference_time_ssb) + np.arange(n_samples, dtype=float) / sampling_frequency
+        coefficients = (float(params["frequency"]), *self.spindowns)
+        phase = np.zeros(n_samples)
+        power, factorial = np.ones(n_samples), 1.0
+        for order, coefficient in enumerate(coefficients, start=1):
+            power = power * tau
+            factorial *= order
+            phase = phase + coefficient * power / factorial
+        phase = float(params["initial_phase"]) + 2.0 * np.pi * phase
+        plus = float(params["amplitude_plus"]) * np.cos(phase)
+        cross = float(params["amplitude_cross"]) * np.sin(phase)
+        if not (np.all(np.isfinite(plus)) and np.all(np.isfinite(cross))):
             raise RuntimeError(
-                f"the continuous-wave polarizations are not all finite, so nothing was written. "
-                f"Two causes are worth checking, in order. First, the source parameters: "
-                f"`_validate_source` requires them finite but not bounded, so an extreme spindown "
-                f"or amplitude, combined with a reference epoch far from the data, can overflow "
-                f"the phase and yield NaN from a perfectly good library -- the spindown term grows "
-                f"as the square of the time from `reference_time_ssb`. Second, an old ripplegw: before 0.3.1 it returned NaN for *every* "
-                f"sample when generating at the geocentre, which is what this simulator asks for, "
-                f"so a wholly-NaN array points there. The `jax` extra floors ripplegw at 0.3.1, so "
-                f"reaching that needs a deliberate downgrade. "
-                f"Installed ripplegw: {getattr(ripplegw, '__version__', 'unknown')}."
+                "The continuous-wave polarizations are not all finite, so nothing was written. Check the source "
+                "parameters: they are required finite but not bounded, and a spindown term grows as a power of "
+                "the time from reference_time_ssb, so an extreme spindown far from it overflows the phase."
             )
-        return plus_values, cross_values
+        return plus, cross
+
+    def _barycentric_offset(
+        self,
+        effects: ProjectionEffects,
+        params: Mapping[str, Any],
+        start: float,
+        n_samples: int,
+        sampling_frequency: float,
+    ) -> tuple[int, int]:
+        """Return how many samples the SSB grid runs ahead of the detector grid, and how many more it needs.
+
+        The offset is the smallest solar-system delay across the span, rounded down, less one sample; the
+        extra length covers the delay's range, plus one sample. Both are zero without the delays.
+        """
+        if not effects.solar_system:
+            return 0, 0
+        end = start + (n_samples - 1) / sampling_frequency
+        times = np.concatenate([np.arange(start, end, 60.0), [end]])
+        delay, _ = solar_system.delay(
+            times,
+            float(params["right_ascension"]),
+            float(params["declination"]),
+            self.ephemeris,
+            roemer=effects.roemer_delay,
+            einstein=effects.einstein_delay,
+            shapiro=effects.shapiro_delay,
+        )
+        offset = math.floor(float(np.min(delay)) * sampling_frequency) - 1
+        return offset, math.ceil(float(np.max(delay)) * sampling_frequency) - offset + 1
 
     def _validate_source(self, params: Mapping[str, Any], sampling_frequency: float) -> None:
         """Reject source values that would produce a silently wrong or all-NaN signal.
@@ -391,9 +339,10 @@ class ContinuousWaveSimulator(GWSimulator):
         *,
         sampling_frequency: float,
         minimum_frequency: float,
-        earth_rotation: bool = True,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Generate continuous-wave strain for one source over the background's span.
 
@@ -407,12 +356,15 @@ class ContinuousWaveSimulator(GWSimulator):
             minimum_frequency: Unused. A continuous wave is monochromatic apart from its spindown
                 and Doppler modulation, so there is no low-frequency cutoff to apply; accepted to
                 keep the source-agnostic signature.
-            earth_rotation: Passed through to the projection. ``True`` evaluates the antenna
-                pattern across the segment, which is what a signal of this length needs.
+            effects: Which physical effects the projection includes; see
+                :class:`~gwmock_signal.projection.effects.ProjectionEffects`. ``None``, the default,
+                means all of them. The source's parameters are defined at the solar-system barycentre, so
+                the solar-system delays enter in full; without them the signal is generated as if the
+                geocentre were the barycentre. ``earth_rotation`` must stay on.
             interpolate_if_offset: Unused; the polarizations are generated on the segment's own
                 grid, so there is never an offset to interpolate away.
-            finite_arm_length: Passed through to the projection: the finite-arm detector response
-                rather than the long-wavelength one. Needs ``projection_backend="numpy"``.
+            earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
         Returns:
             ``DetectorStrainStack`` with the signal added to *background*.
@@ -422,15 +374,20 @@ class ContinuousWaveSimulator(GWSimulator):
                 positive.
             KeyError: If a detector has no background channel.
             RuntimeError: If the generated polarizations are not all finite -- an out-of-range
-                source parameter, or a ripplegw without GW-JAX-Team/ripple#141, which returns NaN
-                at the geocentre. Refused rather than written; see ``_geocentre_polarizations``.
+                source parameter. Refused rather than written; see ``_ssb_polarizations``.
         """
         del minimum_frequency, interpolate_if_offset
+        effects = _resolve_effects(
+            effects,
+            earth_rotation=earth_rotation,
+            finite_arm_length=finite_arm_length,
+            caller="ContinuousWaveSimulator.simulate",
+        )
         self._validate_params(params)
         if sampling_frequency <= 0.0:
             raise ValueError("sampling_frequency must be positive.")
 
-        if not earth_rotation:
+        if not effects.earth_rotation:
             raise ValueError(
                 "earth_rotation=False is not available for continuous waves. That branch holds the "
                 "antenna pattern fixed at the midpoint of the span, which is an approximation for "
@@ -467,13 +424,20 @@ class ContinuousWaveSimulator(GWSimulator):
         # into the neighbouring segments, so zeros at the seam would make each segment disagree
         # with the same stretch generated as part of a longer run, by far more than rounding.
         margin = edge_padding(sampling_frequency)
-        plus, cross = self._geocentre_polarizations(
+        padded_epoch = epoch - margin / sampling_frequency
+        n_padded = n_samples + 2 * margin
+        # The polarizations are generated in SSB time, which runs ahead of the detector's by the
+        # solar-system delay D: up to 500 s, changing by up to 1e-4 s per second. They are labelled on the
+        # detector grid and offset from it by a whole number of samples, the smallest D across the segment,
+        # so the projection's positions stay small; and lengthened by D's range, so every sample the kept
+        # span reads exists.
+        offset, extra = self._barycentric_offset(effects, params, padded_epoch, n_padded, sampling_frequency)
+        plus, cross = self._ssb_polarizations(
             params,
-            epoch=epoch - margin / sampling_frequency,
-            n_samples=n_samples + 2 * margin,
+            start_ssb=padded_epoch + offset / sampling_frequency,
+            n_samples=n_padded + extra,
             sampling_frequency=sampling_frequency,
         )
-        padded_epoch = epoch - margin / sampling_frequency
         polarizations = {
             "plus": TimeSeries(plus, t0=padded_epoch, sample_rate=sampling_frequency, unit="strain"),
             "cross": TimeSeries(cross, t0=padded_epoch, sample_rate=sampling_frequency, unit="strain"),
@@ -484,19 +448,13 @@ class ContinuousWaveSimulator(GWSimulator):
             right_ascension=float(params["right_ascension"]),
             declination=float(params["declination"]),
             polarization_angle=float(params.get("polarization_angle", 0.0)),
-            earth_rotation=earth_rotation,
-            finite_arm_length=finite_arm_length,
-            # Not the projection's default, and not a preference. The SSB-to-geocentre part of this
-            # signal's phase comes from a barycentering routine that applies lunisolar precession --
-            # ripple's does, as LAL's ``XLALBarycenter`` does -- so the site term added to it has to
-            # be evaluated in the same frame or the seam between them carries a 1.8e-04 s offset.
-            # The compact-binary path deliberately leaves this off, because CBC searches do; see the
-            # argument's documentation for why the two source types differ.
-            precess_source_direction=True,
+            effects=effects,
             # The device implementation of the same algorithm. Measured against the host path at
             # this class's own segment sizes, three detectors, 512 Hz: 2.0x over 256 s and 3.4x
-            # over 1024 s, agreeing to 1.4e-11 of peak. Not a choice about accuracy -- the two
-            # differ only by floating-point reassociation -- but the projection is 99% of a
+            # over 1024 s. With every effect on, the solar-system delay in full, they agree to 1.3e-11
+            # of peak at 512 Hz over 256 s and 1024 s (`test_the_device_and_host_projections_agree_with_
+            # every_effect`). Not a choice about accuracy -- the two differ only by floating-point
+            # reassociation -- but the projection is 99% of a
             # continuous-wave segment's cost, so it is the only part worth moving.
             #
             # Defaults to the device path; see ``projection_backend`` for why it can be changed.
@@ -508,6 +466,8 @@ class ContinuousWaveSimulator(GWSimulator):
             # padded so delayed signal is not lost past the buffer; a continuous wave's signal does
             # not end at the buffer, so here that padding would only be cut off again.
             keep_delayed_samples=False,
+            ephemeris=self.ephemeris,
+            barycentric_offset_samples=offset,
         )
 
         # The projection returns dimensionless series; the trimmed signal is labelled ``strain``, as

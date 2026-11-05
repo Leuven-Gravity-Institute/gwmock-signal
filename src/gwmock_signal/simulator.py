@@ -24,8 +24,10 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
-from gwmock_signal.projection.network import _project, validate_projection_backend
+from gwmock_signal.projection.effects import ProjectionEffects
+from gwmock_signal.projection.network import _project, _resolve_effects, validate_projection_backend
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
 from gwmock_signal.waveform import WaveformBackend, WaveformFactory
 
@@ -164,9 +166,10 @@ class GWSimulator(ABC):
         *,
         sampling_frequency: float,
         minimum_frequency: float,
-        earth_rotation: bool = True,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Return detector strain for one source realization as a ``DetectorStrainStack``.
 
@@ -179,12 +182,13 @@ class GWSimulator(ABC):
                 signal-only strain directly.
             sampling_frequency: Sample rate in Hz.
             minimum_frequency: Low-frequency cutoff in Hz.
-            earth_rotation: Optional backend-specific flag controlling whether
-                detector response should vary across the signal duration.
+            effects: Which physical effects the projection includes, for a source projected onto
+                detectors; see :class:`~gwmock_signal.projection.effects.ProjectionEffects`. ``None``
+                means all of them.
             interpolate_if_offset: Optional backend-specific flag controlling
                 how off-grid injections should be handled.
-            finite_arm_length: Optional flag selecting the finite-arm detector response over the
-                long-wavelength one, for a source projected onto detectors.
+            earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``.
 
         Returns:
             ``DetectorStrainStack`` containing one aligned strain channel per
@@ -227,6 +231,19 @@ class TransientSimulator(GWSimulator):
     #: after :func:`~gwmock_signal.projection.network.validate_projection_backend`; one that does
     #: not inherits the host path, which needs no optional dependency.
     projection_backend: str = "numpy"
+
+    #: The Earth and Sun tables the solar-system delays are computed from; the LALPulsar DE405 tables
+    #: unless a subclass is given others.
+    ephemeris: SolarSystemEphemeris = SolarSystemEphemeris()
+
+    def timing_reference(self, params: Mapping[str, Any]) -> float:
+        """Return the GPS time at which this source's solar-system delay is absorbed.
+
+        The delay's value and rate there are taken out, so this time keeps its meaning at the geocentre:
+        a compact binary's coalescence, ``coa_time``. A subclass whose signal is placed by another time
+        overrides this.
+        """
+        return float(params["coa_time"])
 
     @abstractmethod
     def generate_polarizations(
@@ -299,9 +316,10 @@ class TransientSimulator(GWSimulator):
         *,
         sampling_frequency: float,
         minimum_frequency: float,
-        earth_rotation: bool = True,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
@@ -323,14 +341,16 @@ class TransientSimulator(GWSimulator):
                 :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
             sampling_frequency: Sample rate in Hz.
             minimum_frequency: Low-frequency cutoff in Hz.
-            earth_rotation: If ``True``, evaluate antenna patterns at
-                time-dependent GPS times (recommended for longer signals).
-                If ``False``, use a single reference time.
+            effects: Which physical effects the projection includes; see
+                :class:`~gwmock_signal.projection.effects.ProjectionEffects`. ``None``, the default,
+                means all of them. The solar-system delays are absorbed at
+                :meth:`timing_reference`, and use the tables in :attr:`ephemeris`.
             interpolate_if_offset: If ``True``, interpolate the injection
                 when its start is not on a target sample boundary.
-            finite_arm_length: If ``True``, each arm responds to the strain averaged along the light's
-                round trip rather than at the vertex; see ``finite_arm_length`` on
-                :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
+            earth_rotation: Deprecated; ``effects=ProjectionEffects(earth_rotation=...)``. Overrides
+                that field when given.
+            finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
+                that field when given.
 
         Returns:
             ``DetectorStrainStack`` containing the simulated strain for each
@@ -360,13 +380,18 @@ class TransientSimulator(GWSimulator):
             right_ascension=params["right_ascension"],
             declination=params["declination"],
             polarization_angle=params["polarization_angle"],
-            earth_rotation=earth_rotation,
-            precess_source_direction=False,
+            effects=_resolve_effects(
+                effects,
+                earth_rotation=earth_rotation,
+                finite_arm_length=finite_arm_length,
+                caller=f"{type(self).__name__}.simulate",
+            ),
             backend=self.projection_backend,
             sinc_taps=DEFAULT_SINC_TAPS,
             kaiser_beta=DEFAULT_KAISER_BETA,
             tapered=self.polarizations_tapered(params, sampling_frequency),
-            finite_arm_length=finite_arm_length,
+            ephemeris=self.ephemeris,
+            reference_time=self.timing_reference(params),
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -455,6 +480,7 @@ class CBCSimulator(TransientSimulator):
         waveform_backend: WaveformBackend | None = None,
         *,
         projection_backend: str = "numpy",
+        ephemeris: SolarSystemEphemeris | None = None,
     ) -> None:
         """Initialise with the waveform model name.
 
@@ -472,6 +498,8 @@ class CBCSimulator(TransientSimulator):
                 2.7x faster on the same CPU. It is refused with ``earth_rotation=False``, which
                 has no device implementation, and for a span beyond
                 :data:`~gwmock_signal.projection.network.MAX_LINEAR_SIDEREAL_SPAN_SECONDS`.
+            ephemeris: The Earth and Sun tables for the solar-system delays; the LALPulsar DE405
+                tables by default.
 
         Raises:
             ValueError: If *projection_backend* is not ``"numpy"`` or ``"jax"``.
@@ -483,6 +511,8 @@ class CBCSimulator(TransientSimulator):
         self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
         self._waveform_model = waveform_model
         self._waveform_factory = WaveformFactory(backend=waveform_backend)
+        if ephemeris is not None:
+            self.ephemeris = ephemeris
         if self.projection_backend == "jax":
             # Enabled here rather than relied upon, for the reason the continuous-wave simulator
             # states at length: the device projection *refuses* to run without x64, and the only
@@ -653,9 +683,10 @@ class CBCSimulator(TransientSimulator):
         sampling_frequency: float,
         minimum_frequency: float,
         format: Literal["gwf", "hdf5", "npy", "txt"] = "hdf5",  # noqa: A002
-        earth_rotation: bool = True,
+        effects: ProjectionEffects | None = None,
         interpolate_if_offset: bool = True,
-        finite_arm_length: bool = False,
+        earth_rotation: bool | None = None,
+        finite_arm_length: bool | None = None,
     ) -> DetectorStrainStack:
         """Simulate a CBC injection, write the result, and save the parameter dict.
 
@@ -672,9 +703,10 @@ class CBCSimulator(TransientSimulator):
             minimum_frequency: Low-frequency cutoff in Hz.
             format: Output format for the strain data — one of ``'gwf'``,
                 ``'hdf5'``, ``'npy'``, or ``'txt'``.  Defaults to ``'hdf5'``.
-            earth_rotation: Passed through to :meth:`simulate`.
+            effects: Passed through to :meth:`simulate`.
             interpolate_if_offset: Passed through to :meth:`simulate`.
-            finite_arm_length: Passed through to :meth:`simulate`.
+            earth_rotation: Deprecated; passed through to :meth:`simulate`.
+            finite_arm_length: Deprecated; passed through to :meth:`simulate`.
 
         Returns:
             The ``DetectorStrainStack`` that was written to disk.
@@ -685,8 +717,9 @@ class CBCSimulator(TransientSimulator):
             background,
             sampling_frequency=sampling_frequency,
             minimum_frequency=minimum_frequency,
-            earth_rotation=earth_rotation,
+            effects=effects,
             interpolate_if_offset=interpolate_if_offset,
+            earth_rotation=earth_rotation,
             finite_arm_length=finite_arm_length,
         )
         result.write(path, format=format)

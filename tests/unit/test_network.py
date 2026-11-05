@@ -11,6 +11,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: lalsuite does not install yet
 import pytest
 
 from gwmock_signal.network import _NETWORK_PRESETS, Network
+from gwmock_signal.projection.effects import ProjectionEffects
 
 # Keep the old alias so existing parametrize fixtures need no change.
 _CATALOG = _NETWORK_PRESETS
@@ -114,7 +115,7 @@ class TestNetworkProjection:
             right_ascension=0.5,
             declination=0.3,
             polarization_angle=0.1,
-            earth_rotation=False,
+            effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         )
         assert set(result.keys()) == set(net.detector_names)
         # Padded at each end against the geocentre delay, by the same amount for every detector.

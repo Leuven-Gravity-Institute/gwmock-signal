@@ -26,6 +26,7 @@ import numpy as np
 from gwmock_data.resampling import resample_uniform_sinc
 
 from gwmock_signal.burst.waveforms import PARAMETRIC_MODELS, read_waveform_file
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.simulator import TransientSimulator, _projected_duration
 from gwmock_signal.timeseries import TimeSeries
 
@@ -287,8 +288,13 @@ class BurstSimulator(TransientSimulator):
             :class:`WaveformFile`.
     """
 
-    def __init__(self, *, waveform_files: Mapping[str, WaveformFile] | None = None) -> None:
-        """Initialise with the optional numerical waveform files."""
+    def __init__(
+        self,
+        *,
+        waveform_files: Mapping[str, WaveformFile] | None = None,
+        ephemeris: SolarSystemEphemeris | None = None,
+    ) -> None:
+        """Initialise with the optional numerical waveform files and the solar-system tables to use."""
         files = dict(waveform_files or {})
         shadowed = sorted(set(files) & set(PARAMETRIC_MODELS))
         if shadowed:
@@ -299,6 +305,12 @@ class BurstSimulator(TransientSimulator):
         self._waveform_files: dict[str, WaveformFile] = files
         self._file_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         self._extent_cache: OrderedDict[Any, tuple[float, float, float]] = OrderedDict()
+        if ephemeris is not None:
+            self.ephemeris = ephemeris
+
+    def timing_reference(self, params: Mapping[str, Any]) -> float:
+        """Return ``peak_time``, the burst's physical reference, where its solar-system delay is absorbed."""
+        return _finite_time(params, "peak_time")
 
     @property
     def required_params(self) -> frozenset[str]:

@@ -63,7 +63,6 @@ strains = project_polarizations_to_network(
     right_ascension=ra,
     declination=dec,
     polarization_angle=psi,
-    earth_rotation=True,
 )
 for name, h in strains.items():
     print(name, h.shape, h.t0)
@@ -89,15 +88,81 @@ places it by its own start time.
 For very short waveforms where Earth rotation over the segment is negligible:
 
 ```python
+from gwmock_signal.projection.effects import ProjectionEffects
+
 strains = project_polarizations_to_network(
     pol,
     ["H1", "L1"],
     right_ascension=0.5,
     declination=0.3,
     polarization_angle=1.0,
-    earth_rotation=False,
+    effects=ProjectionEffects(earth_rotation=False),
 )
 ```
+
+## Projection effects
+
+Every source -- compact binaries, bursts and continuous waves -- is projected by
+the same code, and `ProjectionEffects` says which physical effects it includes.
+**All are on by default**, and each can be turned off on its own:
+
+| Effect              | What it is                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `earth_rotation`    | The antenna pattern and delays follow the Earth's rotation sample by sample. Off, they are held at the span's midpoint, which suits only a signal of seconds. |
+| `finite_arm_length` | Each arm responds to the strain averaged along the light's round trip; see [Finite-arm response](#finite-arm-response).                                       |
+| `source_precession` | The J2000 source direction is precessed to the epoch of date before the Earth's orientation is applied, as LALPulsar's barycentring does.                     |
+| `roemer_delay`      | The light-travel time between the geocentre and the solar-system barycentre, from the Earth's orbit.                                                          |
+| `einstein_delay`    | The relativistic time dilation of the Earth's clock, TDB minus TT.                                                                                            |
+| `shapiro_delay`     | The Sun's gravitational delay.                                                                                                                                |
+
+```python
+from gwmock_signal.projection.effects import ProjectionEffects
+
+everything = ProjectionEffects()  # the default
+no_solar_system = ProjectionEffects(roemer_delay=False, einstein_delay=False, shapiro_delay=False)
+lal_convention = ProjectionEffects.long_wavelength()  # all off
+lal_convention_rotating = ProjectionEffects.long_wavelength(earth_rotation=True)
+```
+
+`ProjectionEffects.long_wavelength()` is the convention of Bilby's and PyCBC's
+default projection: a point detector at its vertex, a geocentre at rest and a
+J2000 direction with sidereal time of date. An analysis using that convention
+recovers a right ascension offset from an injection made with
+`source_precession` on (about 0.43 degrees in 2030), and a slightly different
+waveform for a long or loud signal; turn the effects off to match it exactly.
+
+**The solar-system delays for a transient.** A compact binary's `coa_time` and a
+burst's `peak_time` are geocentre times, and a catalogue's detector-frame masses
+already include whatever constant Doppler shift the source has. So for a
+transient the solar-system delay enters only through how it **changes** across
+the signal: its value and its rate at the reference time are taken out. What
+remains is the Earth's orbital acceleration -- for a binary neutron star in the
+Einstein Telescope band from 5 Hz, about 4.5 hours long, up to 2.7 ms of timing
+over the sky (2.5 ms at the sky position of the package's test) and 0.1 rad of
+phase; for anything lasting minutes, microseconds or less. The simulators pass
+the reference time themselves; `project_polarizations_to_network` takes
+`reference_time`, and without it the time of the polarizations' peak power. A
+continuous wave, whose parameters are defined at the barycentre, takes the
+delays in full.
+
+**The ephemeris.** The delays are LALPulsar's (`XLALBarycenter` in its original
+time system, with the site term from the projection's own geometry), computed
+from the JPL DE405 tables LALPulsar ships, `earth00-40-DE405.dat.gz` and
+`sun00-40-DE405.dat.gz`. They agree with `lalpulsar.Barycenter` at the geocentre
+to 1e-13 s. A table not found locally is downloaded once from the LALSuite
+repository into the cache: `$GWMOCK_SIGNAL_CACHE_DIR/ephemeris` if that variable
+is set, otherwise `~/.cache/gwmock-signal/ephemeris` (`$XDG_CACHE_HOME` when
+set; `~/Library/Caches/gwmock-signal/ephemeris` on macOS). On a machine without
+network access, copy the files there or pass their paths
+(`ephemeris=SolarSystemEphemeris(earth=..., sun=...)` to the projection, the
+simulators' `ephemeris` argument). A table named by its bare name is looked up
+in the working directory, then in the cache. The package records the SHA-256 of
+both default tables (compressed and not), and a table looked up by one of those
+names must be byte-for-byte that one wherever it is found; a corrupt copy is
+refused with a message saying so, and deleting it lets it download again. A path
+with a directory, such as `tables/earth00-40-DE405.dat.gz`, is your own table
+and is used as it is. The tables cover 2000 to 2040; a span outside them is
+refused while any solar-system delay is on.
 
 ## Example 3 — Custom detectors (advanced)
 
@@ -192,12 +257,12 @@ still looking like strain.
 
 ## Finite-arm response
 
-By default each detector responds as a point at its vertex: the long-wavelength
-response of LAL, Bilby and PyCBC's default projection. A real arm measures the
-strain averaged along the light's round trip to its end mirror and back. For an
-arm of length `L` the two differ at order `f L / c`: about 1e-2 at 100 Hz and
-0.1 at 1 kHz for a 10 km arm. Pass `finite_arm_length=True` to use the
-round-trip response:
+LAL, Bilby and PyCBC's default projection treat each detector as a point at its
+vertex: the long-wavelength response. A real arm measures the strain averaged
+along the light's round trip to its end mirror and back. For an arm of length
+`L` the two differ at order `f L / c`: about 1e-2 at 100 Hz and 0.1 at 1 kHz for
+a 10 km arm. The round-trip response is on by default (`finite_arm_length` in
+`ProjectionEffects`):
 
 ```python
 from gwmock_signal.network import Network
@@ -211,7 +276,6 @@ strain = project_polarizations_to_network(
     declination=dec,
     polarization_angle=psi,
     tapered=True,
-    finite_arm_length=True,
 )
 ```
 
@@ -255,9 +319,9 @@ midpoint.
   lengths, 10 km for the triangles and 15 km for the 2L; a `CustomDetector`
   takes `arm_length_m`. A detector without one is refused, as are LAL's resonant
   bars.
-- The host backend. `backend="jax"` refuses the option, and so does the
-  stochastic-background simulator, whose overlap reduction function is the
-  long-wavelength one.
+- Nothing of the backend: the device projection includes it too. The
+  stochastic-background simulator projects nothing, and its detector response is
+  the overlap reduction function it is given.
 - About twice the time of the long-wavelength projection on the rotating branch,
   since each arm is resampled separately: 28.5 s against 14.0 s for 64 s of
   signal at 8192 Hz on a three-detector triangle.
@@ -266,8 +330,9 @@ midpoint.
 
 - Antenna patterns and delays follow **PyCBC/LAL** conventions, consistent with
   many **Bilby** and **PyCBC** analyses, except for sidereal time (next note).
-  They are the long-wavelength response unless `finite_arm_length=True` (see
-  [above](#finite-arm-response)).
+  With `ProjectionEffects.long_wavelength()`, that is; by default the response
+  is the finite-arm one and the direction is precessed (see
+  [Projection effects](#projection-effects)).
 - **Sidereal time follows the Earth's measured rotation (UT1), not UTC.** The
   orientation of a detector on the rotating Earth is set by the Earth Rotation
   Angle, which IAU 2000 Resolution B1.8 defines as a linear function of UT1;
@@ -295,10 +360,10 @@ midpoint.
   UT1-UTC is: it drifts with it, by about 0.7 ms a day near GPS 1e9 (5e-8 rad a
   day, so 4e-9 rad across a 1.8-hour signal, and from 2.2e-5 to 2.5e-5 rad over
   the following month), and it steps by 7.3e-5 rad at a leap second, where
-  UT1-UTC changes by 1 s. With `precess_source_direction=True` the offset
-  applies to the right ascension of date that the projection uses, not to the
-  J2000 value passed in. Compare recovered and injected right ascensions with
-  this offset in mind when the comparison is at arcsecond level.
+  UT1-UTC changes by 1 s. With `source_precession` on the offset applies to the
+  right ascension of date that the projection uses, not to the J2000 value
+  passed in. Compare recovered and injected right ascensions with this offset in
+  mind when the comparison is at arcsecond level.
 - For long signals or high precision, keep **`earth_rotation=True`** unless you
   have verified the approximation.
 

@@ -9,6 +9,7 @@ from astropy.time import Time
 jax = pytest.importorskip("jax", reason="jax not installed")
 jax.config.update("jax_enable_x64", True)  # GPS times / Julian dates need float64
 
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.projection.geometry import reconstructed_geometry  # noqa: E402
 from gwmock_signal.projection.jax_projection import (  # noqa: E402
     antenna_pattern,
@@ -17,14 +18,35 @@ from gwmock_signal.projection.jax_projection import (  # noqa: E402
     time_delay_from_geocenter,
 )
 from gwmock_signal.projection.network import (  # noqa: E402
-    _antenna_pattern_lal,
     _gmst_accurate,
-    _time_delay_from_earth_center_lal,
 )
 from gwmock_signal.projection.resampling import edge_padding  # noqa: E402
 
 # GPS times spanning the 36 s (pre-2017) and 37 s leap-second eras.
 _GPS_TIMES = [1126259462.4, 1187008882.4, 1238166018.0, 1370000000.0]
+
+
+def _time_delay_from_earth_center_lal(prefix, *, right_ascension, declination, t_gps):
+    """The host projection's geocentre-to-vertex delay at one GPS time, as a reference."""
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.kernels import time_delay_from_geocenter
+    from gwmock_signal.projection.network import _gmst_accurate
+
+    _, location = reconstructed_geometry(prefix)
+    return float(time_delay_from_geocenter(location, _gmst_accurate(t_gps), right_ascension, declination, xp=np))
+
+
+def _antenna_pattern_lal(prefix, *, right_ascension, declination, polarization_angle, t_gps):
+    """The host projection's antenna pattern at one GPS time, as a reference."""
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.kernels import antenna_pattern
+    from gwmock_signal.projection.network import _gmst_accurate
+
+    response, _ = reconstructed_geometry(prefix)
+    f_plus, f_cross = antenna_pattern(
+        response, _gmst_accurate(t_gps), right_ascension, declination, polarization_angle, xp=np
+    )
+    return float(f_plus), float(f_cross)
 
 
 def _astropy_reference(t_gps: float) -> tuple[float, float, float]:
@@ -224,8 +246,7 @@ def test_device_projection_matches_host_pipeline() -> None:
         right_ascension=ra,
         declination=dec,
         polarization_angle=psi,
-        earth_rotation=False,
-        precess_source_direction=False,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         backend="numpy",
         sinc_taps=DEFAULT_SINC_TAPS,
         kaiser_beta=DEFAULT_KAISER_BETA,
@@ -300,7 +321,7 @@ def test_rotating_projection_matches_numpy_path() -> None:
             "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
         },
         ["E1"],
-        earth_rotation=True,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
         **sky,
     )["E1"].value
     # The device primitive below is given the unpadded input, so it is compared on the input's span.
@@ -390,7 +411,7 @@ def test_rotating_projection_differs_from_static_for_long_signals() -> None:
             "cross": GWpyTimeSeries(cross, t0=start_time, sample_rate=sampling_frequency),
         },
         ["E1"],
-        earth_rotation=False,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=False),
         **sky,
     )["E1"].value
     pad = edge_padding(sampling_frequency)

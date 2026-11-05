@@ -23,9 +23,11 @@ projected onto a detector frame: $h = F_+ \cdot h_+ + F_\times \cdot h_\times$.
 
 ## Optional JAX dependency
 
-`ContinuousWaveSimulator` needs the **`[jax]` extra** as the polarizations are
-produced with `rippleGW`, and the default detector projection backend runs on
-JAX (`pip install 'gwmock-signal[jax]'`).
+`ContinuousWaveSimulator` needs the **`[jax]` extra** for its default projection
+backend, which runs on JAX (`pip install 'gwmock-signal[jax]'`). With
+`projection_backend="numpy"` it needs neither JAX nor rippleGW: the
+polarizations are the isolated-pulsar phase model evaluated in solar-system
+barycentre time by the package itself.
 
 See [Installation](installation.md) for details.
 
@@ -40,12 +42,18 @@ from gwmock_signal.continuous import ContinuousWaveSimulator
 
 ## Ephemeris files
 
-Barycentring of the signal needs an Earth and a Sun ephemeris table.
+The signal's phase is defined at the solar-system barycentre, and the delay from
+there to the geocentre needs an Earth and a Sun ephemeris table. It is the same
+solar-system delay every source in the package uses (see
+[Projection effects](detector-projection.md#projection-effects)), applied here
+in full rather than relative to a reference time.
 
 These should be provided as **explicit paths** to the files. If a path does not
 exist locally but is a standard `LALPulsar` name (e.g.
 _'earth00-40-DE405.dat.gz'_), the tables will be downloaded and cached (Internet
-access is required once). The run records what it used.
+access is required once) and checked against the content the package records for
+them; see [the ephemeris](detector-projection.md#projection-effects). The run
+records what it used.
 
 ```python
 sim = ContinuousWaveSimulator(
@@ -60,19 +68,17 @@ source parameters, provided in seconds.
 
 It is a **required parameter**, and it is fixed for the whole run: the same
 value is reused across every `ContinuousWaveSimulator.simulate(...)` call, which
-is what **keeps the segments coherent** with each other. `rippleGW`'s own
-default derives the SSB reference epoch from the first sample it is given. As it
-is called once per segment, that default silently restarts the phase at every
-segment boundary. Each segment on its own still looks like a perfectly good CW
-signal; only a multi-segment run would disagree with itself.
+is what **keeps the segments coherent** with each other. A reference derived
+from each segment's first sample would silently restart the phase at every
+segment boundary. Each segment on its own would still look like a perfectly good
+CW signal; only a multi-segment run would disagree with itself.
 
 ## Projection backend
 
 `"jax"` is the default projection backend, as the projection is roughly 99% of a
-segment's cost and `rippleGW` already brings JAX in for the polarizations, so
-the device path is essentially free to default to. However, it comes with one
-limit: this backend linearly extrapolates sidereal time across the span it is
-given, and refuses a span longer than 86400 s.
+segment's cost. However, it comes with one limit: this backend linearly
+extrapolates sidereal time across the span it is given, and refuses a span
+longer than 86400 s.
 
 That limit applies to the **padded** span, not to the nominal segment. The
 projection is given a buffer padded at both ends (see below), so a segment whose
@@ -132,10 +138,9 @@ from `h0`/`cos_iota`. If your source parameters are in the constant
 amplitude/inclination convention, convert to plus/cross amplitudes before
 calling.
 
-`polarization_angle` is applied when the geocentre polarizations are projected
-onto a detector, which is the only place it enters: `rippleGW`'s pulsar
-generator takes no polarization angle, because it fixes its own polarization
-basis internally, and this simulator passes it the amplitudes directly.
+`polarization_angle` is applied when the polarizations are projected onto a
+detector, which is the only place it enters: the phase model fixes its own
+polarization basis, and this simulator passes it the amplitudes directly.
 
 Spindowns are **not** a `params` key. They are passed to
 `ContinuousWaveSimulator` as the `spindowns` constructor argument, together with
@@ -214,7 +219,6 @@ for index in range(segments_count):
         segment_background,
         sampling_frequency=fs,
         minimum_frequency=0.0,
-        earth_rotation=True,
     )
     strains.append(seg_strain["V1"].value)
 
@@ -226,7 +230,7 @@ multisegment = np.concatenate(strains)
 | Situation                                                     | Behavior                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `background` missing or empty                                 | `ValueError`. A continuous wave has no duration of its own, so the segment's epoch and length come from the data it is added to.                                                                                                                                      |
-| `earth_rotation=False`                                        | `ValueError`. Not available. Holding the antenna pattern fixed is only a valid approximation for signals short enough that Earth barely turns across them. A CW run spans months, so this is refused rather than silently producing a plausible-looking wrong answer. |
+| `ProjectionEffects(earth_rotation=False)`                     | `ValueError`. Not available. Holding the antenna pattern fixed is only a valid approximation for signals short enough that Earth barely turns across them. A CW run spans months, so this is refused rather than silently producing a plausible-looking wrong answer. |
 | `reference_time_ssb` not finite                               | `ValueError`. Must be a finite GPS-scale time in seconds.                                                                                                                                                                                                             |
 | `reference_time_ssb` ≥ ephemeris table time validity          | Caution for callers. The package does not emit a warning, but this may affect precision at the arcsec level.                                                                                                                                                          |
 | `frequency` ≤ 0 or ≥ Nyquist                                  | `ValueError`. Frequency must be positive and below Nyquist frequency (1/2 of sampling rate). Otherwise it would alias.                                                                                                                                                |
@@ -238,7 +242,7 @@ multisegment = np.concatenate(strains)
 | A `background` value is not a time series                     | `TypeError`.                                                                                                                                                                                                                                                          |
 | Background channels disagree on epoch, length, or sample rate | `ValueError`. Background channels for all detectors must share these parameters.                                                                                                                                                                                      |
 | The JAX backend is given a padded span over 86400 s           | `ValueError` naming the span; project in shorter segments or pass `projection_backend="numpy"`.                                                                                                                                                                       |
-| Polarizations come back non-finite                            | `RuntimeError`. Usually an old `rippleGW` (<0.3.1 returns `NaN` at the geocentre for every sample), or an extreme spindown/reference-epoch combination overflowing the phase. The spindown term grows as the square of the time from `reference_time_ssb`.            |
+| Polarizations come back non-finite                            | `RuntimeError`. An extreme spindown/reference-epoch combination overflowing the phase: the spindown term grows as a power of the time from `reference_time_ssb`.                                                                                                      |
 
 ## See also
 

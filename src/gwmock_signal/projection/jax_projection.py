@@ -38,13 +38,15 @@ it must only be imported by the device path or its tests, never by always-loaded
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from gwmock_signal.projection import kernels
+from gwmock_signal.projection import finite_arm, kernels, solar_system
 from gwmock_signal.projection.resampling import (
     DEFAULT_KAISER_BETA,
     DEFAULT_SINC_TAPS,
     OVERSAMPLING_FACTOR,
+    SPEED_OF_LIGHT_M_S,
     edge_padding,
     kaiser_window_chebyshev,
     validate_kernel,
@@ -210,6 +212,8 @@ def project_polarizations_fd(  # noqa: PLR0913
     time_delay: ArrayLike,
     n_samples: int,
     sampling_frequency: float,
+    arm_length: float | None = None,
+    alignment: ArrayLike | None = None,
 ) -> Array:
     """Project frequency-domain polarizations onto one detector, returning strain in time.
 
@@ -232,6 +236,10 @@ def project_polarizations_fd(  # noqa: PLR0913
         time_delay: Geocenter-to-detector delay in seconds.
         n_samples: Length of the real time series the inverse FFT produces.
         sampling_frequency: Sample rate in Hz (the ``irfft`` is scaled by it, i.e. ``/dt``).
+        arm_length: For one arm of the finite-arm response, its length in metres; static. ``f_plus``,
+            ``f_cross`` and ``time_delay`` are then that arm's, at its midpoint, and the residual of its
+            length (:func:`~gwmock_signal.projection.kernels.finite_arm_residual`) is applied.
+        alignment: With ``arm_length``, the cosine between the arm and the direction to the source.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.
@@ -241,6 +249,10 @@ def project_polarizations_fd(  # noqa: PLR0913
     frequencies = jnp.asarray(frequencies)
     strain_f = f_plus * jnp.asarray(plus) + f_cross * jnp.asarray(cross)
     strain_f = strain_f * jnp.exp(-2j * jnp.pi * frequencies * time_delay)
+    if arm_length is not None:
+        strain_f = strain_f * kernels.finite_arm_residual(
+            frequencies * (arm_length / SPEED_OF_LIGHT_M_S), alignment, xp=jnp
+        )
     return jnp.fft.irfft(strain_f, n=n_samples) * sampling_frequency
 
 
@@ -433,6 +445,9 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
     tapered: bool = False,
+    arms: ArrayLike | None = None,
+    arm_lengths: tuple[float, float] | None = None,
+    solar: SolarArguments | None = None,
 ) -> Array:
     """Project time-domain polarizations with a time-dependent antenna pattern.
 
@@ -527,6 +542,13 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             both ends, so they can be oversampled exactly before the kernel reads them; static.
             Leave it False for a piece cut from a longer signal, whose cut ends the global
             interpolation would ring from across the whole piece.
+        arms: The x- and y-arm unit vectors, shape ``(2, 3)``, for the finite-arm response; ``None``
+            for the long-wavelength one. The detector is then the x arm's response minus the y arm's,
+            each read at its midpoint with the residual of its length applied, as on the host
+            (:mod:`~gwmock_signal.projection.finite_arm`).
+        arm_lengths: The two arms' lengths in metres; static, since the residual's filters are worked
+            out on the host from them.
+        solar: The solar-system delay, as :class:`SolarArguments`; ``None`` for none.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.
@@ -547,21 +569,6 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     right_ascension_of_date = right_ascension + right_ascension_rate * sample_offsets
     declination_of_date = declination + declination_rate * sample_offsets
 
-    time_delays = time_delay_from_geocenter(
-        location, gmst, right_ascension=right_ascension_of_date, declination=declination_of_date
-    )
-
-    # Antenna pattern at the detector-time sample, i.e. the time coordinate the output
-    # series is labelled with. Evaluating it at t + tau would mix the detector and
-    # geocenter time coordinates.
-    f_plus, f_cross = antenna_pattern(
-        response,
-        gmst,
-        right_ascension=right_ascension_of_date,
-        declination=declination_of_date,
-        polarization_angle=polarization_angle,
-    )
-
     # Gather from a zero-padded copy so kernel taps reaching past either end read zero rather
     # than clamping to the first or last sample and repeating it. Sized for the largest
     # geocenter delay this detector can have (|location| / c, a sky-independent upper bound),
@@ -575,18 +582,89 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         padded_plus = _oversample_fourier(padded_plus, padded_length)
         padded_cross = _oversample_fourier(padded_cross, padded_length)
     read_length = factor * (padded_length - 1) + 1
-
-    # Sample position of t - tau(t) on the padded input grid, plus any lattice alignment the caller
-    # asked for -- one shift, one resampling. The whole sample and the shift are passed apart, as on
-    # the host path, so the shift keeps its own precision at any index; on an oversampled series both
-    # scale by the factor, exactly.
     index = factor * (pad + jnp.arange(n_samples, dtype=jnp.int32))
-    fraction = factor * (-time_delays * sampling_frequency - extra_shift_samples)
-    plus_shifted = _interpolate_uniform_sinc(
-        padded_plus, index, read_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
-    )
-    cross_shifted = _interpolate_uniform_sinc(
-        padded_cross, index, read_length, fraction=fraction, taps=sinc_taps, beta=kaiser_beta
-    )
+    sky = {"right_ascension": right_ascension_of_date, "declination": declination_of_date}
 
-    return f_plus * plus_shifted + f_cross * cross_shifted
+    # The response terms, as on the host: the detector at its vertex, or each arm at its midpoint.
+    location = jnp.asarray(location, dtype=jnp.float64)
+    if arms is None:
+        terms = [(1.0, jnp.asarray(response, dtype=jnp.float64), location, None, None)]
+    else:
+        arms = jnp.asarray(arms, dtype=jnp.float64)
+        terms = [
+            (
+                sign,
+                0.5 * jnp.outer(arms[k], arms[k]),
+                location + 0.5 * arm_lengths[k] * arms[k],
+                arms[k],
+                arm_lengths[k],
+            )
+            for k, sign in enumerate((1.0, -1.0))
+        ]
+
+    strain = jnp.zeros(n_samples)
+    for sign, tensor, point, arm, length in terms:
+        # Antenna pattern at the detector-time sample, i.e. the time coordinate the output series is
+        # labelled with. Evaluating it at t + tau would mix the detector and geocenter time coordinates.
+        f_plus, f_cross = antenna_pattern(tensor, gmst, polarization_angle=polarization_angle, **sky)
+        site = time_delay_from_geocenter(point, gmst, **sky)
+        # Sample position of the signal time on the padded input grid: t - tau(t), plus the solar-system
+        # delay at the geocentre then, plus any lattice alignment the caller asked for -- one shift, one
+        # resampling. The whole sample and the shift are passed apart, as on the host path, so the shift
+        # keeps its own precision at any index; on an oversampled series both scale by the factor, exactly.
+        shift = -site * sampling_frequency - extra_shift_samples
+        if solar is not None:
+            shift = shift + solar.delay(sample_offsets - site) * sampling_frequency - solar.offset_samples
+        plus_shifted = _interpolate_uniform_sinc(
+            padded_plus, index, read_length, fraction=factor * shift, taps=sinc_taps, beta=kaiser_beta
+        )
+        cross_shifted = _interpolate_uniform_sinc(
+            padded_cross, index, read_length, fraction=factor * shift, taps=sinc_taps, beta=kaiser_beta
+        )
+        part = f_plus * plus_shifted + f_cross * cross_shifted
+        if arm is not None:
+            # mu = cos(arm, source): the delay of a point one metre along the arm, in units of 1 / c.
+            alignment = -SPEED_OF_LIGHT_M_S * time_delay_from_geocenter(arm, gmst, **sky)
+            part = finite_arm.apply_residual(
+                part,
+                alignment,
+                arm_length_m=length,
+                sample_rate=sampling_frequency,
+                tapered=tapered,
+                taps=sinc_taps,
+                beta=kaiser_beta,
+                xp=jnp,
+            )
+        strain = strain + sign * part
+    return strain
+
+
+@dataclass(frozen=True)
+class SolarArguments:
+    """The solar-system delay in the form a compiled device kernel takes it.
+
+    Attributes:
+        arrays: :meth:`~gwmock_signal.projection.solar_system.DelayModel.arrays`, traced.
+        components: ``(roemer, einstein, shapiro)``; static.
+        start_offset: The first sample's time less the model's epoch, seconds; traced.
+        absorbed: ``(reference time less the epoch, delay, rate)`` for a transient, traced; ``None`` for
+            polarizations in SSB time.
+        offset_samples: Whole samples by which SSB-time polarizations run ahead of their labels.
+    """
+
+    arrays: tuple
+    components: tuple[bool, bool, bool]
+    start_offset: ArrayLike
+    absorbed: ArrayLike | None
+    offset_samples: ArrayLike = 0
+
+    def delay(self, sample_offsets: ArrayLike) -> Array:
+        """Return the delay to add at geocentre times ``sample_offsets`` after the first sample."""
+        import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+        since = sample_offsets + self.start_offset
+        value = solar_system.evaluate_arrays(self.arrays, self.components, since, xp=jnp)
+        if self.absorbed is None:
+            return value
+        reference, delay, rate = self.absorbed[0], self.absorbed[1], self.absorbed[2]
+        return value - delay - rate * (since - reference)

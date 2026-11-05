@@ -56,6 +56,7 @@ def test_projection_and_injection_work_without_optional_packages():
         from gwmock_signal import CustomDetector, TimeSeries
         from gwmock_signal.injection import inject_strain
         from gwmock_signal.projection import project_polarizations_to_network
+        from gwmock_signal.projection.effects import ProjectionEffects
 
         t0, fs = 1_400_000_000.0, 512.0
         t = np.arange(1024) / fs
@@ -72,7 +73,7 @@ def test_projection_and_injection_work_without_optional_packages():
         for rotation in (True, False):
             strains = project_polarizations_to_network(
                 polarizations, ["H1", custom], right_ascension=1.1, declination=-0.3,
-                polarization_angle=0.4, earth_rotation=rotation,
+                polarization_angle=0.4, effects=ProjectionEffects.long_wavelength(earth_rotation=rotation),
             )
             for name, strain in strains.items():
                 peaks[f"{name}-{rotation}"] = float(np.max(np.abs(strain.data)))

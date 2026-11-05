@@ -20,7 +20,7 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
 
 from gwmock_signal.network import Network
 from gwmock_signal.pipeline import inject_cbc_signal
-from gwmock_signal.projection.network import _time_delay_from_earth_center_lal
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.waveform.backends import LALSimulationBackend
 
 # SciPy arrives with GWpy, which does not install on Python 3.15 yet; every test here also needs lalsuite.
@@ -58,6 +58,16 @@ TC = PARAMS["coa_time"]
 # than 1e-6 relative precision.
 _PYCBC_REFERENCE_SNR = 4.884168e01
 _REFERENCE_SNR = 4.884168e01
+
+
+def _time_delay_from_earth_center_lal(prefix, *, right_ascension, declination, t_gps):
+    """The host projection's geocentre-to-vertex delay at one GPS time, as a reference."""
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.kernels import time_delay_from_geocenter
+    from gwmock_signal.projection.network import _gmst_accurate
+
+    _, location = reconstructed_geometry(prefix)
+    return float(time_delay_from_geocenter(location, _gmst_accurate(t_gps), right_ascension, declination, xp=np))
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +198,8 @@ def test_snr_regression():
         sampling_frequency=FS,
         minimum_frequency=FMIN,
         waveform_backend=LALSimulationBackend(),
+        # The PyCBC reference is in the long-wavelength convention, with the Earth rotating.
+        effects=ProjectionEffects.long_wavelength(earth_rotation=True),
     )
 
     snr_computed = _matched_filter_sigma_lal(stack["H1"])

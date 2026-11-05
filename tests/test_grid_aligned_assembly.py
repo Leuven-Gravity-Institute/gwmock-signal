@@ -23,6 +23,7 @@ pytest.importorskip("ripplegw", reason="ripple not installed")
 
 import gwmock_signal.injection.core as injection_core  # noqa: E402
 from gwmock_signal.jax_batch import assemble_segments, simulate_cbc_batch  # noqa: E402
+from gwmock_signal.projection.effects import ProjectionEffects  # noqa: E402
 from gwmock_signal.projection.resampling import edge_padding  # noqa: E402
 from gwmock_signal.sampling_grid import SamplingGrid  # noqa: E402
 
@@ -72,7 +73,7 @@ def _assembled(coa_time: np.ndarray, *, grid: SamplingGrid | None, earth_rotatio
         sampling_frequency=_FS,
         minimum_frequency=_F_MIN,
         parameters=parameters,
-        earth_rotation=earth_rotation,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
         output_grid=grid,
     )
     segments = assemble_segments(batch, segment_duration=_SEGMENT, segment_start_times=_STARTS)
@@ -174,7 +175,7 @@ def test_both_branches_report_alignment(earth_rotation: bool) -> None:
         sampling_frequency=_FS,
         minimum_frequency=_F_MIN,
         parameters=parameters,
-        earth_rotation=earth_rotation,
+        effects=ProjectionEffects.long_wavelength(earth_rotation=earth_rotation),
         output_grid=_grid(),
     )
     assert batch.grid is not None, "alignment metadata missing, so assembly would resample"

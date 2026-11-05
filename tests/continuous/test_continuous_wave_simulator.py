@@ -21,6 +21,8 @@ entirely correct. Nothing about a single segment's output can reveal it.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -31,10 +33,9 @@ except ModuleNotFoundError as exc:  # Python 3.15: GWpy does not install yet; it
         raise
     TimeSeries = None
 
-pytest.importorskip("ripplegw", reason="the [jax] extra is not installed")
-
 from gwmock_signal.continuous import ContinuousWaveSimulator
 from gwmock_signal.projection import network
+from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import _project
 from gwmock_signal.projection.resampling import edge_padding
 
@@ -56,6 +57,10 @@ _SOURCE = {
 
 
 def _simulator(**overrides) -> ContinuousWaveSimulator:
+    """The device backend, the package's default, unless a test asks otherwise.
+
+    Tests that never project build the NumPy one, so that they run where JAX is not installed.
+    """
     kwargs = {
         "earth_ephemeris": _EARTH,
         "sun_ephemeris": _SUN,
@@ -63,6 +68,8 @@ def _simulator(**overrides) -> ContinuousWaveSimulator:
         "spindowns": (-1.0e-10,),
     }
     kwargs.update(overrides)
+    if kwargs.get("projection_backend", "jax") == "jax":
+        pytest.importorskip("jax", reason="the [jax] extra is not installed")
     return ContinuousWaveSimulator(**kwargs)
 
 
@@ -118,32 +125,23 @@ class TestPhaseCoherenceAcrossSegments:
         assert worst < 1e-9, f"segments disagree with the continuous signal by {worst:.3e} of peak"
 
     def test_a_fractional_epoch_changes_the_signal(self):
-        """The sub-second part of the epoch must reach the generator.
+        """The sub-second part of the start time must reach the phase.
 
-        The epoch is split into an integer GPS second and a remainder folded into the sample
-        offsets, because ripple takes ``start_gps`` as an integer. Every other test starts on a
-        whole second, so that remainder is always 0.0 and the path is never exercised.
-
-        Comparing segments against a long call cannot catch this: dropping the remainder shifts
-        both by the same amount, so they still agree with each other. What does catch it is that
-        two epochs inside the *same* second must give different output -- if the fraction is
-        discarded, ``floor`` maps them to the same start and the outputs are identical.
+        Every other test starts on a whole second, so a generator that floored its start would pass
+        them all. Two starts 0.375 s apart within the same GPS second must give different output.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         n_samples = int(60 * _FS)
 
-        # Deliberately against the private generator rather than `simulate`. The epoch also sets
-        # `t0` on the polarizations, and the projection evaluates antenna patterns at those absolute
-        # times -- so the *projected* output differs between two epochs even when the fraction never
-        # reaches ripple at all. Going through the public path would pass either way and prove
-        # nothing; this is the only place the split is observable.
+        # Deliberately against the private generator rather than `simulate`, whose output also differs
+        # between two epochs through the antenna pattern, so it would pass either way.
         kwargs = {"n_samples": n_samples, "sampling_frequency": _FS}
-        on_the_second, _ = simulator._geocentre_polarizations(_SOURCE, epoch=_EPOCH, **kwargs)
-        part_way_through, _ = simulator._geocentre_polarizations(_SOURCE, epoch=_EPOCH + 0.375, **kwargs)
+        on_the_second, _ = simulator._ssb_polarizations(_SOURCE, start_ssb=_EPOCH, **kwargs)
+        part_way_through, _ = simulator._ssb_polarizations(_SOURCE, start_ssb=_EPOCH + 0.375, **kwargs)
 
         assert not np.array_equal(on_the_second, part_way_through), (
-            "epochs 0.375 s apart within the same GPS second produced identical polarizations, so "
-            "the sub-second part of the epoch is being discarded"
+            "starts 0.375 s apart within the same GPS second produced identical polarizations, so "
+            "the sub-second part of the start is being discarded"
         )
 
     @pytest.mark.requires_gwpy
@@ -188,12 +186,12 @@ class TestConstruction:
     def test_a_non_finite_ssb_reference_is_refused(self):
         """A NaN or infinite reference would poison every sample without saying why."""
         with pytest.raises(ValueError, match="finite"):
-            _simulator(reference_time_ssb=float("nan"))
+            _simulator(reference_time_ssb=float("nan"), projection_backend="numpy")
 
     @pytest.mark.requires_gwpy
     def test_required_parameters_are_named_when_missing(self):
         """The error names the absent key, rather than failing later inside ripple."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         incomplete = {k: v for k, v in _SOURCE.items() if k != "frequency"}
 
         with pytest.raises(ValueError, match="frequency"):
@@ -213,7 +211,7 @@ class TestConstruction:
         reasonable trade for a sub-second merger and meaningless for a signal running for months --
         and the output would look entirely normal while being wrong.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="earth_rotation=False is not available"):
             simulator.simulate(
@@ -222,13 +220,13 @@ class TestConstruction:
                 _zeros(_EPOCH, 64),
                 sampling_frequency=_FS,
                 minimum_frequency=0.0,
-                earth_rotation=False,
+                effects=ProjectionEffects.long_wavelength(earth_rotation=False),
             )
 
     def test_non_finite_spindowns_are_refused(self):
         """A NaN spindown poisons every sample, with nothing in the output naming the cause."""
         with pytest.raises(ValueError, match="spindowns must all be finite"):
-            _simulator(spindowns=(-1.0e-10, float("nan")))
+            _simulator(spindowns=(-1.0e-10, float("nan")), projection_backend="numpy")
 
     @pytest.mark.requires_gwpy
     def test_background_channels_must_share_a_grid(self):
@@ -237,7 +235,7 @@ class TestConstruction:
         A channel describing a different stretch of time would silently receive a signal from the
         wrong interval, because only the first channel is consulted for the epoch and length.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = _zeros(_EPOCH, 640)
         background[_DETECTORS[1]] = TimeSeries(np.zeros(320), t0=_EPOCH, sample_rate=_FS, unit="strain")
 
@@ -247,7 +245,7 @@ class TestConstruction:
     @pytest.mark.requires_gwpy
     def test_background_channels_must_share_an_epoch(self):
         """Same hazard as the length check, and equally invisible in the output."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = _zeros(_EPOCH, 640)
         background[_DETECTORS[1]] = TimeSeries(np.zeros(640), t0=_EPOCH + 100.0, sample_rate=_FS, unit="strain")
 
@@ -262,7 +260,7 @@ class TestConstruction:
         complaint from gwpy -- the signal comes out time-stretched by the ratio while every channel
         still looks individually plausible.
         """
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="but the background is at"):
             simulator.simulate(
@@ -277,7 +275,7 @@ class TestConstruction:
     @pytest.mark.parametrize("key", sorted(_SOURCE.keys() - {"polarization_angle"}))
     def test_non_finite_source_parameters_are_refused(self, key: str):
         """A NaN anywhere in the source returns an all-NaN series with nothing naming the cause."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         params = dict(_SOURCE)
         params[key] = float("nan")
 
@@ -291,7 +289,7 @@ class TestConstruction:
     )
     def test_unrepresentable_frequencies_are_refused(self, frequency: float, expected: str):
         """Zero and negative are not signals; at or above Nyquist the tone aliases silently."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         params = dict(_SOURCE, frequency=frequency)
 
         with pytest.raises(ValueError, match=expected):
@@ -299,7 +297,7 @@ class TestConstruction:
 
     def test_a_background_of_plain_arrays_is_refused_clearly(self):
         """Otherwise it dies later with an AttributeError about `t0`, which names nothing useful."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
         background = {name: np.zeros(64) for name in _DETECTORS}
 
         with pytest.raises(TypeError, match=r"must be gwmock_signal\.TimeSeries or GWpy TimeSeries"):
@@ -307,7 +305,7 @@ class TestConstruction:
 
     def test_a_background_is_required(self):
         """A continuous wave has no duration of its own; the segment comes from the background."""
-        simulator = _simulator()
+        simulator = _simulator(projection_backend="numpy")
 
         with pytest.raises(ValueError, match="requires a background"):
             simulator.simulate(_SOURCE, _DETECTORS, None, sampling_frequency=_FS, minimum_frequency=0.0)
@@ -377,25 +375,31 @@ class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
 
     @pytest.mark.requires_gwpy
     def test_the_buffer_the_simulator_generates_is_padded_at_both_ends(self, monkeypatch):
-        """Pin the sizing itself, which is what makes the guard see a longer span."""
+        """Pin the sizing itself, which is what makes the guard see a longer span.
+
+        The polarizations handed to the projection start ``edge_padding`` samples before the
+        background, and are that much longer at each end, and longer again by the range of the
+        solar-system delay across the segment.
+        """
+        from gwmock_signal.continuous import simulator as module
+
         simulator = _simulator()
         seen: dict[str, float] = {}
-        real = simulator._geocentre_polarizations
 
-        def spy(params, *, epoch, n_samples, sampling_frequency):
-            seen.update(epoch=epoch, n_samples=n_samples)
-            return real(params, epoch=epoch, n_samples=n_samples, sampling_frequency=sampling_frequency)
+        def spy(polarizations, *args, **kwargs):
+            seen.update(t0=float(polarizations["plus"].t0), n_samples=len(polarizations["plus"].data))
+            return _project(polarizations, *args, **kwargs)
 
-        monkeypatch.setattr(simulator, "_geocentre_polarizations", spy)
+        monkeypatch.setattr(module, "_project", spy)
         n_samples = int(600 * _FS)
         _generate(simulator, _EPOCH, n_samples)
 
         margin = edge_padding(_FS)
         assert margin > 0
-        assert seen["n_samples"] == n_samples + 2 * margin
-        # And it starts before the background's epoch, by the same margin.
-        assert seen["epoch"] < _EPOCH
-        assert seen["epoch"] == pytest.approx(_EPOCH - margin / _FS, rel=0, abs=1e-6)
+        assert seen["n_samples"] >= n_samples + 2 * margin
+        # Over 600 s the delay changes by at most 1e-4 s per second, 0.06 s, plus a sample at each end.
+        assert seen["n_samples"] <= n_samples + 2 * margin + math.ceil(0.06 * _FS) + 2
+        assert seen["t0"] == pytest.approx(_EPOCH - margin / _FS, rel=0, abs=1e-6)
 
     @pytest.mark.requires_gwpy
     def test_the_jax_guard_refuses_between_the_nominal_and_padded_spans(self, monkeypatch):
@@ -424,14 +428,8 @@ class TestTheSpanLimitIsMeasuredOnThePaddedSpan:
 class TestANonFinitePolarizationIsRefused:
     """A non-finite signal must be refused, not written.
 
-    The motivating case was a ripplegw before 0.3.1, which returned NaN at the geocentre and raised
-    nothing. That is closed now: the `jax` extra floors ripplegw at 0.3.1, so reaching it takes a
-    deliberate downgrade. The guard stays because a second cause does not involve ripple at all --
-    see ``test_an_out_of_range_spindown_overflows_the_phase``.
-
-    The guard is written for the general condition rather than that one bug, so the tests cover
-    the general condition: either polarization, NaN or infinity, one bad sample as well as all of
-    them.
+    The phase is a polynomial in the time from the reference epoch, so an extreme spindown far from
+    that epoch overflows it; ``_validate_source`` requires the parameters finite but does not bound them.
     """
 
     @staticmethod
@@ -445,61 +443,14 @@ class TestANonFinitePolarizationIsRefused:
             "amplitude_cross": 7e-25,
         }
 
-    @staticmethod
-    def _spoiler(which: str, value: float):
-        """Return a stand-in for ripple's generator that spoils *which* polarization."""
-
-        def _generate(**kwargs):
-            length = len(kwargs["dt_rel"])
-            good = np.ones(length)
-            bad = np.ones(length)
-            bad[length // 2] = value
-            if which == "both":
-                return bad, bad.copy()
-            return (bad, good) if which == "plus" else (good, bad)
-
-        return _generate
-
     @pytest.mark.requires_gwpy
-    @pytest.mark.parametrize("which", ["both", "plus", "cross"])
-    @pytest.mark.parametrize("value", [np.nan, np.inf])
-    def test_a_non_finite_polarization_raises(self, which, value, monkeypatch):
-        """Parametrised over polarization and over NaN vs infinity.
+    def test_it_is_refused_through_the_public_entry_point(self):
+        """Guards the placement, not just the condition: nothing non-finite reaches a caller.
 
-        Over the polarization because a guard checking only ``plus`` passes an all-NaN test while
-        letting a cross-only failure through, and cross carries half the signal. Over the value
-        because a guard written with ``np.isnan`` instead of ``np.isfinite`` would miss infinity.
-        And a single bad sample rather than a whole bad array, because checking one element or a
-        slice would pass an all-NaN test and still write a corrupted frame.
-
-        Only ``ripplegw.waveforms.cw.PulsarSignal`` is patched. That module binds the name from
-        ``pulsar_signal`` at import, so patching the lower-case module rebinds something the
-        simulator never resolves -- an earlier version of this test patched both, and the second
-        one was inert.
+        An extreme spindown far from the reference epoch overflows the phase; see
+        ``test_an_out_of_range_spindown_overflows_the_phase`` for the mechanism.
         """
-        pytest.importorskip("ripplegw")
-        monkeypatch.setattr(
-            "ripplegw.waveforms.cw.PulsarSignal.generate_pulsar_polarizations",
-            self._spoiler(which, value),
-        )
-
-        with pytest.raises(RuntimeError, match="not all finite"):
-            _simulator()._geocentre_polarizations(self._source(), epoch=_EPOCH, n_samples=64, sampling_frequency=64.0)
-
-    @pytest.mark.requires_gwpy
-    def test_it_is_refused_through_the_public_entry_point(self, monkeypatch):
-        """Guards the placement, not just the condition.
-
-        Both other tests call the private helper, so a refactor that moved the check after the
-        projection or the margin trim would keep them passing while frames full of NaN went out
-        of ``simulate``. This is the assertion that says nothing reaches a caller.
-        """
-        pytest.importorskip("ripplegw")
-        monkeypatch.setattr(
-            "ripplegw.waveforms.cw.PulsarSignal.generate_pulsar_polarizations",
-            self._spoiler("both", np.nan),
-        )
-        simulator = _simulator()
+        simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0, projection_backend="numpy")
         background = {
             name: TimeSeries(np.zeros(64), t0=_EPOCH, sample_rate=64.0, unit="strain") for name in ("H1", "L1")
         }
@@ -514,14 +465,9 @@ class TestANonFinitePolarizationIsRefused:
             )
 
     def test_a_finite_signal_is_returned_unchanged(self):
-        """The guard must not reject the working library it exists to let through.
-
-        Runs against the real pinned ripple, so it doubles as a check that the pin is in place.
-        """
-        pytest.importorskip("ripplegw")
-
-        plus, cross = _simulator()._geocentre_polarizations(
-            self._source(), epoch=_EPOCH, n_samples=64, sampling_frequency=64.0
+        """The guard must not reject an ordinary signal."""
+        plus, cross = _simulator(projection_backend="numpy")._ssb_polarizations(
+            self._source(), start_ssb=_EPOCH, n_samples=64, sampling_frequency=64.0
         )
 
         assert np.all(np.isfinite(plus))
@@ -542,10 +488,10 @@ def test_an_out_of_range_spindown_overflows_the_phase():
     Absurd values, deliberately: the point is that ``_validate_source`` bounds finiteness and not
     magnitude, so this is reachable through the public interface rather than only in principle.
     """
-    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0)
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=0.0, projection_backend="numpy")
 
     with pytest.raises(RuntimeError, match="not all finite"):
-        simulator._geocentre_polarizations(
+        simulator._ssb_polarizations(
             {
                 "right_ascension": 1.1,
                 "declination": 0.3,
@@ -554,7 +500,7 @@ def test_an_out_of_range_spindown_overflows_the_phase():
                 "amplitude_plus": 1e-24,
                 "amplitude_cross": 7e-25,
             },
-            epoch=_EPOCH,
+            start_ssb=_EPOCH,
             n_samples=64,
             sampling_frequency=64.0,
         )
@@ -566,9 +512,9 @@ def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
     Without this, the case above reads as "a large spindown produces NaN", which is false and would
     send someone bounding spindowns rather than looking at the epoch difference.
     """
-    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=_EPOCH)
+    simulator = _simulator(spindowns=(1e300,), reference_time_ssb=_EPOCH, projection_backend="numpy")
 
-    plus, _ = simulator._geocentre_polarizations(
+    plus, _ = simulator._ssb_polarizations(
         {
             "right_ascension": 1.1,
             "declination": 0.3,
@@ -577,7 +523,7 @@ def test_the_same_spindown_is_fine_with_a_nearby_reference_epoch():
             "amplitude_plus": 1e-24,
             "amplitude_cross": 7e-25,
         },
-        epoch=_EPOCH,
+        start_ssb=_EPOCH,
         n_samples=64,
         sampling_frequency=64.0,
     )
@@ -616,9 +562,8 @@ def test_the_continuous_wave_path_precesses_the_source_direction():
 
     assert spy.call_count > 0, "the projection was never called, so this asserts nothing"
     for call in spy.call_args_list:
-        assert call.kwargs["precess_source_direction"] is True, (
-            "the continuous-wave path must ask for the frame-of-date convention explicitly; the "
-            "projection defaults to the compact-binary one"
+        assert call.kwargs["effects"].source_precession is True, (
+            "the continuous-wave path must use the frame-of-date convention by default"
         )
 
 
@@ -643,7 +588,9 @@ def test_a_background_of_native_series_gives_the_same_strain_as_gwpy():
 
 
 def test_the_finite_arm_option_reaches_the_projection(monkeypatch):
-    """``finite_arm_length`` is passed on to the projection, as ``earth_rotation`` is."""
+    """The effects are passed on to the projection."""
+    from gwmock_signal.timeseries import TimeSeries as NativeTimeSeries
+
     seen = {}
 
     def recording(*args, **kwargs):
@@ -656,9 +603,81 @@ def test_the_finite_arm_option_reaches_the_projection(monkeypatch):
         simulator.simulate(
             _SOURCE,
             _DETECTORS,
-            _zeros(_EPOCH, 64),
+            {name: NativeTimeSeries(np.zeros(64), t0=_EPOCH, sample_rate=_FS, unit="strain") for name in _DETECTORS},
             sampling_frequency=_FS,
             minimum_frequency=0.0,
-            finite_arm_length=True,
+            effects=ProjectionEffects(shapiro_delay=False),
         )
-    assert seen["finite_arm_length"] is True
+    assert seen["effects"] == ProjectionEffects(shapiro_delay=False)
+
+
+@pytest.mark.requires_gwpy
+def test_the_signal_is_the_pulsar_phase_at_lalpulsars_barycentric_time():
+    """End to end against LALPulsar: the phase evaluated at ``t - tau + deltaT``, sample by sample.
+
+    ``deltaT`` comes from ``lalpulsar.Barycenter`` for a detector at the geocentre, the part every source
+    now shares; the site delay and antenna pattern from the projection's kernels, whose own anchors are in
+    ``tests/projection``. What is left is the resampling kernel's error at this frequency.
+    """
+    lal = pytest.importorskip("lal")
+    lalpulsar = pytest.importorskip("lalpulsar")
+    from gwmock_signal.projection import kernels
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.network import _gmst_accurate_array
+    from gwmock_signal.projection.sidereal import precessed_sky_anchor_and_rate
+
+    simulator = _simulator(projection_backend="numpy")
+    earth, sun = simulator.ephemeris.tables()
+    state = lalpulsar.InitBarycenter(earth.source, sun.source)
+    n_samples = int(120 * _FS)
+    # Finite arms left out: the reference treats the detector as its vertex.
+    stack = simulator.simulate(
+        _SOURCE,
+        _DETECTORS,
+        _zeros(_EPOCH, n_samples),
+        sampling_frequency=_FS,
+        minimum_frequency=0.0,
+        effects=ProjectionEffects(finite_arm_length=False),
+    )
+    strain = np.asarray(stack[_DETECTORS[0]], dtype=float)
+
+    offsets = np.arange(n_samples) / _FS
+    (ra, dec), (d_ra, d_dec) = precessed_sky_anchor_and_rate(_SOURCE["right_ascension"], _SOURCE["declination"], _EPOCH)
+    gmst = _gmst_accurate_array(_EPOCH + offsets)
+    sky = (gmst, ra + d_ra * offsets, dec + d_dec * offsets)
+    response, location = reconstructed_geometry(_DETECTORS[0])
+    site = kernels.time_delay_from_geocenter(location, *sky, xp=np)
+    f_plus, f_cross = kernels.antenna_pattern(response, *sky, _SOURCE["polarization_angle"], xp=np)
+
+    delta = np.empty(n_samples)
+    for index, offset in enumerate(offsets - site):
+        gps = lal.LIGOTimeGPS(_EPOCH) + float(offset)
+        earth_state = lalpulsar.EarthState()
+        lalpulsar.BarycenterEarth(earth_state, gps, state)
+        given = lalpulsar.BarycenterInput()
+        given.site, given.tgps = lal.Detector(), gps
+        given.alpha, given.delta, given.dInv = _SOURCE["right_ascension"], _SOURCE["declination"], 0.0
+        emitted = lalpulsar.EmissionTime()
+        lalpulsar.Barycenter(emitted, given, earth_state)
+        delta[index] = emitted.deltaT
+    tau = (_EPOCH - simulator.reference_time_ssb) + offsets - site + delta
+    phase = _SOURCE["initial_phase"] + 2 * np.pi * (_SOURCE["frequency"] * tau + simulator.spindowns[0] * tau**2 / 2)
+    expected = f_plus * _SOURCE["amplitude_plus"] * np.cos(phase) + f_cross * _SOURCE["amplitude_cross"] * np.sin(phase)
+
+    interior = slice(n_samples // 20, -n_samples // 20)
+    error = np.max(np.abs(strain[interior] - expected[interior])) / np.max(np.abs(expected))
+    assert error < 1e-6, f"{error:.2e} of peak from the phase at LALPulsar's barycentric time"
+
+
+@pytest.mark.requires_gwpy
+def test_the_device_and_host_projections_agree_with_every_effect():
+    """The default device projection carries every effect, the solar-system delay in full, as the host does.
+
+    The difference left is float64 on a delay of up to 500 s, about 1e-13 s.
+    """
+    pytest.importorskip("jax", reason="the [jax] extra is not installed")
+    n_samples = int(256 * _FS)
+    device, host = (
+        _generate(_simulator(projection_backend=backend), _EPOCH, n_samples) for backend in ("jax", "numpy")
+    )
+    assert np.max(np.abs(device - host)) < 1e-9 * np.max(np.abs(host))
