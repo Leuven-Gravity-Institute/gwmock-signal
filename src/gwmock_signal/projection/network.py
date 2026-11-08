@@ -514,7 +514,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
     :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end before they
     are projected, and every returned series covers that padded span: it starts that many
     samples before the input and has twice that many more samples, on the input's own sample
-    lattice. The padding is sized for the largest delay any ground-based detector can have, plus
+    lattice -- or, with ``output_grid``, the same span on that lattice, starting up to one sample
+    earlier. The padding is sized for the largest delay any ground-based detector can have, plus
     the resampling kernel's half-width, so it is the same for every detector, sky position and
     backend: all returned series share one start time and length. Inside the input's span the
     samples are what a same-length projection gives, up to rounding; outside it they hold the
@@ -886,10 +887,17 @@ def _project(  # noqa: PLR0913
                 f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal the "
                 f"polarizations' sample rate ({hp.sample_rate})."
             )
-        start_index, fraction = output_grid.split_index(float(hp.t0))
+        # Split at the caller's own start, then stepped back by the whole-sample padding, as
+        # `simulate_cbc_batch` does. The padded start is that start less a padding that is not a dyadic
+        # time at every rate (at 3000 Hz it is not), so it is rounded by up to half a unit in the last
+        # place of a GPS time, 1.2e-7 s, and a fraction taken from it would misplace every sample by up to
+        # 4e-4 of one: 4e-6 of peak for a 40 Hz signal. Its samples are not moved by that rounding, only
+        # its label.
+        padding = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta) if keep_delayed_samples else 0
+        start_index, fraction = output_grid.split_index(input_start)
         require_shift_within_padding(fraction, name="alignment shift")
         lattice_shift = float(fraction)
-        time_array = output_grid.time_of(int(start_index) + np.arange(hp.n_samples, dtype=np.int64))
+        time_array = output_grid.time_of(int(start_index) - padding + np.arange(hp.n_samples, dtype=np.int64))
     reference = float(0.5 * (time_array[0] + time_array[-1]))
     # The J2000 position, before any precession below: the Earth's orbit is in that frame.
     timing = _solar_timing(

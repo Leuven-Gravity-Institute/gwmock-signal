@@ -83,6 +83,19 @@ samples at 8192 Hz, would otherwise be lost entirely. Crop to the input's span
 if you need it, at the cost of that content; injecting the series into data
 places it by its own start time.
 
+When the strain will be added to a segment, pass that segment's lattice as
+`output_grid=SamplingGrid(segment_start, sample_rate)` (from
+`gwmock_signal.sampling_grid`). The returned series then starts on that lattice,
+up to one sample before the padded span, and its samples are the detector strain
+at the lattice times: the sub-sample offset is applied with the delay, in the
+one resampling the projection already makes. Adding it to the segment is then an
+add by whole samples. Without it, a series that starts between the segment's
+samples must be resampled a second time to be added, and that second step cannot
+reproduce what the polarizations' band-limited interpolant puts past the ends of
+the buffer. For a waveform that starts at 3e-5 of its peak, the difference from
+the exact strain is up to 3e-10 of the peak, all of it near Nyquist.
+`TransientSimulator.simulate` takes the same `output_grid`.
+
 ## Example 2 — Short segment, fixed antenna pattern
 
 For very short waveforms where Earth rotation over the segment is negligible:

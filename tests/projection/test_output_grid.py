@@ -21,7 +21,7 @@ from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.timeseries import TimeSeries
 
 _FS = 1024.0
-_N = 32 * 1024
+_DURATION = 32
 _EPOCH = 1_400_000_000.0
 _SKY = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
 _ROTATING = ProjectionEffects.long_wavelength(earth_rotation=True)
@@ -31,36 +31,38 @@ _ROTATING = ProjectionEffects.long_wavelength(earth_rotation=True)
 _TOLERANCE = 1e-12
 
 
-def _polarizations(t0: float) -> dict[str, TimeSeries]:
-    """A Gaussian-windowed 40 Hz tone and its quadrature, sampled at ``t0 + k / fs``.
+def _polarizations(t0: float, rate: float = _FS) -> dict[str, TimeSeries]:
+    """A Gaussian-windowed 40 Hz tone and its quadrature, sampled at ``t0 + k / rate``.
 
     The times are offsets from the window's centre, so the analytic values are evaluated without
     subtracting GPS-sized numbers.
     """
     centre = _EPOCH + 16.0
-    offsets = (t0 - centre) + np.arange(_N) / _FS
+    offsets = (t0 - centre) + np.arange(int(_DURATION * rate)) / rate
     envelope = np.exp(-((offsets / 2.0) ** 2))
     phase = 2.0 * np.pi * 40.0 * offsets
     return {
-        "plus": TimeSeries(envelope * np.cos(phase), t0=t0, sample_rate=_FS),
-        "cross": TimeSeries(envelope * np.sin(phase), t0=t0, sample_rate=_FS),
+        "plus": TimeSeries(envelope * np.cos(phase), t0=t0, sample_rate=rate),
+        "cross": TimeSeries(envelope * np.sin(phase), t0=t0, sample_rate=rate),
     }
 
 
-def _project(t0: float, effects: ProjectionEffects, backend: str, grid: SamplingGrid | None, **kwargs):
+def _project(
+    t0: float, effects: ProjectionEffects, backend: str, grid: SamplingGrid | None, rate: float = _FS, **kwargs
+):
     return project_polarizations_to_network(
-        _polarizations(t0), ["E1"], effects=effects, backend=backend, output_grid=grid, **_SKY, **kwargs
+        _polarizations(t0, rate), ["E1"], effects=effects, backend=backend, output_grid=grid, **_SKY, **kwargs
     )["E1"]
 
 
-def _compare(effects: ProjectionEffects, backend: str, fraction: float, **kwargs) -> None:
-    grid = SamplingGrid(_EPOCH, _FS)
-    off = _project(_EPOCH + 3.0 + fraction / _FS, effects, backend, grid, **kwargs)
+def _compare(effects: ProjectionEffects, backend: str, fraction: float, rate: float = _FS, **kwargs) -> None:
+    grid = SamplingGrid(_EPOCH, rate)
+    off = _project(_EPOCH + 3.0 + fraction / rate, effects, backend, grid, rate, **kwargs)
     # The same signal sampled on the lattice sample preceding the off-lattice start, projected unaligned.
-    on = _project(_EPOCH + 3.0, effects, backend, None, **kwargs)
+    on = _project(_EPOCH + 3.0, effects, backend, None, rate, **kwargs)
 
     assert grid.is_on_lattice(off.t0)
-    assert off.t0 == pytest.approx(on.t0, abs=1e-9 / _FS)
+    assert off.t0 == pytest.approx(on.t0, abs=1e-6 / rate)
     a, b = np.asarray(off.data), np.asarray(on.data)
     assert a.shape == b.shape
     error = float(np.max(np.abs(a - b))) / float(np.max(np.abs(b)))
@@ -71,6 +73,48 @@ def _compare(effects: ProjectionEffects, backend: str, fraction: float, **kwargs
 def test_numpy_projection_lands_on_the_lattice(fraction: float) -> None:
     """The host path's strain at the lattice samples, for shifts across a sample."""
     _compare(_ROTATING, "numpy", fraction)
+
+
+def test_a_rate_whose_padding_is_not_a_dyadic_time_lands_on_the_lattice() -> None:
+    """At 3000 Hz the padding is not a dyadic time, so subtracting it from a GPS-sized start rounds.
+
+    The rounding is up to half a unit in the last place, 1.2e-7 s. A lattice offset taken from the padded
+    start was wrong by up to 4e-4 of a sample, 4e-6 of peak at 40 Hz. It is taken from the caller's own
+    start, before padding, as ``simulate_cbc_batch`` does. An unaligned projection carries the rounded
+    label too (9e-11 of peak here), so the reference is the analytic strain at the lattice times rather
+    than another projection; the aligned result meets it to 5e-13.
+    """
+    from gwmock_signal.projection.geometry import reconstructed_geometry
+    from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
+    from gwmock_signal.projection.sidereal import gmst_rad_astropy
+
+    rate = 3000.0
+    grid = SamplingGrid(_EPOCH, rate)
+    strain = _project(_EPOCH + 3.0 + 0.612 / rate, _ROTATING, "numpy", grid, rate)
+    assert grid.is_on_lattice(strain.t0)
+    # Offsets from the epoch in whole samples, so the analytic times carry no GPS-sized subtraction.
+    first = round((float(strain.t0) - _EPOCH) * rate)
+    since_epoch = (first + np.arange(len(strain.data))) / rate
+    response, location = reconstructed_geometry("E1")
+    gmst = gmst_rad_astropy(_EPOCH + since_epoch)
+    sky = (_SKY["right_ascension"], _SKY["declination"])
+    f_plus, f_cross = antenna_pattern(response, gmst, *sky, _SKY["polarization_angle"], xp=np)
+    retarded = since_epoch - 16.0 - time_delay_from_geocenter(location, gmst, *sky, xp=np)
+    envelope = np.exp(-((retarded / 2.0) ** 2))
+    phase = 2.0 * np.pi * 40.0 * retarded
+    expected = f_plus * envelope * np.cos(phase) + f_cross * envelope * np.sin(phase)
+    error = float(np.max(np.abs(np.asarray(strain.data) - expected))) / float(np.max(np.abs(expected)))
+    assert error < _TOLERANCE, error
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+def test_the_oversampled_tapered_path_lands_on_the_lattice(backend: str) -> None:
+    """With ``tapered``, the kernel reads a series oversampled by a factor, and the shift is scaled with it."""
+    if backend == "jax":
+        jax = pytest.importorskip("jax", reason="jax not installed")
+        jax.config.update("jax_enable_x64", True)
+    # The window is 1.6e-28 of its peak at the buffer's ends: a whole signal tapered to zero.
+    _compare(_ROTATING, backend, 0.612, tapered=True)
 
 
 def test_the_constant_pattern_branch_lands_on_the_lattice() -> None:
@@ -109,7 +153,11 @@ def test_a_grid_at_another_rate_is_refused() -> None:
 
 
 def test_the_simulator_passes_the_grid_on() -> None:
-    """``simulate`` returns a compact binary's strain on the lattice it is given."""
+    """``simulate`` returns a compact binary's strain on the lattice it is given.
+
+    Forwarding only: this checks where the strain starts, not its values, which the projection tests
+    above check for every branch.
+    """
     pytest.importorskip("lal", reason="lalsuite not installed")
     from gwmock_signal.simulator import CBCSimulator
 
