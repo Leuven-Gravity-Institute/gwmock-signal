@@ -92,13 +92,14 @@ one resampling the projection already makes. Adding it to the segment is then an
 add by whole samples. Without it, a series that starts between the segment's
 samples must be resampled a second time to be added, and that second step cannot
 reproduce what the polarizations' band-limited interpolant puts past the ends of
-the buffer. How much that costs depends on the waveform and is largest at the
-buffer's ends: measured on compact binaries at 8192 Hz, it reached 1.5e-8 of the
-peak at a buffer's first sample, and at least 2 s from either end 3e-10 for a
-waveform starting at 3e-5 of its peak and 4e-9 for one with content close to
-Nyquist, almost all of it near Nyquist. `TransientSimulator.simulate` takes the
-same `output_grid`; with a `background` on that lattice the strain is added to
-it by whole samples.
+the buffer. The cost is largest at the buffer's ends, where it is of the order
+of the strain's own value there, and grows as the signal's content approaches
+Nyquist. Measured at 8192 Hz, it is 2e-10 of the peak at the ends of a 30 + 25
+solar-mass binary black hole whose strain starts at 1.6e-10, and 1.6e-5 for a
+binary neutron star whose 256 s buffer starts at 4.3e-6; at least 2 s from the
+ends, 3e-10 to 4e-9 on the compact binaries measured, almost all of it near
+Nyquist. `TransientSimulator.simulate` takes the same `output_grid`; with a
+`background` on that lattice the strain is added to it by whole samples.
 
 ## Example 2 — Short segment, fixed antenna pattern
 
