@@ -103,8 +103,9 @@ sample moves it by no more than 1e-4 samples, the threshold LALSimulation's
 time it carries. A start a few float64 steps off the grid is therefore not
 aligned: at GPS 1e9 and 8192 Hz two steps are 1/512 sample, 0.24 µs. A series
 you built on the target's grid can round further off it than 1e-4 samples at a
-rate that is not a power of two (`t0 + k / 4000` misses its sample by up to
-2.3e-4 samples). Declare it, and it is added sample for sample:
+rate that is not a power of two (at GPS 1e9, `t0 + k / 4000` misses its sample
+by up to half a float64 step, 2.4e-4 samples). Declare it, and it is added
+sample for sample:
 
 ```python
 out = inject_strain(target, built_on_grid, on_grid=True)

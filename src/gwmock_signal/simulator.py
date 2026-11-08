@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     import gwpy.timeseries
 
     from gwmock_signal.detector import CustomDetector
+    from gwmock_signal.sampling_grid import SamplingGrid
 
 logger = logging.getLogger("gwmock_signal.simulator")
 
@@ -320,6 +321,7 @@ class TransientSimulator(GWSimulator):
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
         finite_arm_length: bool | None = None,
+        output_grid: SamplingGrid | None = None,
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
@@ -335,7 +337,8 @@ class TransientSimulator(GWSimulator):
             detector_names: IFO codes (e.g. ``'H1'``, ``'L1'``, ``'V1'``).
             background: Optional mapping of detector name to background
                 ``TimeSeries`` (e.g. noise or zeros), the package's or GWpy's. If omitted, the projected
-                detector response is returned directly on the waveform time grid, extended at each
+                detector response is returned directly on the waveform time grid, or on
+                ``output_grid`` when that is given, extended at each
                 end by the padding that keeps the geocentre-to-detector delay from pushing signal
                 out of the buffer; see
                 :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
@@ -351,6 +354,10 @@ class TransientSimulator(GWSimulator):
                 that field when given.
             finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
                 that field when given.
+            output_grid: A lattice for the projected strain, such as the segment it will be added to;
+                see :func:`~gwmock_signal.projection.network.project_polarizations_to_network`. Without
+                ``background``, the returned strain then starts on it, so it is added to that segment
+                without being resampled again.
 
         Returns:
             ``DetectorStrainStack`` containing the simulated strain for each
@@ -392,15 +399,23 @@ class TransientSimulator(GWSimulator):
             tapered=self.polarizations_tapered(params, sampling_frequency),
             ephemeris=self.ephemeris,
             reference_time=self.timing_reference(params),
+            output_grid=output_grid,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
+        backgrounds = {name: as_timeseries(background[name]) for name in str_names}
         injected = {
             name: _inject(
-                as_timeseries(background[name]),
+                backgrounds[name],
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
                 tapered=self.polarizations_tapered(params, sampling_frequency),
+                # Built on `output_grid`, so on a background on that same lattice any fraction in its
+                # offset is the rounding of its timestamps (up to half a float64 step: at 4000 Hz, 2.4e-4 of a sample at GPS 1e9), not a
+                # shift: it is added by whole samples. A background on another lattice is placed as before.
+                on_grid=output_grid is not None
+                and backgrounds[name].sample_rate == output_grid.sampling_frequency
+                and bool(output_grid.is_on_lattice(backgrounds[name].t0)),
             )
             for name in str_names
         }

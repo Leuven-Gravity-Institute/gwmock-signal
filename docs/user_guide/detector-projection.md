@@ -83,6 +83,26 @@ samples at 8192 Hz, would otherwise be lost entirely. Crop to the input's span
 if you need it, at the cost of that content; injecting the series into data
 places it by its own start time.
 
+When the strain will be added to a segment, pass that segment's lattice as
+`output_grid=SamplingGrid(segment_start, sample_rate)` (from
+`gwmock_signal.sampling_grid`). The returned series then starts on that lattice,
+up to one sample before the padded span, and its samples are the detector strain
+at the lattice times: the sub-sample offset is applied with the delay, in the
+one resampling the projection already makes. Adding it to the segment is then an
+add by whole samples. Without it, a series that starts between the segment's
+samples must be resampled a second time to be added, and that second step cannot
+reproduce what the polarizations' band-limited interpolant puts past the ends of
+the buffer. The cost is largest at the buffer's ends, where it is of the order
+of the strain's own value there, and grows as the signal's content approaches
+Nyquist. Measured at 8192 Hz, it is 2e-10 of the peak at the ends of a 30 + 25
+solar-mass binary black hole whose strain starts at 1.6e-10, and 1.6e-5 for a
+binary neutron star whose 256 s buffer starts at 4.3e-6; at least 2 s from the
+ends, 3e-10 to 4e-9 on the binary black holes and neutron star-black hole
+binaries measured, almost all of it near Nyquist; the binary neutron star is
+still near its peak there, and reached 3.6e-6. `TransientSimulator.simulate`
+takes the same `output_grid`; with a `background` on that lattice the strain is
+added to it by whole samples.
+
 ## Example 2 — Short segment, fixed antenna pattern
 
 For very short waveforms where Earth rotation over the segment is negligible:

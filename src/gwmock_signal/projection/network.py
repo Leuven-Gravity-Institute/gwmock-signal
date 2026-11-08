@@ -49,6 +49,7 @@ from gwmock_signal.projection.resampling import (
     SPEED_OF_LIGHT_M_S,
     edge_padding,
     oversample_fourier,
+    require_shift_within_padding,
     require_terrestrial_location,
     resample_uniform_sinc,
 )
@@ -58,6 +59,8 @@ from gwmock_signal.timeseries import TimeSeries, as_timeseries
 
 if TYPE_CHECKING:
     import gwpy.timeseries
+
+    from gwmock_signal.sampling_grid import SamplingGrid
 
 logger = logging.getLogger("gwmock_signal")
 
@@ -119,9 +122,7 @@ def _validate_polarizations(
     return hp, hc
 
 
-def _padded_for_delay(
-    hp: TimeSeries, hc: TimeSeries, *, sinc_taps: int, kaiser_beta: float
-) -> tuple[TimeSeries, TimeSeries]:
+def _padded_for_delay(hp: TimeSeries, hc: TimeSeries, *, pad: int) -> tuple[TimeSeries, TimeSeries]:
     """Return the polarizations zero-padded so no delayed sample falls outside the projection.
 
     Without this every detector series was exactly as long as the input while the delay moved up
@@ -130,9 +131,9 @@ def _padded_for_delay(
     :func:`~gwmock_signal.projection.resampling.edge_padding` -- the delay bound for any ground-based
     detector plus the kernel's half-width -- rather than by this network's largest delay, so every
     series shares one start and length and the device kernel's shape does not depend on the sky
-    position. ``t0`` moves back by whole samples, so the input's samples keep their times.
+    position. ``t0`` moves back by whole samples, so the input's samples keep their times. ``pad`` is that
+    many samples, computed once by the caller, which also places the result on an output lattice with it.
     """
-    pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
     return hp.pad(pad, pad), hc.pad(pad, pad)
 
 
@@ -296,6 +297,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
         solar_start_offset,
         solar_absorbed,
         solar_offset_samples,
+        extra_shift,
     ):
         solar = (
             None
@@ -328,6 +330,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
             arms=None if arm_lengths is None else arms,
             arm_lengths=arm_lengths,
             solar=solar,
+            extra_shift_samples=extra_shift,
         )
 
     return jax.jit(_project)
@@ -349,6 +352,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     tapered: bool = False,
     arm_lengths: Mapping[str, tuple[float, float]] | None = None,
     timing: _SolarTiming | None = None,
+    lattice_shift: float = 0.0,
 ) -> dict[str, TimeSeries]:
     """Run the rotating projection through the JAX primitive, one detector at a time.
 
@@ -460,6 +464,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
             float(rate),
             arms,
             *solar,
+            lattice_shift,
         )
         strains[name] = TimeSeries(
             np.asarray(projected, dtype=float),
@@ -487,6 +492,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
     earth_rotation: bool | None = None,
     precess_source_direction: bool | None = None,
     finite_arm_length: bool | None = None,
+    output_grid: SamplingGrid | None = None,
 ) -> dict[str, TimeSeries]:
     """Project tensor plus/cross strains onto detectors using detector geometry.
 
@@ -506,7 +512,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
     :func:`~gwmock_signal.projection.resampling.edge_padding` samples at each end before they
     are projected, and every returned series covers that padded span: it starts that many
     samples before the input and has twice that many more samples, on the input's own sample
-    lattice. The padding is sized for the largest delay any ground-based detector can have, plus
+    lattice -- or, with ``output_grid``, the same span on that lattice, starting up to one sample
+    earlier. The padding is sized for the largest delay any ground-based detector can have, plus
     the resampling kernel's half-width, so it is the same for every detector, sky position and
     backend: all returned series share one start time and length. Inside the input's span the
     samples are what a same-length projection gives, up to rounding; outside it they hold the
@@ -562,12 +569,21 @@ def project_polarizations_to_network(  # noqa: PLR0913
             ``source_precession``.
         finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
             that field when given.
+        output_grid: A lattice to put the returned series on, at the inputs' sample rate, such as
+            the segment the strain will be added to. Each series then starts at the lattice sample
+            preceding the padded input's start, up to one sample earlier, and its samples are the
+            detector strain at those lattice times: the sub-sample offset joins the delay in the one
+            resampling the projection makes. Adding the result to a series on the same lattice is
+            then an integer-offset add. Placing a series that is off the lattice needs a second
+            resampling instead, of strain that need not be band-limited at its ends, and
+            resampling a finished buffer cannot reproduce what the band-limited interpolant of the
+            polarizations puts past them. ``None``, the default, keeps the inputs' own lattice.
 
     Returns:
             Mapping from each detector name to the projected strain as a
             :class:`~gwmock_signal.timeseries.TimeSeries`, at the inputs' sample rate and on their
-            sample lattice, padded by ``edge_padding(sample_rate, sinc_taps, kaiser_beta)`` samples
-            at each end as described above.
+            sample lattice, or on ``output_grid`` when given, padded by
+            ``edge_padding(sample_rate, sinc_taps, kaiser_beta)`` samples at each end as described above.
 
     Raises:
         TypeError: If ``polarizations`` is not a mapping of time series as required.
@@ -576,7 +592,8 @@ def project_polarizations_to_network(  # noqa: PLR0913
             ``earth_rotation=False``, or the resampling kernel (``sinc_taps``, ``kaiser_beta``)
             is invalid -- checked on both branches, since it sizes the padding on both, or the
             finite-arm response is asked of a detector with no arm length, or a solar-system delay of
-            a span the ephemeris does not cover (2000 to 2040 for the default tables).
+            a span the ephemeris does not cover (2000 to 2040 for the default tables), or ``output_grid``
+            has another sample rate.
     """
     return _project(
         polarizations,
@@ -596,6 +613,7 @@ def project_polarizations_to_network(  # noqa: PLR0913
         tapered=tapered,
         ephemeris=ephemeris,
         reference_time=reference_time,
+        output_grid=output_grid,
     )
 
 
@@ -812,6 +830,7 @@ def _project(  # noqa: PLR0913
     ephemeris: SolarSystemEphemeris | None = None,
     reference_time: float | None = None,
     barycentric_offset_samples: int | None = None,
+    output_grid: SamplingGrid | None = None,
 ) -> dict[str, TimeSeries]:
     """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`.
 
@@ -819,6 +838,11 @@ def _project(  # noqa: PLR0913
     whatever the delay moves past either end. Only for a caller that has already generated the
     polarizations with that margin and trims it off itself -- the continuous-wave simulator,
     whose signal carries on beyond the buffer rather than ending in it.
+
+    ``output_grid`` puts the returned series on that lattice: each starts up to one sample before the
+    padded input, at the lattice sample preceding it, and the sub-sample difference joins the delay in
+    the one resampling the projection already makes, as ``simulate_cbc_batch`` does for its
+    ``output_grid``.
 
     ``barycentric_offset_samples`` marks polarizations given in SSB time, as the continuous-wave
     simulator generates them: sample ``j``, labelled ``t0 + j / fs``, is the signal at SSB time
@@ -845,12 +869,35 @@ def _project(  # noqa: PLR0913
         # instead changes it by ~1e-12 s.
         power = np.asarray(hp.data, dtype=float) ** 2 + np.asarray(hc.data, dtype=float) ** 2
         reference_time = input_start + int(np.argmax(power)) * hp.dt
+    # Whole samples added at each end, zero when the caller keeps its own margin. Computed once, because
+    # the output lattice below is stepped back by exactly the padding the polarizations were given.
+    padding = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta) if keep_delayed_samples else 0
     if keep_delayed_samples:
         # Padded before anything reads the time axis, so both branches and both backends project
         # the padded span as if it were the input.
-        hp, hc = _padded_for_delay(hp, hc, sinc_taps=sinc_taps, kaiser_beta=kaiser_beta)
+        hp, hc = _padded_for_delay(hp, hc, pad=padding)
 
+    # The output's sample times, and how many samples they lie before the input's. Off a lattice the two
+    # coincide. On one, every quantity below that depends on time -- sidereal angle, sky line, delays,
+    # pattern -- is evaluated at the output's own samples, and only the resampling reads the input.
+    lattice_shift = 0.0
     time_array = np.asarray(hp.times, dtype=float)
+    if output_grid is not None:
+        if output_grid.sampling_frequency != hp.sample_rate:
+            raise ValueError(
+                f"output_grid.sampling_frequency ({output_grid.sampling_frequency}) must equal the "
+                f"polarizations' sample rate ({hp.sample_rate})."
+            )
+        # Split at the caller's own start, then stepped back by the whole-sample padding, as
+        # `simulate_cbc_batch` does. The padded start is that start less a padding that is not a dyadic
+        # time at every rate (at 3000 Hz it is not), so it is rounded by up to half a unit in the last
+        # place of a GPS time, 1.2e-7 s, and a fraction taken from it would misplace every sample by up to
+        # 4e-4 of one: 4e-6 of peak for a 40 Hz signal. Its samples are not moved by that rounding, only
+        # its label.
+        start_index, fraction = output_grid.split_index(input_start)
+        require_shift_within_padding(fraction, name="alignment shift")
+        lattice_shift = float(fraction)
+        time_array = output_grid.time_of(int(start_index) - padding + np.arange(hp.n_samples, dtype=np.int64))
     reference = float(0.5 * (time_array[0] + time_array[-1]))
     # The J2000 position, before any precession below: the Earth's orbit is in that frame.
     timing = _solar_timing(
@@ -918,6 +965,7 @@ def _project(  # noqa: PLR0913
             tapered=tapered,
             arm_lengths=lengths if effects.finite_arm_length else None,
             timing=timing,
+            lattice_shift=lattice_shift,
         )
 
     return _project_on_host(
@@ -934,6 +982,7 @@ def _project(  # noqa: PLR0913
         tapered=tapered,
         arm_lengths=lengths if effects.finite_arm_length else None,
         timing=timing,
+        lattice_shift=lattice_shift,
     )
 
 
@@ -952,13 +1001,15 @@ def _project_on_host(  # noqa: PLR0913
     tapered: bool,
     arm_lengths: Mapping[str, tuple[float, float]] | None,
     timing: _SolarTiming | None,
+    lattice_shift: float = 0.0,
 ) -> dict[str, TimeSeries]:
     """Project on the host, for :func:`_project`, once the polarizations are padded and the sky resolved.
 
     ``sky_line`` is ``(input_start, right_ascension, declination, d_right_ascension, d_declination)``: the
     source position at the caller's first sample and its rates, as :func:`_project` resolved them.
     ``arm_lengths`` holds each detector's arm lengths for the finite-arm response, ``None`` for the
-    long-wavelength one; ``timing`` the solar-system delay, ``None`` for none.
+    long-wavelength one; ``timing`` the solar-system delay, ``None`` for none. ``time_array`` holds the
+    output's sample times, which lie ``lattice_shift`` samples before the input's (:func:`_project`).
 
     Every detector is a sum of response terms (:func:`_response_terms`), each its own pattern times the
     polarizations at the signal time its point sees: the sample's time, less the delay from the
@@ -1008,7 +1059,7 @@ def _project_on_host(  # noqa: PLR0913
             # consistent coordinate.
             site = time_delay_from_geocenter(term.location, *sky, xp=np)
             if earth_rotation:
-                shift = -site / dt
+                shift = -site / dt - lattice_shift
                 if timing is not None:
                     shift = shift + timing.delay(since_epoch - site) / dt
                 # Resample at the signal time with the shared band-limited kernel, gathered from a
@@ -1033,7 +1084,7 @@ def _project_on_host(  # noqa: PLR0913
                         beta=kaiser_beta,
                     )
             else:
-                delay = site
+                delay = site + lattice_shift * dt
                 if timing is not None:
                     # Held at the reference time, as the pattern and the site delay are on this branch.
                     delay = delay - float(timing.delay(np.array([reference_time - timing.model.epoch]))[0])
