@@ -79,7 +79,7 @@ dev = [
   # and h5py publishes no wheel for Python 3.15 yet (GWpy needs it), where the tests that need them skip.
   "gwpy>=4.1.0; python_version < '3.15'",
   "h5py>=3.16.0; python_version < '3.15'",
-  "ruff>=0.17.3",
+  "ruff>=0.17.4",
   "prek>=0.5.10",
   "pytest-cov>=7.1.0",
   "pytest-mock>=3.17.0",
