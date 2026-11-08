@@ -403,12 +403,19 @@ class TransientSimulator(GWSimulator):
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
+        backgrounds = {name: as_timeseries(background[name]) for name in str_names}
         injected = {
             name: _inject(
-                as_timeseries(background[name]),
+                backgrounds[name],
                 projected[name],
                 interpolate_if_offset=interpolate_if_offset,
                 tapered=self.polarizations_tapered(params, sampling_frequency),
+                # Built on `output_grid`, so on a background on that same lattice any fraction in its
+                # offset is the rounding of its timestamps (up to 2.3e-4 of a sample at 4000 Hz), not a
+                # shift: it is added by whole samples. A background on another lattice is placed as before.
+                on_grid=output_grid is not None
+                and backgrounds[name].sample_rate == output_grid.sampling_frequency
+                and bool(output_grid.is_on_lattice(backgrounds[name].t0)),
             )
             for name in str_names
         }

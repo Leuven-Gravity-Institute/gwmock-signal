@@ -216,3 +216,62 @@ def test_the_simulator_passes_the_grid_on() -> None:
     assert not grid.is_on_lattice(unaligned.t0)
     assert grid.is_on_lattice(aligned.t0)
     assert 0.0 < unaligned.t0 - aligned.t0 < 1.0 / _FS
+
+
+@pytest.mark.parametrize("rate", [1024.0, 4000.0])
+def test_a_projection_on_the_backgrounds_lattice_is_added_by_whole_samples(rate: float) -> None:
+    """Built on the background's lattice, the strain is added to it without being resampled again.
+
+    At 4000 Hz a lattice time ``epoch + k / 4000`` misses its sample by up to 2.3e-4 of one in float64,
+    beyond the 1e-4 within which an undeclared series is placed by whole samples. With
+    ``interpolate_if_offset=False`` an undeclared series is then skipped altogether, which is how the
+    test sees whether it was declared.
+    """
+    pytest.importorskip("lal", reason="lalsuite not installed")
+    from gwmock_signal.simulator import CBCSimulator
+
+    params = {
+        "detector_frame_mass_1": 30.0,
+        "detector_frame_mass_2": 25.0,
+        "distance": 400.0,
+        "inclination": 0.3,
+        "coa_phase": 0.1,
+        "coa_time": _EPOCH + 100.123456,
+        **_SKY,
+    }
+    grid = SamplingGrid(_EPOCH, rate)
+    background = {"E1": TimeSeries(np.zeros(int(200 * rate)), t0=_EPOCH, sample_rate=rate)}
+    simulator = CBCSimulator("IMRPhenomD")
+    common = {"sampling_frequency": rate, "minimum_frequency": 20.0, "effects": _ROTATING}
+    added = simulator.simulate(params, ["E1"], background, output_grid=grid, interpolate_if_offset=False, **common)
+    alone = simulator.simulate(params, ["E1"], output_grid=grid, **common)
+
+    first = round((float(alone.t0) - _EPOCH) * rate)
+    placed = np.asarray(added.data)[0, first : first + alone.data.shape[-1]]
+    np.testing.assert_array_equal(placed, np.asarray(alone.data)[0])
+
+
+def test_a_background_on_another_lattice_is_placed_as_before() -> None:
+    """A background off ``output_grid`` is not the lattice the strain was built on, so it is resampled onto it."""
+    pytest.importorskip("lal", reason="lalsuite not installed")
+    from gwmock_signal.simulator import CBCSimulator
+
+    rate = 4000.0
+    params = {
+        "detector_frame_mass_1": 30.0,
+        "detector_frame_mass_2": 25.0,
+        "distance": 400.0,
+        "inclination": 0.3,
+        "coa_phase": 0.1,
+        "coa_time": _EPOCH + 100.123456,
+        **_SKY,
+    }
+    background = {"E1": TimeSeries(np.zeros(int(200 * rate)), t0=_EPOCH + 0.3 / rate, sample_rate=rate)}
+    common = {"sampling_frequency": rate, "minimum_frequency": 20.0, "effects": _ROTATING}
+    simulator = CBCSimulator("IMRPhenomD")
+    skipped = simulator.simulate(
+        params, ["E1"], background, output_grid=SamplingGrid(_EPOCH, rate), interpolate_if_offset=False, **common
+    )
+    resampled = simulator.simulate(params, ["E1"], background, output_grid=SamplingGrid(_EPOCH, rate), **common)
+    assert not np.any(np.asarray(skipped.data))
+    assert np.any(np.asarray(resampled.data))
