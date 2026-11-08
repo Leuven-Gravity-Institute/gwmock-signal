@@ -1,0 +1,132 @@
+"""A per-event projection put on a caller's lattice is the strain at that lattice's samples.
+
+The reference needs no interpolation: the polarizations are an analytic band-limited signal, so the same
+signal can be sampled on the lattice itself and projected there with no alignment at all. Projecting it
+sampled off the lattice, with ``output_grid``, must give the same strain at the same times to the
+kernel's accuracy. A shift applied with the wrong sign, or not applied, misplaces the strain by up to two
+samples, which at these frequencies is a difference of order the signal itself.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import numpy as np
+import pytest
+
+from gwmock_signal.projection.effects import ProjectionEffects
+from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.solar_system import SolarSystemEphemeris
+from gwmock_signal.sampling_grid import SamplingGrid
+from gwmock_signal.timeseries import TimeSeries
+
+_FS = 1024.0
+_N = 32 * 1024
+_EPOCH = 1_400_000_000.0
+_SKY = {"right_ascension": 1.3, "declination": -0.4, "polarization_angle": 0.7}
+_ROTATING = ProjectionEffects.long_wavelength(earth_rotation=True)
+#: Measured at 3e-14 to 5e-14 of peak for every path and shift here: the two sides make the same one
+#: resampling at shifts that differ by a fraction of a sample, so they agree far below the kernel's own
+#: 1e-11. The bound leaves a factor of 20 over that.
+_TOLERANCE = 1e-12
+
+
+def _polarizations(t0: float) -> dict[str, TimeSeries]:
+    """A Gaussian-windowed 40 Hz tone and its quadrature, sampled at ``t0 + k / fs``.
+
+    The times are offsets from the window's centre, so the analytic values are evaluated without
+    subtracting GPS-sized numbers.
+    """
+    centre = _EPOCH + 16.0
+    offsets = (t0 - centre) + np.arange(_N) / _FS
+    envelope = np.exp(-((offsets / 2.0) ** 2))
+    phase = 2.0 * np.pi * 40.0 * offsets
+    return {
+        "plus": TimeSeries(envelope * np.cos(phase), t0=t0, sample_rate=_FS),
+        "cross": TimeSeries(envelope * np.sin(phase), t0=t0, sample_rate=_FS),
+    }
+
+
+def _project(t0: float, effects: ProjectionEffects, backend: str, grid: SamplingGrid | None, **kwargs):
+    return project_polarizations_to_network(
+        _polarizations(t0), ["E1"], effects=effects, backend=backend, output_grid=grid, **_SKY, **kwargs
+    )["E1"]
+
+
+def _compare(effects: ProjectionEffects, backend: str, fraction: float, **kwargs) -> None:
+    grid = SamplingGrid(_EPOCH, _FS)
+    off = _project(_EPOCH + 3.0 + fraction / _FS, effects, backend, grid, **kwargs)
+    # The same signal sampled on the lattice sample preceding the off-lattice start, projected unaligned.
+    on = _project(_EPOCH + 3.0, effects, backend, None, **kwargs)
+
+    assert grid.is_on_lattice(off.t0)
+    assert off.t0 == pytest.approx(on.t0, abs=1e-9 / _FS)
+    a, b = np.asarray(off.data), np.asarray(on.data)
+    assert a.shape == b.shape
+    error = float(np.max(np.abs(a - b))) / float(np.max(np.abs(b)))
+    assert error < _TOLERANCE, error
+
+
+@pytest.mark.parametrize("fraction", [0.25, 0.612, 0.999])
+def test_numpy_projection_lands_on_the_lattice(fraction: float) -> None:
+    """The host path's strain at the lattice samples, for shifts across a sample."""
+    _compare(_ROTATING, "numpy", fraction)
+
+
+def test_the_constant_pattern_branch_lands_on_the_lattice() -> None:
+    """The frequency-domain branch takes the shift into its phase as well."""
+    _compare(ProjectionEffects.long_wavelength(), "numpy", 0.612)
+
+
+def test_the_finite_arm_response_lands_on_the_lattice() -> None:
+    """The finite-arm residual acts on the output's samples, which are now the lattice's."""
+    _compare(dataclasses.replace(_ROTATING, finite_arm_length=True, source_precession=True), "numpy", 0.612)
+
+
+def test_the_solar_system_delays_land_on_the_lattice() -> None:
+    """The delays are evaluated at the output's own times, as the pattern and the site delay are."""
+    ephemeris = SolarSystemEphemeris()
+    try:
+        ephemeris.tables()
+    except FileNotFoundError as exc:
+        pytest.skip(f"the default ephemeris is unavailable: {exc}")
+    effects = dataclasses.replace(_ROTATING, roemer_delay=True, einstein_delay=True, shapiro_delay=True)
+    # One reference time for both, so both absorb the same delay.
+    _compare(effects, "numpy", 0.612, ephemeris=ephemeris, reference_time=_EPOCH + 16.0)
+
+
+def test_the_device_projection_lands_on_the_lattice() -> None:
+    """The device path passes the shift to its kernel, so it agrees with the reference too."""
+    jax = pytest.importorskip("jax", reason="jax not installed")
+    jax.config.update("jax_enable_x64", True)
+    _compare(dataclasses.replace(_ROTATING, finite_arm_length=True), "jax", 0.612)
+
+
+def test_a_grid_at_another_rate_is_refused() -> None:
+    """A lattice at another rate cannot be reached by a sub-sample shift."""
+    with pytest.raises(ValueError, match="sample rate"):
+        _project(_EPOCH + 3.3, _ROTATING, "numpy", SamplingGrid(_EPOCH, 2 * _FS))
+
+
+def test_the_simulator_passes_the_grid_on() -> None:
+    """``simulate`` returns a compact binary's strain on the lattice it is given."""
+    pytest.importorskip("lal", reason="lalsuite not installed")
+    from gwmock_signal.simulator import CBCSimulator
+
+    params = {
+        "detector_frame_mass_1": 30.0,
+        "detector_frame_mass_2": 25.0,
+        "distance": 400.0,
+        "inclination": 0.3,
+        "coa_phase": 0.1,
+        "coa_time": _EPOCH + 100.123456,
+        **_SKY,
+    }
+    grid = SamplingGrid(_EPOCH, _FS)
+    simulator = CBCSimulator("IMRPhenomD")
+    common = {"sampling_frequency": _FS, "minimum_frequency": 20.0, "effects": _ROTATING}
+    aligned = simulator.simulate(params, ["E1"], output_grid=grid, **common)
+    unaligned = simulator.simulate(params, ["E1"], **common)
+    assert not grid.is_on_lattice(unaligned.t0)
+    assert grid.is_on_lattice(aligned.t0)
+    assert 0.0 < unaligned.t0 - aligned.t0 < 1.0 / _FS

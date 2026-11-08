@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     import gwpy.timeseries
 
     from gwmock_signal.detector import CustomDetector
+    from gwmock_signal.sampling_grid import SamplingGrid
 
 logger = logging.getLogger("gwmock_signal.simulator")
 
@@ -320,6 +321,7 @@ class TransientSimulator(GWSimulator):
         interpolate_if_offset: bool = True,
         earth_rotation: bool | None = None,
         finite_arm_length: bool | None = None,
+        output_grid: SamplingGrid | None = None,
     ) -> DetectorStrainStack:
         """Run the full injection pipeline and return a ``DetectorStrainStack``.
 
@@ -351,6 +353,10 @@ class TransientSimulator(GWSimulator):
                 that field when given.
             finite_arm_length: Deprecated; ``effects=ProjectionEffects(finite_arm_length=...)``. Overrides
                 that field when given.
+            output_grid: A lattice for the projected strain, such as the segment it will be added to;
+                see :func:`~gwmock_signal.projection.network.project_polarizations_to_network`. Without
+                ``background``, the returned strain then starts on it, so it is added to that segment
+                without being resampled again.
 
         Returns:
             ``DetectorStrainStack`` containing the simulated strain for each
@@ -392,6 +398,7 @@ class TransientSimulator(GWSimulator):
             tapered=self.polarizations_tapered(params, sampling_frequency),
             ephemeris=self.ephemeris,
             reference_time=self.timing_reference(params),
+            output_grid=output_grid,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
