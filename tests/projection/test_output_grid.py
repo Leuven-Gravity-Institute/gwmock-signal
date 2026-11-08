@@ -222,7 +222,7 @@ def test_the_simulator_passes_the_grid_on() -> None:
 def test_a_projection_on_the_backgrounds_lattice_is_added_by_whole_samples(rate: float) -> None:
     """Built on the background's lattice, the strain is added to it without being resampled again.
 
-    At 4000 Hz a lattice time ``epoch + k / 4000`` misses its sample by up to half a float64 step, 4.8e-4 of one,
+    At 4000 Hz a lattice time ``epoch + k / 4000`` misses its sample by up to half a float64 step, 4.8e-4 of one at GPS 1.4e9,
     beyond the 1e-4 within which an undeclared series is placed by whole samples. With
     ``interpolate_if_offset=False`` an undeclared series is then skipped altogether, which is how the
     test sees whether it was declared.

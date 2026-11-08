@@ -97,9 +97,11 @@ of the strain's own value there, and grows as the signal's content approaches
 Nyquist. Measured at 8192 Hz, it is 2e-10 of the peak at the ends of a 30 + 25
 solar-mass binary black hole whose strain starts at 1.6e-10, and 1.6e-5 for a
 binary neutron star whose 256 s buffer starts at 4.3e-6; at least 2 s from the
-ends, 3e-10 to 4e-9 on the compact binaries measured, almost all of it near
-Nyquist. `TransientSimulator.simulate` takes the same `output_grid`; with a
-`background` on that lattice the strain is added to it by whole samples.
+ends, 3e-10 to 4e-9 on the binary black holes and neutron star-black hole
+binaries measured, almost all of it near Nyquist; the binary neutron star is
+still near its peak there, and reached 3.6e-6. `TransientSimulator.simulate`
+takes the same `output_grid`; with a `background` on that lattice the strain is
+added to it by whole samples.
 
 ## Example 2 — Short segment, fixed antenna pattern
 

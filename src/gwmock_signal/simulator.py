@@ -411,7 +411,7 @@ class TransientSimulator(GWSimulator):
                 interpolate_if_offset=interpolate_if_offset,
                 tapered=self.polarizations_tapered(params, sampling_frequency),
                 # Built on `output_grid`, so on a background on that same lattice any fraction in its
-                # offset is the rounding of its timestamps (up to half a float64 step, 4.8e-4 of a sample at 4000 Hz), not a
+                # offset is the rounding of its timestamps (up to half a float64 step: at 4000 Hz, 2.4e-4 of a sample at GPS 1e9), not a
                 # shift: it is added by whole samples. A background on another lattice is placed as before.
                 on_grid=output_grid is not None
                 and backgrounds[name].sample_rate == output_grid.sampling_frequency
