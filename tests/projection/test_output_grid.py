@@ -16,6 +16,7 @@ import pytest
 
 from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.network import project_polarizations_to_network
+from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.timeseries import TimeSeries
@@ -62,6 +63,7 @@ def _compare(effects: ProjectionEffects, backend: str, fraction: float, rate: fl
     on = _project(_EPOCH + 3.0, effects, backend, None, rate, **kwargs)
 
     assert grid.is_on_lattice(off.t0)
+    # Measured equal; the bound only allows for the two starts being computed by different expressions.
     assert off.t0 == pytest.approx(on.t0, abs=1e-6 / rate)
     a, b = np.asarray(off.data), np.asarray(on.data)
     assert a.shape == b.shape
@@ -75,24 +77,18 @@ def test_numpy_projection_lands_on_the_lattice(fraction: float) -> None:
     _compare(_ROTATING, "numpy", fraction)
 
 
-def test_a_rate_whose_padding_is_not_a_dyadic_time_lands_on_the_lattice() -> None:
-    """At 3000 Hz the padding is not a dyadic time, so subtracting it from a GPS-sized start rounds.
+def _analytic_error(strain: TimeSeries, rate: float) -> float:
+    """The largest difference from the analytic strain at the series' own lattice times, of its peak.
 
-    The rounding is up to half a unit in the last place, 1.2e-7 s. A lattice offset taken from the padded
-    start was wrong by up to 4e-4 of a sample, 4e-6 of peak at 40 Hz. It is taken from the caller's own
-    start, before padding, as ``simulate_cbc_batch`` does. An unaligned projection carries the rounded
-    label too (9e-11 of peak here), so the reference is the analytic strain at the lattice times rather
-    than another projection; the aligned result meets it to 5e-13.
+    Each sample's time is counted in whole samples from the epoch, so no GPS-sized time is subtracted.
+    The count is a different floating-point expression from the projection's own (which keeps whole
+    samples and the sub-sample fraction apart), so at a rate whose spacing is not a dyadic time the
+    reference itself is accurate only to a few times 1e-13 of peak at 40 Hz.
     """
     from gwmock_signal.projection.geometry import reconstructed_geometry
     from gwmock_signal.projection.kernels import antenna_pattern, time_delay_from_geocenter
     from gwmock_signal.projection.sidereal import gmst_rad_astropy
 
-    rate = 3000.0
-    grid = SamplingGrid(_EPOCH, rate)
-    strain = _project(_EPOCH + 3.0 + 0.612 / rate, _ROTATING, "numpy", grid, rate)
-    assert grid.is_on_lattice(strain.t0)
-    # Offsets from the epoch in whole samples, so the analytic times carry no GPS-sized subtraction.
     first = round((float(strain.t0) - _EPOCH) * rate)
     since_epoch = (first + np.arange(len(strain.data))) / rate
     response, location = reconstructed_geometry("E1")
@@ -103,7 +99,49 @@ def test_a_rate_whose_padding_is_not_a_dyadic_time_lands_on_the_lattice() -> Non
     envelope = np.exp(-((retarded / 2.0) ** 2))
     phase = 2.0 * np.pi * 40.0 * retarded
     expected = f_plus * envelope * np.cos(phase) + f_cross * envelope * np.sin(phase)
-    error = float(np.max(np.abs(np.asarray(strain.data) - expected))) / float(np.max(np.abs(expected)))
+    return float(np.max(np.abs(np.asarray(strain.data) - expected))) / float(np.max(np.abs(expected)))
+
+
+def test_a_rate_whose_padding_is_not_a_dyadic_time_lands_on_the_lattice() -> None:
+    """At 3000 Hz the padding is not a dyadic time, so subtracting it from a GPS-sized start rounds.
+
+    The rounding is up to half a unit in the last place, 1.2e-7 s. A lattice offset taken from the padded
+    start was wrong by up to 4e-4 of a sample, 4e-6 of peak at 40 Hz. It is taken from the caller's own
+    start, before padding, as ``simulate_cbc_batch`` does. An unaligned projection carries the rounded
+    label too (9e-11 of peak here), so the reference is the analytic strain rather than another
+    projection. The measured 5e-13 is that reference's own floor at this rate (see ``_analytic_error``),
+    not the projection's; the bound is still four million times below the defect.
+    """
+    rate = 3000.0
+    grid = SamplingGrid(_EPOCH, rate)
+    strain = _project(_EPOCH + 3.0 + 0.612 / rate, _ROTATING, "numpy", grid, rate)
+    assert grid.is_on_lattice(strain.t0)
+    error = _analytic_error(strain, rate)
+    assert error < _TOLERANCE, error
+
+
+def test_a_caller_keeping_its_own_margin_is_placed_by_its_own_start() -> None:
+    """Without the delay padding, the lattice start is the one preceding the caller's own start.
+
+    Stepping it back by a padding the polarizations were not given would misplace the whole series.
+    The caller's margin, zeros here, covers the delay and the sub-sample shift.
+    """
+    from gwmock_signal.projection.network import _project as project_privately
+
+    grid = SamplingGrid(_EPOCH, _FS)
+    strain = project_privately(
+        _polarizations(_EPOCH + 3.0 + 0.612 / _FS),
+        ["E1"],
+        **_SKY,
+        effects=_ROTATING,
+        backend="numpy",
+        sinc_taps=DEFAULT_SINC_TAPS,
+        kaiser_beta=DEFAULT_KAISER_BETA,
+        keep_delayed_samples=False,
+        output_grid=grid,
+    )["E1"]
+    assert strain.t0 == pytest.approx(_EPOCH + 3.0, abs=1e-6 / _FS)
+    error = _analytic_error(strain, _FS)
     assert error < _TOLERANCE, error
 
 

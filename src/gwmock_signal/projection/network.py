@@ -122,9 +122,7 @@ def _validate_polarizations(
     return hp, hc
 
 
-def _padded_for_delay(
-    hp: TimeSeries, hc: TimeSeries, *, sinc_taps: int, kaiser_beta: float
-) -> tuple[TimeSeries, TimeSeries]:
+def _padded_for_delay(hp: TimeSeries, hc: TimeSeries, *, pad: int) -> tuple[TimeSeries, TimeSeries]:
     """Return the polarizations zero-padded so no delayed sample falls outside the projection.
 
     Without this every detector series was exactly as long as the input while the delay moved up
@@ -133,9 +131,9 @@ def _padded_for_delay(
     :func:`~gwmock_signal.projection.resampling.edge_padding` -- the delay bound for any ground-based
     detector plus the kernel's half-width -- rather than by this network's largest delay, so every
     series shares one start and length and the device kernel's shape does not depend on the sky
-    position. ``t0`` moves back by whole samples, so the input's samples keep their times.
+    position. ``t0`` moves back by whole samples, so the input's samples keep their times. ``pad`` is that
+    many samples, computed once by the caller, which also places the result on an output lattice with it.
     """
-    pad = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta)
     return hp.pad(pad, pad), hc.pad(pad, pad)
 
 
@@ -871,10 +869,13 @@ def _project(  # noqa: PLR0913
         # instead changes it by ~1e-12 s.
         power = np.asarray(hp.data, dtype=float) ** 2 + np.asarray(hc.data, dtype=float) ** 2
         reference_time = input_start + int(np.argmax(power)) * hp.dt
+    # Whole samples added at each end, zero when the caller keeps its own margin. Computed once, because
+    # the output lattice below is stepped back by exactly the padding the polarizations were given.
+    padding = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta) if keep_delayed_samples else 0
     if keep_delayed_samples:
         # Padded before anything reads the time axis, so both branches and both backends project
         # the padded span as if it were the input.
-        hp, hc = _padded_for_delay(hp, hc, sinc_taps=sinc_taps, kaiser_beta=kaiser_beta)
+        hp, hc = _padded_for_delay(hp, hc, pad=padding)
 
     # The output's sample times, and how many samples they lie before the input's. Off a lattice the two
     # coincide. On one, every quantity below that depends on time -- sidereal angle, sky line, delays,
@@ -893,7 +894,6 @@ def _project(  # noqa: PLR0913
         # place of a GPS time, 1.2e-7 s, and a fraction taken from it would misplace every sample by up to
         # 4e-4 of one: 4e-6 of peak for a 40 Hz signal. Its samples are not moved by that rounding, only
         # its label.
-        padding = edge_padding(hp.sample_rate, sinc_taps, kaiser_beta) if keep_delayed_samples else 0
         start_index, fraction = output_grid.split_index(input_start)
         require_shift_within_padding(fraction, name="alignment shift")
         lattice_shift = float(fraction)
