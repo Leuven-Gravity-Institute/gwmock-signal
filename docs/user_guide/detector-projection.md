@@ -249,6 +249,10 @@ simulator = CBCSimulator(waveform_model="IMRPhenomD", projection_backend="jax")
   installed**: on a CPU with the plain wheel, on a GPU with a CUDA build. The
   continuous-wave simulator already defaults to it.
 
+`BurstSimulator` takes the same argument; see
+[Projecting on the device](burst-injections.md#projecting-on-the-device) for how
+it keeps one kernel per few burst lengths.
+
 **What it buys.** Projection is where a long transient spends its time: measured
 at 1024 s and 8192 Hz across five ET detectors, it was 604 s of a 620 s
 single-event run — 97% — and the device path did the same work in 225 s, **2.7x

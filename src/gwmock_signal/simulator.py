@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from gwmock_signal.injection.core import _inject
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection.effects import ProjectionEffects
-from gwmock_signal.projection.network import _project, _resolve_effects, validate_projection_backend
+from gwmock_signal.projection.network import _project, _resolve_effects, use_projection_backend
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
@@ -228,10 +228,17 @@ class TransientSimulator(GWSimulator):
     #: answer; see ``backend`` on
     #: :func:`~gwmock_signal.projection.network.project_polarizations_to_network`.
     #:
-    #: Subclasses that accept it from their caller set the instance attribute in ``__init__``
-    #: after :func:`~gwmock_signal.projection.network.validate_projection_backend`; one that does
-    #: not inherits the host path, which needs no optional dependency.
+    #: Subclasses that accept it from their caller set the instance attribute in ``__init__`` from
+    #: :func:`~gwmock_signal.projection.network.use_projection_backend`; one that does not inherits
+    #: the host path, which needs no optional dependency.
     projection_backend: str = "numpy"
+
+    #: Whether the device projection is compiled only for a few fixed lengths, the polarizations padded
+    #: with zeros to the next one; see ``fixed_lengths`` on :func:`~gwmock_signal.projection.network._project`.
+    #: For a simulator whose events come in many lengths, each of which would otherwise compile its own
+    #: kernel. Off unless a subclass turns it on: it pads every event, and a source whose events share a
+    #: length gains nothing for that.
+    fixed_device_lengths: bool = False
 
     #: The Earth and Sun tables the solar-system delays are computed from; the LALPulsar DE405 tables
     #: unless a subclass is given others.
@@ -400,6 +407,7 @@ class TransientSimulator(GWSimulator):
             ephemeris=self.ephemeris,
             reference_time=self.timing_reference(params),
             output_grid=output_grid,
+            fixed_lengths=self.fixed_device_lengths,
         )
         if background is None:
             return DetectorStrainStack.from_mapping(str_names, projected)
@@ -523,21 +531,11 @@ class CBCSimulator(TransientSimulator):
         # backend's approximants at construction, which imports the waveform library and can fail
         # on its own -- and then a run whose actual mistake is the name below would be told about
         # the waveform stack instead, with the documented ValueError never raised.
-        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
+        self.projection_backend = use_projection_backend(projection_backend)
         self._waveform_model = waveform_model
         self._waveform_factory = WaveformFactory(backend=waveform_backend)
         if ephemeris is not None:
             self.ephemeris = ephemeris
-        if self.projection_backend == "jax":
-            # Enabled here rather than relied upon, for the reason the continuous-wave simulator
-            # states at length: the device projection *refuses* to run without x64, and the only
-            # thing that has ever turned it on for this class is importing ``ripplegw`` -- which a
-            # LAL-generated run never does. Without this, `projection_backend="jax"` would raise
-            # for exactly the configuration it exists to serve. Idempotent, and it must happen
-            # before any array is made, which construction is.
-            import jax  # noqa: PLC0415 -- optional [jax] dep, and only needed for this backend
-
-            jax.config.update("jax_enable_x64", True)
 
     @property
     def waveform_model(self) -> str:

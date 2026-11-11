@@ -548,13 +548,13 @@ def evaluate_arrays(arrays: tuple[Any, ...], components: tuple[bool, bool, bool]
     if roemer or shapiro:
         earth_position = _table_position(earth, since_epoch, xp)
     if roemer:
-        total = total + earth_position @ source
+        total = total + _dot3(earth_position, source)
     if einstein:
         total = total + _hermite(grid, since_epoch, xp)
     if shapiro:
         sun_to_earth = earth_position - _table_position(sun, since_epoch, xp)
-        distance = xp.sqrt(xp.sum(sun_to_earth * sun_to_earth, axis=-1))
-        along = sun_to_earth @ source
+        distance = xp.sqrt(_dot3(sun_to_earth, sun_to_earth))
+        along = _dot3(sun_to_earth, source)
         impact = xp.sqrt(xp.maximum(distance * distance - along * along, 0.0))
         usual = 9.852e-6 * xp.log(_AU_OVER_C / (distance + along))
         inside = 9.852e-6 * xp.log(
@@ -562,6 +562,19 @@ def evaluate_arrays(arrays: tuple[Any, ...], components: tuple[bool, bool, bool]
         ) + 19.704e-6 * (1.0 - impact / _SUN_RADIUS_LIGHT_SECONDS)
         total = total - xp.where((impact < _SUN_RADIUS_LIGHT_SECONDS) & (along < 0.0), inside, usual)
     return total
+
+
+def _dot3(vectors: Any, other: Any) -> Any:
+    """Return the dot product of three-vectors along the last axis, the same at every array length.
+
+    Written out term by term rather than as ``@`` or a ``sum``: a compiled reduction may group its terms
+    differently for a different number of rows, and the Roemer delay it forms is tens of seconds, of which
+    a transient keeps only the change across its buffer once the delay at its reference time is absorbed.
+    One unit in the last place of the whole delay, 1.4e-14 s, was measured to move a projected burst by up
+    to 3e-11 of its peak when the same samples were projected as part of a longer series. Elementwise, every
+    sample's delay is the same whatever series it is part of.
+    """
+    return vectors[..., 0] * other[..., 0] + vectors[..., 1] * other[..., 1] + vectors[..., 2] * other[..., 2]
 
 
 def _table_position(piece: tuple, since_epoch: Any, xp: Any) -> Any:

@@ -188,11 +188,20 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     )
 
 
-#: Compiled-kernel cache bound, matching ``jax_batch._KERNEL_CACHE_SIZE``. An unbounded cache
-#: is a process-lifetime leak of XLA executables and their device memory: the justification
-#: "a run uses one or two segment shapes" is a per-run claim, and this cache outlives a run,
-#: so a long-lived worker projecting varied lengths would accumulate kernels without end.
-_KERNEL_CACHE_SIZE = 32
+#: Compiled-kernel cache bound. An unbounded cache is a process-lifetime leak of XLA executables
+#: and their device memory: the justification "a run uses one or two segment shapes" is a per-run
+#: claim, and this cache outlives a run, so a long-lived worker projecting varied lengths would
+#: accumulate kernels without end.
+#:
+#: Sized for bursts projected at fixed lengths (:func:`device_length`): one kernel per length *and*
+#: per distinct pair of arm lengths when the finite arms are on, since the arm lengths are static.
+#: A burst set at 8192 Hz takes 16 lengths; the ET networks have one pair of arm lengths, H1, L1 and
+#: V1 three, and with K1 four, so 64 keeps every kernel of such a set on a four-detector network.
+#: Compiling those 64 in one CPU process grew its resident memory by 2.0 GB in all -- 0.27 GB for the
+#: first four, which include JAX's own start-up, 0.02 to 0.34 GB for each later four, rising with the
+#: length -- an upper bound on what the cache holds, since it includes whatever working memory JAX
+#: keeps. ``jax_batch`` keeps its own, smaller cache.
+_KERNEL_CACHE_SIZE = 64
 
 #: Longest span the device path's linear sidereal model is accepted for, in seconds.
 #:
@@ -242,6 +251,65 @@ def validate_projection_backend(value: str, *, parameter: str = "backend") -> st
     return value
 
 
+def use_projection_backend(value: str) -> str:
+    """Validate a simulator's ``projection_backend`` and make it runnable; return it.
+
+    The one setup every simulator that takes the argument needs, so none of them can do it
+    differently: the name is checked with :func:`validate_projection_backend`, and for ``"jax"``
+    64-bit mode is switched on. The device projection *refuses* to run without it, and nothing
+    else reliably turns it on -- importing ``ripplegw`` happens to, but a LAL-generated or burst
+    run never imports it -- so without this ``projection_backend="jax"`` would raise for exactly
+    the configuration it exists to serve. Idempotent, and it must happen before any array is
+    made, which a simulator's construction is.
+
+    Args:
+        value: The candidate backend name.
+
+    Returns:
+        *value* unchanged.
+
+    Raises:
+        ValueError: If *value* is not one of :data:`PROJECTION_BACKENDS`.
+    """
+    validate_projection_backend(value, parameter="projection_backend")
+    if value == "jax":
+        import jax  # noqa: PLC0415 -- optional [jax] dep, and only needed for this backend
+
+        jax.config.update("jax_enable_x64", True)
+    return value
+
+
+#: Shortest length the device projection is padded to when its caller asks for fixed lengths.
+_SHORTEST_DEVICE_LENGTH = 512
+
+
+def device_length(n_samples: int) -> int:
+    """Return the fixed length, at least *n_samples*, a padded device projection is compiled for.
+
+    The lengths are ``2**k`` and ``3 * 2**(k - 1)``, from :data:`_SHORTEST_DEVICE_LENGTH` up: two
+    per octave, so a series is padded by less than half its length, and a span of lengths a
+    factor ``r`` wide needs about ``2 * log2(r)`` kernels. A burst injection set from a 0.06 s
+    Gaussian to an 11 s sine-Gaussian at 8192 Hz therefore compiles 16 per pair of arm lengths, where
+    its own lengths would need thousands; :data:`_KERNEL_CACHE_SIZE` is sized to keep them.
+
+    Args:
+        n_samples: Length of the series to project, positive.
+
+    Returns:
+        The smallest ladder length that is at least *n_samples*.
+
+    Raises:
+        ValueError: If *n_samples* is not positive.
+    """
+    if n_samples < 1:
+        raise ValueError(f"n_samples must be positive, got {n_samples}.")
+    length = _SHORTEST_DEVICE_LENGTH
+    while length < n_samples:
+        # 2**k -> 3 * 2**(k - 1) -> 2**(k + 1): the next rung is half as long again, or a third.
+        length = length * 3 // 2 if length & (length - 1) == 0 else length * 4 // 3
+    return length
+
+
 @functools.lru_cache(maxsize=_KERNEL_CACHE_SIZE)
 def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
     sampling_frequency: float,
@@ -270,7 +338,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
 
     Cached on the shape rather than rebuilt per call because ``jax.jit`` re-traces a fresh wrapper
     every time one is constructed, which would reintroduce the cost this exists to remove. The
-    cache is keyed on four scalars and bounded at ``_KERNEL_CACHE_SIZE``, because a long-lived
+    cache is keyed on the static arguments above and bounded at ``_KERNEL_CACHE_SIZE``, because a long-lived
     process projecting varied shapes would otherwise retain XLA executables for its lifetime.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
@@ -353,8 +421,13 @@ def _project_rotating_on_device(  # noqa: PLR0913
     arm_lengths: Mapping[str, tuple[float, float]] | None = None,
     timing: _SolarTiming | None = None,
     lattice_shift: float = 0.0,
+    compiled_length: int | None = None,
 ) -> dict[str, TimeSeries]:
     """Run the rotating projection through the JAX primitive, one detector at a time.
+
+    ``compiled_length``, when given, is the length the kernel is compiled for: the polarizations are
+    extended with zeros to it and each projected series is cut back to theirs. See ``fixed_lengths`` on
+    :func:`_project` for when that leaves the result unchanged.
 
     The device function is the same algorithm step for step -- per-sample delay, per-sample
     antenna pattern, one resampling of the polarizations at the delayed times -- and both call
@@ -399,6 +472,11 @@ def _project_rotating_on_device(  # noqa: PLR0913
     hc_vals = np.asarray(hc.data, dtype=float)
     sampling_frequency = hp.sample_rate
     n_samples = len(hp_vals)
+    if compiled_length is not None:
+        if compiled_length < n_samples:
+            raise ValueError(f"compiled_length ({compiled_length}) is shorter than the series ({n_samples}).")
+        hp_vals = np.pad(hp_vals, (0, compiled_length - n_samples))
+        hc_vals = np.pad(hc_vals, (0, compiled_length - n_samples))
     # The linear sidereal model is fitted per call, so a run of many consecutive segments never
     # accumulates error -- each gets a fresh Astropy anchor. What it cannot absorb is one
     # unusually long segment. Measured against Astropy at this epoch: 1.5e-10 rad over 8 hours,
@@ -442,7 +520,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
         arms = np.stack([term.arm for term in terms]) if arm_length is not None else np.zeros((2, 3))
         compiled = _compiled_rotating_projection(
             sampling_frequency,
-            n_samples,
+            len(hp_vals),
             sinc_taps,
             kaiser_beta,
             tapered,
@@ -467,7 +545,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
             lattice_shift,
         )
         strains[name] = TimeSeries(
-            np.asarray(projected, dtype=float),
+            np.asarray(projected, dtype=float)[:n_samples],
             t0=float(time_array[0]),
             sample_rate=hp.sample_rate,
             name=name,
@@ -831,8 +909,21 @@ def _project(  # noqa: PLR0913
     reference_time: float | None = None,
     barycentric_offset_samples: int | None = None,
     output_grid: SamplingGrid | None = None,
+    fixed_lengths: bool = False,
 ) -> dict[str, TimeSeries]:
     """Project as :func:`project_polarizations_to_network` does, returning :class:`TimeSeries`.
+
+    ``fixed_lengths=True`` compiles the device projection only for the lengths of :func:`device_length`,
+    padding the polarizations with zeros to the next one and cutting each result back. The device kernel
+    is compiled once per length, which costs seconds, and only :data:`_KERNEL_CACHE_SIZE` are kept, so a
+    caller projecting many series of different lengths -- a burst injection set -- would otherwise
+    compile for nearly every one. The result is unchanged up to rounding: the polarizations already end
+    in ``edge_padding`` zeros, wider than the delay and the kernel's half-width together, so every read
+    the kernel makes past their end, padded or not, is of a zero, and the samples it adds project to
+    exactly zero. What is not bit-identical is the finite-arm residual, a linear convolution evaluated by
+    FFT on a length that grows with the series. Applied only on the device path, with
+    ``keep_delayed_samples`` (which supplies those zeros), and not to ``tapered`` polarizations, whose
+    Fourier oversampling depends on the length of the whole series; otherwise ignored.
 
     ``keep_delayed_samples=False`` returns series exactly as long as the input instead, dropping
     whatever the delay moves past either end. Only for a caller that has already generated the
@@ -966,6 +1057,9 @@ def _project(  # noqa: PLR0913
             arm_lengths=lengths if effects.finite_arm_length else None,
             timing=timing,
             lattice_shift=lattice_shift,
+            compiled_length=(
+                device_length(hp.n_samples) if fixed_lengths and keep_delayed_samples and not tapered else None
+            ),
         )
 
     return _project_on_host(
