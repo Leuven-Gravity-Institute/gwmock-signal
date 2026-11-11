@@ -26,6 +26,7 @@ import numpy as np
 from gwmock_data.resampling import resample_uniform_sinc
 
 from gwmock_signal.burst.waveforms import PARAMETRIC_MODELS, read_waveform_file
+from gwmock_signal.projection.network import use_projection_backend
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.simulator import TransientSimulator, _projected_duration
 from gwmock_signal.timeseries import TimeSeries
@@ -280,21 +281,38 @@ class BurstSimulator(TransientSimulator):
     with the same ``ValueError`` by the two queries, :meth:`generate_polarizations` and
     :meth:`simulate`, so a caller that ignores a failed query still cannot inject a cropped burst.
 
+    **Projecting on the device.** With ``projection_backend="jax"`` the projection compiles a kernel
+    per length of series, and a burst injection set comes in thousands of lengths (6,947 among one
+    stream's 53,248 bursts at 8192 Hz). Each burst is therefore projected at a fixed length -- its
+    polarizations padded with zeros to the next length of a ladder with two per octave, and the result
+    cut back -- so that stream compiles 16 kernels, within the cache, and reuses each; see
+    :func:`~gwmock_signal.projection.network.device_length`. The strain is bit-identical to an unpadded
+    projection with the finite arms off, and differs by rounding with them on.
+
     Args:
         waveform_files: Model name -> :class:`WaveformFile`. Each file is read once, on first use.
+        ephemeris: The Earth and Sun tables for the solar-system delays; the LALPulsar DE405 tables by
+            default.
+        projection_backend: Which implementation evaluates the ``earth_rotation=True`` projection,
+            ``"numpy"`` (the default) or ``"jax"``, as on
+            :class:`~gwmock_signal.simulator.CBCSimulator`. ``"jax"`` needs JAX installed.
 
     Raises:
-        ValueError: If a file model reuses an ad hoc family's name, or a value is not a
-            :class:`WaveformFile`.
+        ValueError: If a file model reuses an ad hoc family's name, a value is not a
+            :class:`WaveformFile`, or *projection_backend* is not ``"numpy"`` or ``"jax"``.
     """
+
+    fixed_device_lengths = True
 
     def __init__(
         self,
         *,
         waveform_files: Mapping[str, WaveformFile] | None = None,
         ephemeris: SolarSystemEphemeris | None = None,
+        projection_backend: str = "numpy",
     ) -> None:
-        """Initialise with the optional numerical waveform files and the solar-system tables to use."""
+        """Initialise with the optional numerical waveform files, the solar-system tables and the projection backend."""
+        self.projection_backend = use_projection_backend(projection_backend)
         files = dict(waveform_files or {})
         shadowed = sorted(set(files) & set(PARAMETRIC_MODELS))
         if shadowed:

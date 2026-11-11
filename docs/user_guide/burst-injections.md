@@ -210,6 +210,34 @@ asking under another `coa_time` does not generate it twice. The low-frequency
 cutoff argument is accepted for symmetry with the compact-binary simulator and
 unused, as in generation.
 
+### Projecting on the device
+
+`BurstSimulator` takes `projection_backend` as the compact-binary simulator
+does:
+
+```python
+from gwmock_signal.burst.simulator import BurstSimulator
+
+simulator = BurstSimulator(projection_backend="jax")
+```
+
+The device kernel is compiled once per length of series, and a burst injection
+set comes in thousands of lengths. One stream of 53,248 bursts at 8192 Hz has
+6,947 distinct buffer lengths, and a first projection at a new length took 1.4
+to 2.6 s against 0.17 s at a known one. The simulator therefore pads each
+burst's polarizations with zeros to the next of a fixed ladder of lengths, $2^k$
+and $3 \cdot 2^{k-1}$ from 512 samples, and cuts the result back. That stream
+then compiles 16 kernels, and projects 33% more samples in all, no burst more
+than 1.5 times its own.
+
+The padding does not change the strain. The polarizations already end in zeros
+wider than the largest delay and the resampling kernel's half-width together, so
+every sample the kernel reads past their end is a zero whether padded or not.
+With the finite arms off, the padded and unpadded strain are bit-identical. With
+them on, the arm's residual is a convolution evaluated by FFT on a length that
+grows with the series, and the two differ by rounding, measured at 4e-16 of the
+peak.
+
 ### Choosing the strength range and the interval
 
 Both are inputs to `draw_burst_injection_set`, with no default, because they

@@ -63,7 +63,7 @@ from gwmock_signal.injection.core import _add_strain
 from gwmock_signal.multichannel.stack import DetectorStrainStack
 from gwmock_signal.projection import solar_system
 from gwmock_signal.projection.effects import ProjectionEffects
-from gwmock_signal.projection.network import _project, _resolve_effects, validate_projection_backend
+from gwmock_signal.projection.network import _project, _resolve_effects, use_projection_backend
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, edge_padding
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.simulator import GWSimulator
@@ -144,13 +144,7 @@ class ContinuousWaveSimulator(GWSimulator):
             ValueError: If ``reference_time_ssb`` or any spindown term is not finite, or
                 ``projection_backend`` is not one of the two names.
         """
-        self.projection_backend = validate_projection_backend(projection_backend, parameter="projection_backend")
-        if projection_backend == "jax":
-            # Enabled here rather than relied upon: the device projection refuses to run without x64.
-            # Idempotent, so nothing changes for callers who already have it on.
-            import jax  # noqa: PLC0415 — optional [jax] dep, and only needed for this backend
-
-            jax.config.update("jax_enable_x64", True)
+        self.projection_backend = use_projection_backend(projection_backend)
         if not np.isfinite(reference_time_ssb):
             raise ValueError("reference_time_ssb must be a finite GPS-scale time in seconds.")
         spindown_terms = tuple(float(term) for term in spindowns)
