@@ -285,7 +285,7 @@ class BurstSimulator(TransientSimulator):
     per length of series, and a burst injection set comes in thousands of lengths (6,947 among one
     stream's 53,248 bursts at 8192 Hz). Each burst is therefore projected at a fixed length -- its
     polarizations padded with zeros to the next length of a ladder with two per octave, and the result
-    cut back -- so that stream compiles 16 kernels, within the cache, and reuses each; see
+    cut back -- so that stream compiles 16 kernels per pair of arm lengths in the network, and reuses each; see
     :func:`~gwmock_signal.projection.network.device_length`. The strain is bit-identical to an unpadded
     projection with the finite arms off, and differs by rounding with them on.
 

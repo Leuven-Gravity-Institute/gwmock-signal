@@ -270,3 +270,17 @@ def test_fixed_lengths_are_skipped_where_padding_would_change_the_result(monkeyp
     expected = hp.n_samples + (2 * network.edge_padding(RATE) if keep_delayed_samples else 0)
     assert seen == [expected]
     assert device_length(expected) != expected
+
+
+def test_the_kernel_cache_keeps_a_burst_set_on_a_four_detector_network():
+    """One kernel per ladder length and per pair of arm lengths, which the finite arms make static.
+
+    The production-like set at 8192 Hz spans 497 to about 92,000 samples once padded for the delay: 16
+    lengths. H1, L1, V1 and K1 have four distinct pairs of arm lengths, so the set needs 64 kernels.
+    """
+    pairs = {network._arm_lengths(["H1", "L1", "V1", "K1"])[name] for name in ("H1", "L1", "V1", "K1")}
+    assert len(pairs) == 4
+    lengths = {device_length(n) for n in range(497, 92_000)}
+    assert len(lengths) == 16
+    assert len(lengths) * len(pairs) <= network._KERNEL_CACHE_SIZE
+    assert network._compiled_rotating_projection.cache_info().maxsize == network._KERNEL_CACHE_SIZE

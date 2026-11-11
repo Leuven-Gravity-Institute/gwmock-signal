@@ -228,15 +228,17 @@ to 2.6 s against 0.17 s at a known one. The simulator therefore pads each
 burst's polarizations with zeros to the next of a fixed ladder of lengths, $2^k$
 and $3 \cdot 2^{k-1}$ from 512 samples, and cuts the result back. That stream
 then compiles 16 kernels, and projects 33% more samples in all, no burst more
-than 1.5 times its own.
+than 1.5 times its own. With the finite arms on, the arm lengths are part of
+each kernel, so a network compiles 16 per distinct pair of them: 16 for an ET
+network, 48 for H1, L1 and V1. The kernel cache keeps 64.
 
-The padding does not change the strain. The polarizations already end in zeros
-wider than the largest delay and the resampling kernel's half-width together, so
-every sample the kernel reads past their end is a zero whether padded or not.
-With the finite arms off, the padded and unpadded strain are bit-identical. With
-them on, the arm's residual is a convolution evaluated by FFT on a length that
-grows with the series, and the two differ by rounding, measured at 4e-16 of the
-peak.
+With the finite arms off, the padded and unpadded strain are bit-identical; with
+them on, they differ by rounding. The polarizations already end in zeros wider
+than the largest delay and the resampling kernel's half-width together, so every
+sample the kernel reads past their end is a zero whether padded or not. The one
+step that is not per sample is the arm's residual, a convolution evaluated by
+FFT on a length that grows with the series; the difference it leaves was
+measured at 4e-16 of the peak.
 
 ### Choosing the strength range and the interval
 

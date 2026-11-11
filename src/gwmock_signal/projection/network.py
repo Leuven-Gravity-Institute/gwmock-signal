@@ -188,11 +188,20 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
     )
 
 
-#: Compiled-kernel cache bound, matching ``jax_batch._KERNEL_CACHE_SIZE``. An unbounded cache
-#: is a process-lifetime leak of XLA executables and their device memory: the justification
-#: "a run uses one or two segment shapes" is a per-run claim, and this cache outlives a run,
-#: so a long-lived worker projecting varied lengths would accumulate kernels without end.
-_KERNEL_CACHE_SIZE = 32
+#: Compiled-kernel cache bound. An unbounded cache is a process-lifetime leak of XLA executables
+#: and their device memory: the justification "a run uses one or two segment shapes" is a per-run
+#: claim, and this cache outlives a run, so a long-lived worker projecting varied lengths would
+#: accumulate kernels without end.
+#:
+#: Sized for bursts projected at fixed lengths (:func:`device_length`): one kernel per length *and*
+#: per distinct pair of arm lengths when the finite arms are on, since the arm lengths are static.
+#: A burst set at 8192 Hz takes 16 lengths; the ET networks have one pair of arm lengths, H1, L1 and
+#: V1 three, and with K1 four, so 64 keeps every kernel of such a set on a four-detector network.
+#: Compiling those 64 in one CPU process grew its resident memory by 2.0 GB in all -- 0.27 GB for the
+#: first four, which include JAX's own start-up, 0.02 to 0.34 GB for each later four, rising with the
+#: length -- an upper bound on what the cache holds, since it includes whatever working memory JAX
+#: keeps. ``jax_batch`` keeps its own, smaller cache.
+_KERNEL_CACHE_SIZE = 64
 
 #: Longest span the device path's linear sidereal model is accepted for, in seconds.
 #:
@@ -280,8 +289,8 @@ def device_length(n_samples: int) -> int:
     The lengths are ``2**k`` and ``3 * 2**(k - 1)``, from :data:`_SHORTEST_DEVICE_LENGTH` up: two
     per octave, so a series is padded by less than half its length, and a span of lengths a
     factor ``r`` wide needs about ``2 * log2(r)`` kernels. A burst injection set from a 0.06 s
-    Gaussian to an 11 s sine-Gaussian at 8192 Hz therefore compiles 16, inside the cache of
-    :data:`_KERNEL_CACHE_SIZE`, where its own lengths would need thousands.
+    Gaussian to an 11 s sine-Gaussian at 8192 Hz therefore compiles 16 per pair of arm lengths, where
+    its own lengths would need thousands; :data:`_KERNEL_CACHE_SIZE` is sized to keep them.
 
     Args:
         n_samples: Length of the series to project, positive.
@@ -329,7 +338,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
 
     Cached on the shape rather than rebuilt per call because ``jax.jit`` re-traces a fresh wrapper
     every time one is constructed, which would reintroduce the cost this exists to remove. The
-    cache is keyed on four scalars and bounded at ``_KERNEL_CACHE_SIZE``, because a long-lived
+    cache is keyed on the static arguments above and bounded at ``_KERNEL_CACHE_SIZE``, because a long-lived
     process projecting varied shapes would otherwise retain XLA executables for its lifetime.
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
