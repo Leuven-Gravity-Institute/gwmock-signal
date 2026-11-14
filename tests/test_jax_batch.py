@@ -659,3 +659,72 @@ def test_simulate_cbc_batch_keeps_signal_the_delay_moves_past_an_end(earth_rotat
         assert np.max(difference) < 1e-10 * scale, (
             f"event {event} {name}: {np.max(difference) / scale:.3e} of peak from the host projection"
         )
+
+
+def test_batch_projection_matches_host_across_a_utc_midnight() -> None:
+    """The batched device projection must agree with the host where a buffer crosses a UTC midnight.
+
+    Regression test: the batch took sidereal time from each event's anchor and *one* rate shared
+    across the batch, which drifts from Astropy after a UTC midnight and, for an event days from the
+    first, also by the difference in rate between the days. Both events here cross a midnight: one
+    with the rate measured at its own start, one three days after the first. They differed from the
+    host by 2.1e-10 and 3.9e-10 of the peak and now agree to 1.3e-14.
+
+    Calls the batch's projection directly on spectra of known polarizations, so no waveform model is
+    generated and the comparison is of the projection alone.
+    """
+    from types import SimpleNamespace
+
+    from astropy.time import Time
+
+    from gwmock_signal.jax_batch import _project_rotating
+    from gwmock_signal.projection.geometry import resolve_detectors
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.timeseries import TimeSeries
+
+    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+    fs = 128.0
+    n_samples, padding = int(4096.0 * fs), edge_padding(fs)
+    starts = np.array([midnight - 1000.0 + 0.3225957, midnight + 3 * 86400.0 - 2500.0 + 0.71])
+    t = np.arange(n_samples) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    plus, cross = envelope * np.cos(phase), envelope * np.sin(phase)
+    # The batch inverse-transforms these and multiplies by the rate, so this round-trips `plus` and `cross`.
+    fd = SimpleNamespace(
+        plus=jax.numpy.asarray(np.stack([np.fft.rfft(plus) / fs] * 2)),
+        cross=jax.numpy.asarray(np.stack([np.fft.rfft(cross) / fs] * 2)),
+    )
+    sky = {"right_ascension": 1.232, "declination": -0.603, "polarization_angle": 1.73}
+    strain = np.asarray(
+        _project_rotating(
+            fd,
+            [key for _, key in resolve_detectors(["E1"])],
+            n_samples=n_samples,
+            padding=padding,
+            sampling_frequency=fs,
+            merger_index=0,
+            segment_start_gps=starts - padding / fs,
+            right_ascension=jax.numpy.full(2, sky["right_ascension"]),
+            declination=jax.numpy.full(2, sky["declination"]),
+            right_ascension_rate=jax.numpy.zeros(2),
+            declination_rate=jax.numpy.zeros(2),
+            polarization_angle=jax.numpy.full(2, sky["polarization_angle"]),
+            alignment_shift=np.zeros(2),
+            output_names=["E1"],
+        )
+    )
+    for event, start in enumerate(starts):
+        host = project_polarizations_to_network(
+            {
+                "plus": TimeSeries(plus, t0=start, sample_rate=fs),
+                "cross": TimeSeries(cross, t0=start, sample_rate=fs),
+            },
+            ["E1"],
+            backend="numpy",
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            **sky,
+        )["E1"]
+        assert strain[event, 0].size == host.n_samples
+        assert np.max(np.abs(strain[event, 0] - np.asarray(host.data))) < 1e-12 * np.max(envelope), event

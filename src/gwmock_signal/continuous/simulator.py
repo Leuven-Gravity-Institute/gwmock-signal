@@ -131,8 +131,8 @@ class ContinuousWaveSimulator(GWSimulator):
                 misconfigured, or a backend can have a defect, and in any of those the host path
                 still works and the caller needs to be able to reach it.
 
-                One limit comes with the default. The device path extrapolates sidereal time
-                linearly across the span it is given and refuses a span over 86400 s, which is a
+                One limit comes with the default. The device path refuses a span over 86400 s, the
+                longest its sidereal-time model has been checked over, which is a
                 *single* segment and needs ``"numpy"`` to go beyond. The span it measures is the
                 padded one, not the nominal segment. ``edge_padding`` adds samples at each end,
                 about 0.05 s to 4.13 s per end depending on sample rate, so the usable segment --

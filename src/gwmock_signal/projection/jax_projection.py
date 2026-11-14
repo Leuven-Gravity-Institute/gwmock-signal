@@ -51,6 +51,7 @@ from gwmock_signal.projection.resampling import (
     kaiser_window_chebyshev,
     validate_kernel,
 )
+from gwmock_signal.projection.sidereal import GMST_NODE_SPACING_SECONDS
 
 if TYPE_CHECKING:
     from jax import Array
@@ -423,6 +424,22 @@ def _interpolate_uniform_sinc(  # noqa: PLR0913
     return jnp.where(in_range, interpolated, 0.0)
 
 
+def _interpolate_nodes(nodes: ArrayLike, offsets: ArrayLike, spacing: float) -> Array:
+    """Interpolate ``nodes``, spaced ``spacing`` seconds from offset zero, linearly at ``offsets``.
+
+    The nodes are uniform, so the interval is found by division rather than a search. Offsets past the
+    last node continue the last interval's line, as :func:`numpy.interp` would not; callers size the
+    nodes to cover every offset (:func:`~gwmock_signal.projection.sidereal.gmst_node_count`).
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    nodes = jnp.asarray(nodes, dtype=jnp.float64)
+    position = offsets / spacing
+    cell = jnp.clip(jnp.floor(position), 0, nodes.shape[-1] - 2)
+    index = cell.astype(jnp.int32)
+    return nodes[index] + (position - cell) * (nodes[index + 1] - nodes[index])
+
+
 def project_polarizations_td_rotating(  # noqa: PLR0913
     plus: ArrayLike,
     cross: ArrayLike,
@@ -441,6 +458,8 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     polarization_angle: ArrayLike,
     gmst_start: ArrayLike,
     gmst_rate: float,
+    gmst_correction: ArrayLike | None = None,
+    gmst_node_spacing: float = GMST_NODE_SPACING_SECONDS,
     extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
@@ -521,9 +540,17 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         gmst_start: Greenwich Mean Sidereal Time in radians at the first sample, computed on
             the host by :func:`~gwmock_signal.projection.sidereal.gmst_anchor_and_rate`.
             Supplied rather than computed here so that Astropy remains the only
-            implementation of the sidereal model; see that module for why a linear model
-            is exact at these segment lengths.
+            implementation of the sidereal model.
         gmst_rate: dGMST/dt in radians per second.
+        gmst_correction: Astropy's GMST less ``gmst_start + gmst_rate * t`` at nodes
+            ``gmst_node_spacing`` apart from the first sample, from
+            :func:`~gwmock_signal.projection.sidereal.gmst_correction_nodes`, covering the segment
+            (:func:`~gwmock_signal.projection.sidereal.gmst_node_count` nodes); interpolated linearly
+            and added to the line. ``None`` uses the line alone, which is exact to 6e-14 rad within
+            a UTC day but drifts after a UTC midnight, by 9.3e-11 rad 744 s after one: Astropy's GMST
+            changes rate there (:mod:`~gwmock_signal.projection.sidereal`). The projection functions
+            in this package always pass it.
+        gmst_node_spacing: Spacing of the ``gmst_correction`` nodes in seconds; static.
         right_ascension_rate: How fast the precessed right ascension moves, in radians per second,
             from :func:`~gwmock_signal.projection.sidereal.precessed_sky_anchor_and_rate`. Required
             rather than defaulted, because a caller that forgets it gets a position frozen for the
@@ -558,9 +585,12 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     dt = 1.0 / sampling_frequency
     sample_offsets = jnp.arange(n_samples, dtype=jnp.float64) * dt
 
-    # GMST from the host-supplied anchor and rate. Deliberately left unwrapped: only its
-    # sine and cosine are used, and wrapping would put a discontinuity mid-segment.
+    # GMST from the host-supplied anchor and rate, plus Astropy's departure from that line interpolated
+    # between nodes. Deliberately left unwrapped: only its sine and cosine are used, and wrapping would
+    # put a discontinuity mid-segment.
     gmst = gmst_start + gmst_rate * sample_offsets
+    if gmst_correction is not None:
+        gmst = gmst + _interpolate_nodes(gmst_correction, sample_offsets, gmst_node_spacing)
 
     # The sky position moves too, because precession is a rotation into the frame *of date* and the
     # date advances across the segment. Linear in absolute time, so two abutting segments agree

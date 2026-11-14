@@ -323,7 +323,8 @@ def _long_inspiral(fs: float, duration: float, t0: float):
     [
         # Measured 7.9e-14 of peak: only the time labels' rounding differs.
         ("numpy", 1e-12),
-        # Measured 1.3e-11: the device path's linear sidereal model is anchored at the padded start.
+        # Measured 1.1e-13. The device path's sidereal model is anchored at the padded start, and its
+        # Astropy nodes are spaced from there, so the two spans interpolate between different nodes.
         ("jax", 1e-10),
     ],
 )

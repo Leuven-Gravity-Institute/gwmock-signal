@@ -203,11 +203,16 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
 #: keeps. ``jax_batch`` keeps its own, smaller cache.
 _KERNEL_CACHE_SIZE = 64
 
-#: Longest span the device path's linear sidereal model is accepted for, in seconds.
+#: Longest span the device path's sidereal model is accepted for, in seconds.
 #:
-#: Set by an error budget rather than by where the validation table ends. The linear model's
-#: deviation from Astropy, converted to the quantity that actually enters the projection -- a
-#: geocenter delay -- is 1.2e-15 s over 8192 s, 6.2e-11 s over a day, and 1.2e-7 s over 90 days.
+#: Set by an error budget rather than by where the validation table ends. The model was once a line
+#: from the first sample, whose deviation from Astropy, converted to the quantity that actually enters
+#: the projection -- a geocenter delay -- was 6.2e-11 s over a day and 1.2e-7 s over 90 days; it is now
+#: that line plus Astropy's departure from it interpolated between nodes one second apart
+#: (:mod:`~gwmock_signal.projection.sidereal`), exact at every node and within 1.9e-15 s of delay
+#: between them at the largest change of rate measured from 2005 to 2026. The name is kept because
+#: callers import it.
+#:
 #: The projection still carries a known 8.7e-07 s worst-case disagreement with
 #: ``lalpulsar.Barycenter``, from omitting nutation where LAL includes it, so a day-long span sits
 #: four orders of magnitude below a systematic this code knowingly accepts. (It was 1.8e-04 s and
@@ -360,6 +365,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
         polarization_angle,
         gmst_start,
         gmst_rate,
+        gmst_correction,
         arms,
         solar_arrays,
         solar_start_offset,
@@ -392,6 +398,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
             polarization_angle=polarization_angle,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
+            gmst_correction=gmst_correction,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
             tapered=tapered,
@@ -435,11 +442,12 @@ def _project_rotating_on_device(  # noqa: PLR0913
     neither can pad or window differently from the other.
 
     Sidereal time is the one place the two differ in form rather than arithmetic. The host path
-    asks Astropy for GMST at every sample; the device path takes a host-computed anchor and rate
-    and extrapolates linearly, because Astropy cannot be traced. That is not an approximation at
-    these lengths: the linear model deviates by 6.4e-14 rad over 2048 s and 5.6e-14 rad over
-    8192 s, worth 1.2e-15 s of geocenter delay, which is orders below the kernel's own error.
-    See :mod:`~gwmock_signal.projection.sidereal` for the table.
+    asks Astropy for GMST at every sample; the device path, because Astropy cannot be traced, takes
+    a host-computed anchor and rate plus Astropy's departure from that line at nodes one second
+    apart, interpolated linearly. A line alone is exact to 6e-14 rad within a UTC day but not across
+    a UTC midnight, where Astropy's GMST changes rate; with the nodes the device follows Astropy to
+    8.8e-14 rad, 1.9e-15 s of geocenter delay, at any span. See
+    :mod:`~gwmock_signal.projection.sidereal`.
 
     Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,
     where the arrays are per-event and independent; here there is one pair of polarizations and
@@ -448,7 +456,11 @@ def _project_rotating_on_device(  # noqa: PLR0913
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
-    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate  # noqa: PLC0415
+    from gwmock_signal.projection.sidereal import (  # noqa: PLC0415
+        gmst_anchor_and_rate,
+        gmst_correction_nodes,
+        gmst_node_count,
+    )
 
     # Refused rather than allowed to degrade. Without x64 every `jnp.asarray(..., float64)` in
     # the device path truncates to float32 and the projection still returns a plausible-looking
@@ -477,22 +489,24 @@ def _project_rotating_on_device(  # noqa: PLR0913
             raise ValueError(f"compiled_length ({compiled_length}) is shorter than the series ({n_samples}).")
         hp_vals = np.pad(hp_vals, (0, compiled_length - n_samples))
         hc_vals = np.pad(hc_vals, (0, compiled_length - n_samples))
-    # The linear sidereal model is fitted per call, so a run of many consecutive segments never
-    # accumulates error -- each gets a fresh Astropy anchor. What it cannot absorb is one
-    # unusually long segment. Measured against Astropy at this epoch: 1.5e-10 rad over 8 hours,
-    # 2.9e-9 over a day, 5.8e-6 over 90 days. The tabulated validation in `sidereal` stops at
-    # 8192 s, which is where this refuses, rather than letting the public API accept a span the
-    # model was never checked against and returning a quietly degraded answer.
+    # The sidereal model is fitted per call, so a run of many consecutive segments never accumulates
+    # error -- each gets a fresh Astropy anchor and its own nodes. One segment is refused beyond the
+    # span the model has been measured over (MAX_LINEAR_SIDEREAL_SPAN_SECONDS), rather than letting
+    # the public API accept a span nothing has checked.
     span = float(time_array[-1] - time_array[0])
     if span > MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
         raise ValueError(
             f"backend='jax' accepts spans up to {MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
-            f"and this one is {span:.0f} s. The device path extrapolates sidereal time linearly "
-            f"from one anchor, which is exact to 1.2e-15 s of delay over the validated range and "
-            f"degrades beyond it. Project in segments, or use backend='numpy', which asks Astropy "
-            f"for every sample."
+            f"and this one is {span:.0f} s. The device path interpolates sidereal time from Astropy "
+            f"values at nodes one second apart, which has been measured over spans up to that length. "
+            f"Project in segments, or use backend='numpy', which asks Astropy for every sample."
         )
     anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
+    # Astropy's GMST bends at every UTC midnight, which a line from the first sample cannot follow; the
+    # correction nodes carry the bend (`sidereal`). Sized for the compiled length, so padding is covered.
+    gmst_correction = gmst_correction_nodes(
+        float(time_array[0]), anchors, rate, gmst_node_count((len(hp_vals) - 1) / sampling_frequency)
+    )[0]
 
     solar_components = None if timing is None else timing.model.components
     if timing is None:
@@ -540,6 +554,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
             polarization_angle,
             float(np.atleast_1d(anchors)[0]),
             float(rate),
+            gmst_correction,
             arms,
             *solar,
             lattice_shift,

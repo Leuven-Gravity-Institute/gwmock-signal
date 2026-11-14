@@ -21,24 +21,32 @@ which enters the geocenter delay as a ~3e-8 s timing error and was, once the res
 kernel was made accurate, the largest disagreement between the paths.
 
 The fix is not a better series but a different decomposition. GMST is very nearly linear in
-time, so a segment needs only an anchor and a rate — two host-computed scalars that a
-device kernel can consume. Astropy therefore remains the only implementation of the
-sidereal model, including its IERS UT1 handling, while the kernel does one multiply-add.
+time, so a segment needs only an anchor and a rate -- two host-computed scalars that a
+device kernel can consume -- plus, because "very nearly" is not "exactly", a correction
+sampled from Astropy at regular nodes (:func:`gmst_correction_nodes`) and interpolated
+linearly between them on the device. Astropy therefore remains the only implementation of
+the sidereal model, including its IERS UT1 handling.
 
-!!! note "How linear is it?"
+!!! note "Why a line alone is not enough"
 
-    Fitting the endpoints and measuring the worst deviation in between, against Astropy:
+    Astropy takes UT1 - UTC from the IERS tables, which give it once per day at 0h UTC, and
+    interpolates linearly in between. Its GMST is therefore a straight line within a UTC day
+    and changes slope at every UTC midnight, by however much the length of day changed. From
+    2005 to 2026 that change in rate was 9.3e-14 rad/s at the median and at most 3.5e-13 rad/s.
 
-    | segment | max deviation | as a geocenter delay error |
-    |---|---|---|
-    | 256 s | 6.4e-14 rad | 1.4e-15 s |
-    | 2048 s | 6.4e-14 rad | 1.4e-15 s |
-    | 8192 s | 5.6e-14 rad | 1.2e-15 s |
-    | 86400 s | 8.6e-10 rad | 1.8e-11 s |
+    A single anchor and rate cannot follow the bend. Within one UTC day the line is exact to
+    6e-14 rad, but after a midnight it drifts by the change in rate times the time since the
+    midnight: 9.3e-11 rad (a 2e-12 s geocenter delay) at the end of one 4096 s segment that
+    crosses midnight 744 s before its end. Over a month of segments from GPS 1e9, one starting
+    every 30 minutes, the worst was 7.2e-10 rad for 4096 s segments and 1.6e-9 rad for 8192 s;
+    about one segment in 21 of 4096 s crosses a midnight.
 
-    So over any segment length these simulations use, the linear model is exact to well
-    below every other error in the projection. ``tests/projection/test_sidereal.py``
-    pins this.
+    The nodes remove it. Linear interpolation between nodes ``h`` seconds apart is exact on
+    each straight piece of Astropy's curve, and in the one interval that contains a midnight
+    it is off by at most the change in rate times ``h / 4``. With
+    :data:`GMST_NODE_SPACING_SECONDS` = 1 s that is 8.8e-14 rad (a 1.9e-15 s geocenter delay)
+    at the largest change in rate measured, comparable to the line's own error within a day.
+    ``tests/projection/test_sidereal.py`` pins this across a midnight.
 
 Using Astropy also removes the ``dut1`` approximation rather than merely exposing it:
 Astropy applies real IERS UT1-UTC, whereas the on-device series defaulted to ``dut1 = 0``
@@ -77,6 +85,15 @@ from astropy.time import Time
 #: own round-off does not dominate the slope, short enough that GMST advances only
 #: ~0.044 rad across it -- which is what makes the wrap correction below unambiguous.
 _RATE_BASELINE_SECONDS = 600.0
+
+#: Spacing, in seconds, of the Astropy nodes from which the device paths interpolate sidereal time.
+#: Linear interpolation is exact between UTC midnights, where Astropy's GMST is a straight line,
+#: and off by at most the change in rate times a quarter of the spacing in the interval containing
+#: one: 8.8e-14 rad at the 3.5e-13 rad/s change measured as the largest from 2005 to 2026 (see the
+#: module docstring). A finer spacing costs Astropy calls and device memory and buys nothing the
+#: projection can resolve; 16 s would allow 1.4e-12 rad. One node per second is 4097 values for a
+#: 4096 s segment, evaluated by Astropy in milliseconds.
+GMST_NODE_SPACING_SECONDS = 1.0
 
 
 def gmst_rad_astropy(t_gps: np.ndarray | float) -> np.ndarray:
@@ -140,6 +157,67 @@ def gmst_anchor_and_rate(
     anchors = gmst_rad_astropy(start_times)
     epoch = float(start_times.flat[0]) if rate_epoch is None else float(rate_epoch)
     return anchors, gmst_rate_rad_per_second(epoch)
+
+
+def gmst_node_count(duration: float, spacing: float = GMST_NODE_SPACING_SECONDS) -> int:
+    """Return how many nodes :func:`gmst_correction_nodes` needs to cover ``duration`` seconds.
+
+    Enough that the last sample, ``duration`` after the first, lies inside the last interval.
+
+    Args:
+        duration: Time from a segment's first sample to its last, in seconds; not negative.
+        spacing: Node spacing in seconds; positive.
+
+    Returns:
+        The node count, at least two.
+    """
+    return int(np.floor(duration / spacing)) + 2
+
+
+def gmst_correction_nodes(
+    start_times: np.ndarray | float,
+    anchors: np.ndarray,
+    rate: float,
+    n_nodes: int,
+    spacing: float = GMST_NODE_SPACING_SECONDS,
+) -> np.ndarray:
+    """Return Astropy's GMST less the anchor-and-rate line, at nodes ``spacing`` apart from each start.
+
+    A device kernel adds the line ``anchor + rate * t`` and this correction interpolated linearly
+    between the nodes, which reproduces Astropy at every node and follows the change in Astropy's
+    rate at a UTC midnight that the line alone cannot (module docstring). The correction is small,
+    about 1e-10 rad over hours, so interpolating it rather than GMST itself costs no precision.
+
+    Node ``k`` lies at ``start + k * spacing``, passed to Astropy as the two parts of its time rather
+    than as their float64 sum, which near GPS 1e9 would round to 1.2e-7 s (9e-12 rad).
+
+    Args:
+        start_times: GPS time of each segment's first sample, scalar or shape ``(n_segments,)``.
+        anchors: The anchors :func:`gmst_anchor_and_rate` returned for ``start_times``.
+        rate: The rate it returned.
+        n_nodes: Nodes per segment, from :func:`gmst_node_count`.
+        spacing: Node spacing in seconds.
+
+    Returns:
+        The correction in radians, shape ``(n_segments, n_nodes)``.
+    """
+    starts = np.atleast_1d(np.asarray(start_times, dtype=float))
+    offsets = np.arange(n_nodes) * float(spacing)
+    shape = (starts.size, offsets.size)
+    # Constructed as `gmst_rad_astropy` constructs its times, so node 0 reproduces the anchor exactly.
+    instants = Time(
+        np.broadcast_to(starts[:, None], shape),
+        np.broadcast_to(offsets[None, :], shape),
+        format="gps",
+        scale="utc",
+        location=(0, 0),
+    )
+    exact = np.unwrap(np.asarray(instants.sidereal_time("mean").rad, dtype=float), axis=-1)
+    line = np.atleast_1d(np.asarray(anchors, dtype=float))[:, None] + float(rate) * offsets[None, :]
+    correction = exact - line
+    # Both are GMST at the same instants, so they differ by whole turns at most where Astropy wrapped
+    # before the first node and the anchor did not; remove those.
+    return correction - 2.0 * np.pi * np.round(correction / (2.0 * np.pi))
 
 
 #: Seconds per Julian century, for the precession polynomials.

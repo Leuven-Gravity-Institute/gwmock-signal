@@ -751,13 +751,13 @@ class TestTheDeviceBackend:
 
     @pytest.mark.requires_gwpy
     def test_a_span_beyond_the_validated_sidereal_range_is_refused(self):
-        """The device path extrapolates sidereal time linearly from a single anchor.
+        """The device path's sidereal model is accepted to 86400 s and refused beyond it.
 
-        Accepted to 86400 s, a ceiling set by an error budget: at a day the model costs 6.2e-11 s
-        of geocenter delay, four orders below the 8.7e-07 s nutation residue the projection
-        already carries. Beyond that nothing has been measured, and a single segment that long
-        would get a quietly degraded answer rather than an error. Consecutive segments are
-        unaffected at any run length, because each re-anchors against Astropy.
+        A ceiling set by an error budget when the model was a line from a single anchor: at a day
+        that cost 6.2e-11 s of geocenter delay, four orders below the 8.7e-07 s nutation residue the
+        projection already carries. Beyond that nothing has been measured, so a longer single
+        segment is refused rather than answered. Consecutive segments are unaffected at any run
+        length, because each re-anchors against Astropy.
         """
         with pytest.raises(ValueError, match="accepts spans up to"):
             project_polarizations_to_network(

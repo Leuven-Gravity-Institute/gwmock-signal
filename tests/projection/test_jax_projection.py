@@ -774,3 +774,47 @@ def test_device_resampling_places_nothing_for_a_far_or_non_finite_position(fract
     out = np.asarray(_interpolate_uniform_sinc(jnp.ones(16), whole, 16, fraction=fraction))
     np.testing.assert_array_equal(out[1:], np.zeros(2))
     assert (out[0] == 0.0) == (fraction != 0.5)
+
+
+def test_device_node_interpolation_matches_numpy_interp() -> None:
+    """The device's uniform-node interpolation equals :func:`numpy.interp` inside the nodes."""
+    from gwmock_signal.projection.jax_projection import _interpolate_nodes
+
+    rng = np.random.default_rng(3)
+    nodes = rng.normal(size=9) * 1e-10
+    offsets = np.concatenate([[0.0, 8.0], rng.uniform(0.0, 8.0, 200)])
+    expected = np.interp(offsets, np.arange(9.0), nodes)
+    np.testing.assert_allclose(np.asarray(_interpolate_nodes(nodes, offsets, 1.0)), expected, rtol=0.0, atol=1e-24)
+
+
+def test_device_projection_matches_host_across_a_utc_midnight() -> None:
+    """The device projection must agree with the host where the buffer crosses a UTC midnight.
+
+    Regression test: the device path took sidereal time from a line through the buffer's first sample,
+    which drifts from Astropy after a UTC midnight, where Astropy's GMST changes rate. The host asks
+    Astropy at every sample. With the signal 2800 s after the midnight the two differed by 2.1e-10 of
+    the peak; they now agree to 1.4e-14.
+    """
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.timeseries import TimeSeries
+
+    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+    start, fs = midnight - 1000.0 + 0.3225957, 128.0
+    t = np.arange(int(4096.0 * fs)) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    polarizations = {
+        "plus": TimeSeries(envelope * np.cos(phase), t0=start, sample_rate=fs),
+        "cross": TimeSeries(envelope * np.sin(phase), t0=start, sample_rate=fs),
+    }
+    kwargs = {
+        "right_ascension": 1.232,
+        "declination": -0.603,
+        "polarization_angle": 1.73,
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
+    }
+    host = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="numpy", **kwargs)
+    device = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="jax", **kwargs)
+    for name in ("E1", "E2", "E3"):
+        difference = np.abs(np.asarray(device[name].data) - np.asarray(host[name].data))
+        assert np.max(difference) < 1e-12 * np.max(envelope), name

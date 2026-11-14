@@ -57,7 +57,13 @@ from gwmock_signal.projection.resampling import (
     require_shift_within_padding,
     require_terrestrial_location,
 )
-from gwmock_signal.projection.sidereal import gmst_anchor_and_rate, gmst_rad_astropy, precessed_sky_anchor_and_rate
+from gwmock_signal.projection.sidereal import (
+    gmst_anchor_and_rate,
+    gmst_correction_nodes,
+    gmst_node_count,
+    gmst_rad_astropy,
+    precessed_sky_anchor_and_rate,
+)
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
 from gwmock_signal.sampling_grid import SamplingGrid
 from gwmock_signal.timeseries import TimeSeries, as_timeseries
@@ -281,9 +287,10 @@ def _rotating_projection_kernel(
         solar_components: ``(roemer, einstein, shapiro)`` for the solar-system delay, ``None`` for none.
 
     Returns:
-        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, extra_shift,
-        solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response, location, arms)``,
-        batched over events; the solar arguments are each event's
+        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, gmst_correction,
+        extra_shift, solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response, location,
+        arms)``, batched over events; ``gmst_correction`` is each event's
+        :func:`~gwmock_signal.projection.sidereal.gmst_correction_nodes`, and the solar arguments are each event's
         :meth:`~gwmock_signal.projection.solar_system.DelayModel.arrays`, first sample's time since the
         model's epoch, and absorbed ``(reference, delay, rate)``.
     """
@@ -298,6 +305,7 @@ def _rotating_projection_kernel(
         dec_rate: Array,
         psi: Array,
         gmst_start: Array,
+        gmst_correction: Array,
         extra_shift: Array,
         solar_arrays: tuple,
         solar_start_offset: Array,
@@ -326,6 +334,7 @@ def _rotating_projection_kernel(
             polarization_angle=psi,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
+            gmst_correction=gmst_correction,
             extra_shift_samples=extra_shift,
             arms=None if arm_lengths is None else arms,
             arm_lengths=arm_lengths,
@@ -335,7 +344,7 @@ def _rotating_projection_kernel(
     # The sky-position rates are mapped, not unmapped: where they are non-zero they are per-event,
     # because each event's segment sits at its own epoch and the precession polynomials' derivatives
     # differ between epochs. Sharing one rate across a batch would be a second, silent approximation.
-    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None)))
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -934,8 +943,11 @@ def _project_rotating(  # noqa: PLR0913
     plus_td = to_time_domain(fd.plus)
     cross_td = to_time_domain(fd.cross)
 
-    # One Astropy evaluation per event on the host, plus one shared rate: the kernel then
-    # needs only a multiply-add for sidereal time, and no second sidereal implementation.
+    # Astropy on the host, per event: an anchor, one rate shared across the batch, and each event's
+    # departure from that line at nodes one second apart, which the kernel interpolates. The nodes carry
+    # both what one line cannot -- the change in Astropy's rate at a UTC midnight -- and the difference
+    # between the shared rate and an event's own, since the events sit at different epochs. No second
+    # sidereal implementation.
     # Checked on the host, where these are concrete: inside the jitted kernel the geometry and
     # the shift are traced, so the padding assumptions cannot be validated there.
     require_shift_within_padding(alignment_shift, name="alignment_shift")
@@ -949,6 +961,15 @@ def _project_rotating(  # noqa: PLR0913
     # distinct signatures, so anything later passing an array scalar would pay a second
     # compilation. Pinning it removes that possibility.
     gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
+    gmst_correction = jnp.asarray(
+        gmst_correction_nodes(
+            segment_start_gps,
+            np.asarray(gmst_anchors),
+            float(gmst_rate),
+            gmst_node_count((n_samples + 2 * padding - 1) / sampling_frequency),
+        ),
+        dtype=jnp.float64,
+    )
 
     count = len(segment_start_gps)
     if solar is None:
@@ -983,6 +1004,7 @@ def _project_rotating(  # noqa: PLR0913
                 declination_rate,
                 polarization_angle,
                 gmst_anchors,
+                gmst_correction,
                 jnp.asarray(alignment_shift, dtype=jnp.float64),
                 *solar_arguments,
                 gmst_rate,

@@ -76,9 +76,8 @@ CW signal; only a multi-segment run would disagree with itself.
 ## Projection backend
 
 `"jax"` is the default projection backend, as the projection is roughly 99% of a
-segment's cost. However, it comes with one limit: this backend linearly
-extrapolates sidereal time across the span it is given, and refuses a span
-longer than 86400 s.
+segment's cost. However, it comes with one limit: this backend refuses a span
+longer than 86400 s, the longest its sidereal-time model has been checked over.
 
 That limit applies to the **padded** span, not to the nominal segment. The
 projection is given a buffer padded at both ends (see below), so a segment whose
