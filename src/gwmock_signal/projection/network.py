@@ -855,9 +855,12 @@ def _midway_sky(
     For the finite arms' residual (``midway`` of :func:`~gwmock_signal.projection.finite_arm.apply_residual`).
     The sidereal angle is taken midway between neighbouring samples' -- the last one's carried on at the
     same step -- rather than from Astropy at the half samples, so the two interleaved series read one
-    smooth angle; the sky line, which is linear, is evaluated at ``precession_offsets``.
+    smooth angle; the sky line, which is linear, is evaluated at ``precession_offsets``. Astropy wraps the
+    angle to ``[0, 2 pi)``, so it is unwrapped first: averaged across the wrap, two neighbours would give
+    an angle pi away. Only its sine and cosine are read, so the result is left unwrapped.
     """
     _, right_ascension, declination, d_right_ascension, d_declination = sky_line
+    gmst = np.unwrap(gmst)
     midway = np.empty_like(gmst)
     midway[:-1] = 0.5 * (gmst[:-1] + gmst[1:])
     midway[-1] = gmst[-1] + (0.5 * (gmst[-1] - gmst[-2]) if gmst.size > 1 else 0.0)

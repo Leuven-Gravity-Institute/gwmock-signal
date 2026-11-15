@@ -20,7 +20,7 @@ from gwmock_signal.network import Network
 from gwmock_signal.projection import finite_arm, kernels
 from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import arm_lengths, reconstructed_geometry
-from gwmock_signal.projection.network import _gmst_accurate_array, project_polarizations_to_network
+from gwmock_signal.projection.network import _gmst_accurate_array, _midway_sky, project_polarizations_to_network
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, SPEED_OF_LIGHT_M_S, edge_padding
 from gwmock_signal.timeseries import TimeSeries
 
@@ -360,6 +360,48 @@ def test_the_residual_does_not_alias_what_earth_carries_past_nyquist(backend):
         start = round((T0 - float(series.t0)) * rate)
         error = np.max(np.abs(np.asarray(series.data)[start + positions] - expected))
         assert error < 1e-7, detector.name
+
+
+def test_the_half_sample_sidereal_angle_is_continuous_across_its_wrap():
+    """The host's angle half a sample later lies between its neighbours' even where Astropy wraps to 0.
+
+    Astropy returns GMST in ``[0, 2 pi)``; averaged across the wrap the two neighbours give an angle pi
+    away, which turns the source through half a day for that one half sample.
+    """
+    rate = 7.29211579558565e-05 / 4096.0  # rad per sample at 4096 Hz
+    gmst = np.mod(2 * np.pi - 5.5 * rate + rate * np.arange(12), 2 * np.pi)  # wraps between samples 5 and 6
+    sky_line = (0.0, 1.3, -0.4, 0.0, 0.0)
+    midway, _, _ = _midway_sky(gmst, sky_line, np.zeros(gmst.size))
+    expected = np.unwrap(gmst) + 0.5 * rate
+    np.testing.assert_allclose(np.cos(midway), np.cos(expected), rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(np.sin(midway), np.sin(expected), rtol=0.0, atol=1e-12)
+    single, _, _ = _midway_sky(gmst[:1], sky_line, np.zeros(1))
+    assert single[0] == gmst[0]
+
+
+def test_the_host_and_device_agree_across_the_sidereal_wrap_with_finite_arms():
+    """A tapered finite-arm projection whose span holds Astropy's GMST wrap to 0 agrees host to device.
+
+    The device forms the angle on an unwrapped line; the host reads Astropy, wrapped, and must not let the
+    wrap reach the half samples its residual reads.
+    """
+    jax = pytest.importorskip("jax")
+    jax.config.update("jax_enable_x64", True)
+    wrap = 1_000_081_544.6497  # Astropy's GMST passes 2 pi here (to 1e-4 s)
+    rate, n = 4096.0, 8192
+    t = np.arange(n) / rate
+    packet = np.exp(-(((t - 1.0) / 0.1) ** 2))
+    polarizations = {
+        "plus": TimeSeries(packet * np.cos(2 * np.pi * 300.0 * t), t0=wrap - 1.0, sample_rate=rate),
+        "cross": TimeSeries(packet * np.sin(2 * np.pi * 300.0 * t), t0=wrap - 1.0, sample_rate=rate),
+    }
+    detectors = _triangle()
+    common = {**SKY, "effects": _arms(), "tapered": True}
+    host = project_polarizations_to_network(polarizations, detectors, **common)
+    device = project_polarizations_to_network(polarizations, detectors, **common, backend="jax")
+    for detector in detectors:
+        peak = np.max(np.abs(host[detector.name].data))
+        assert np.max(np.abs(host[detector.name].data - device[detector.name].data)) / peak < 1e-9, detector.name
 
 
 def test_the_constant_projection_is_the_arm_average_with_earth_held_at_the_midpoint():
