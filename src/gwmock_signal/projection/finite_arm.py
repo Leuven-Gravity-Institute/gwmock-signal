@@ -37,6 +37,11 @@ delay and ``mu`` as constant across the residual's length of two light crossings
 order times the residual itself. Against the strain averaged by quadrature along each arm's light path,
 with Earth turning during the trip, it is 1e-11 of peak at 100 Hz, 4e-10 at 700 Hz and 3e-9 at 1.8 kHz
 for the ET triangle, within that bound (``tests/projection/test_finite_arm.py``).
+
+The same Doppler shift carries what lies within that fraction of Nyquist in the polarizations past
+Nyquist in the arm's strain. For a whole tapered signal the residual is therefore applied to the arm's
+strain sampled twice as finely, read half a sample after each sample as well (``midway`` of
+:func:`apply_residual`), where nothing aliases.
 """
 
 from __future__ import annotations
@@ -205,8 +210,18 @@ def apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel 
     taps: int,
     beta: float,
     xp: Any = np,
+    midway: Any | None = None,
 ) -> Any:
     """Return one arm's strain with the residual of its finite length applied, sample by sample.
+
+    The arm's strain is taken in detector time, and as Earth turns the delay to the arm changes by up
+    to 1.5e-6 s per second, which shifts every frequency in it by up to that fraction: what lies within
+    that fraction of Nyquist in the polarizations can lie just past Nyquist in the arm's strain. Sampled
+    at the polarizations' rate it aliases there, and a filter applied at that rate gives it the response
+    of the frequency it aliases to -- ``conj R`` instead of ``R`` at Nyquist, 13% of it for 15 km arms at
+    8192 Hz. ``midway`` avoids that: with the strain also half a sample after each sample, the residual
+    is applied as to the series sampled twice as finely, where nothing reaches its Nyquist frequency, and
+    read back at the original samples (:func:`_apply_residual_midway`).
 
     Args:
         arm_strain: The arm's long-wavelength strain, taken at its midpoint, in detector time.
@@ -220,10 +235,72 @@ def apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel 
         beta: Kaiser window shape parameter of that kernel.
         xp: Array namespace, :mod:`numpy` or :mod:`jax.numpy`. The nodes and the finite filters are
             worked out on the host either way; only the filtering runs in ``xp``.
+        midway: The same strain half a sample after each sample, of the same length; ``tapered`` only.
+            ``None`` applies the residual at ``sample_rate``, which aliases what Earth's rotation carries
+            past Nyquist.
 
     Returns:
         The arm's strain, of the same length.
+
+    Raises:
+        ValueError: If ``midway`` is given for a strain that is not ``tapered``.
     """
+    if midway is None:
+        return _apply_residual(
+            arm_strain, alignment, arm_length_m, sample_rate, tapered=tapered, taps=taps, beta=beta, xp=xp
+        )
+    if not tapered:
+        raise ValueError("midway samples are used only for a tapered strain, whose residual is applied exactly")
+    return _apply_residual_midway(arm_strain, midway, alignment, arm_length_m, sample_rate, xp=xp)
+
+
+def _apply_residual_midway(  # noqa: PLR0913 -- the two series and their geometry
+    arm_strain: Any, midway: Any, alignment: Any, arm_length_m: float, sample_rate: float, *, xp: Any
+) -> Any:
+    """:func:`apply_residual` of a tapered strain read at the samples and half a sample after each.
+
+    The exact residual applied to the two series interleaved, at twice the rate, and read back at the
+    samples, without forming the interleaved series: with ``E`` and ``O`` the spectra of the samples and
+    of the half samples, the interleaved series' spectrum is ``E(f) + p O(f)`` at ``f`` and ``E(f) - p O(f)``
+    at ``f - fs``, ``p = exp(-i pi f / fs)``, and reading every other sample averages the two. The residual
+    filtered at ``f`` and at ``f - fs`` gives, on the samples' own frequencies,
+
+    ``((H(f) + H(f - fs)) E + p (H(f) - H(f - fs)) O) / 2``,
+
+    which is ``H E`` when the half samples hold nothing past Nyquist (``p O = E``), and otherwise gives
+    what lies past it the response of its own frequency. The transforms are those of the samples alone;
+    the alignment nodes interpolate the residual over twice the band, which ``f - fs`` reaches.
+    """
+    count = arm_strain.shape[0]
+    crossing = arm_length_m / SPEED_OF_LIGHT_M_S
+    nodes = alignment_nodes(crossing * sample_rate)
+    interpolation = _interpolation_weights(alignment, nodes, _chebyshev_points(len(nodes))[1], xp=xp)
+    length = _fast_length(2 * count)
+    samples = xp.fft.rfft(arm_strain, n=length)
+    halves = xp.fft.rfft(midway, n=length)
+    frequency = xp.arange(length // 2 + 1, dtype=xp.float64) * (sample_rate / length)
+    halves = halves * xp.exp(-1j * math.pi * frequency / sample_rate)
+    strain = arm_strain
+    for node, weight in zip(nodes, interpolation, strict=True):
+        here = finite_arm_residual(frequency * crossing, float(node), xp=xp) - 1.0
+        aliased = finite_arm_residual((frequency - sample_rate) * crossing, float(node), xp=xp) - 1.0
+        spectrum = 0.5 * ((here + aliased) * samples + (here - aliased) * halves)
+        strain = strain + weight * xp.fft.irfft(spectrum, n=length)[:count]
+    return strain
+
+
+def _apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel settings
+    arm_strain: Any,
+    alignment: Any,
+    arm_length_m: float,
+    sample_rate: float,
+    *,
+    tapered: bool,
+    taps: int,
+    beta: float,
+    xp: Any,
+) -> Any:
+    """:func:`apply_residual` at ``sample_rate``, without half samples."""
     count = arm_strain.shape[0]
     crossing_samples = arm_length_m / SPEED_OF_LIGHT_M_S * sample_rate
     nodes = alignment_nodes(0.5 * crossing_samples)
@@ -238,12 +315,18 @@ def apply_residual(  # noqa: PLR0913 -- the series, its geometry and the kernel 
     # one end does not wrap round to the other.
     length = _fast_length(2 * count + 2 * reach)
     spectrum = xp.fft.rfft(arm_strain, n=length)
-    crossings = np.fft.rfftfreq(length, d=1.0 / sample_rate) * (arm_length_m / SPEED_OF_LIGHT_M_S)
+    # x = f L / c on the transform's frequencies, formed in `xp` rather than on the host: on the device a
+    # host array would be captured as a constant of the compiled kernel, one per node and per arm.
+    crossings = (
+        xp.arange(length // 2 + 1, dtype=xp.float64) * (sample_rate / length * arm_length_m / SPEED_OF_LIGHT_M_S)
+        if tapered
+        else None
+    )
 
     strain = arm_strain
     for index, (node, weight) in enumerate(zip(nodes, interpolation, strict=True)):
         if tapered:
-            response = xp.asarray(finite_arm_residual(crossings, node, xp=np) - 1.0)
+            response = finite_arm_residual(crossings, float(node), xp=xp) - 1.0
             filtered = xp.fft.irfft(spectrum * response, n=length)[:count]
         else:
             response = xp.asarray(np.fft.rfft(kernels[index], n=length))

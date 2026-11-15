@@ -847,6 +847,59 @@ def _kernel_input(
     return pad, OVERSAMPLING_FACTOR, oversample_fourier(plus), oversample_fourier(cross)
 
 
+def _midway_sky(
+    gmst: np.ndarray, sky_line: tuple[float, float, float, float, float], precession_offsets: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(gmst, right ascension, declination)`` half a sample after each sample of the host path.
+
+    For the finite arms' residual (``midway`` of :func:`~gwmock_signal.projection.finite_arm.apply_residual`).
+    The sidereal angle is taken midway between neighbouring samples' -- the last one's carried on at the
+    same step -- rather than from Astropy at the half samples, so the two interleaved series read one
+    smooth angle; the sky line, which is linear, is evaluated at ``precession_offsets``.
+    """
+    _, right_ascension, declination, d_right_ascension, d_declination = sky_line
+    midway = np.empty_like(gmst)
+    midway[:-1] = 0.5 * (gmst[:-1] + gmst[1:])
+    midway[-1] = gmst[-1] + (0.5 * (gmst[-1] - gmst[-2]) if gmst.size > 1 else 0.0)
+    return (
+        midway,
+        right_ascension + d_right_ascension * precession_offsets,
+        declination + d_declination * precession_offsets,
+    )
+
+
+def _midway_arm_reading(  # noqa: PLR0913 -- one arm's geometry, the series read and the kernel settings
+    term: _ResponseTerm,
+    sky: tuple[np.ndarray, np.ndarray, np.ndarray],
+    series: tuple[np.ndarray, np.ndarray],
+    index: np.ndarray,
+    *,
+    factor: int,
+    sample_rate: float,
+    lattice_shift: float,
+    timing: tuple[_SolarTiming, np.ndarray] | None,
+    polarization_angle: float,
+    taps: int,
+    beta: float,
+) -> np.ndarray:
+    """Return an arm's midpoint strain half a sample after each sample, at ``sky``.
+
+    Read as the host path reads the samples themselves, at ``index`` on the oversampled series: the
+    pattern, the delay to the midpoint and the solar-system delay at the half sample's own time, whose
+    time since the delay model's epoch ``timing`` carries beside the model.
+    """
+    f_plus, f_cross = antenna_pattern(term.tensor, *sky, polarization_angle, xp=np)
+    site = time_delay_from_geocenter(term.location, *sky, xp=np)
+    shift = -site * sample_rate - lattice_shift
+    if timing is not None:
+        model, since_epoch = timing
+        shift = shift + model.delay(since_epoch - site) * sample_rate
+    plus, cross = (
+        resample_uniform_sinc(values, index, fraction=factor * shift, taps=taps, beta=beta) for values in series
+    )
+    return f_plus * plus + f_cross * cross
+
+
 def _require_midpoint_within_padding(midpoint_delay: np.ndarray | float, sample_rate: float) -> None:
     """Reject a response term's delay, or a bound on it, that the edge padding does not cover.
 
@@ -1160,6 +1213,12 @@ def _project_on_host(  # noqa: PLR0913
         if timing is not None:
             # Each sample's time since the delay model's epoch, from offsets rather than GPS times.
             since_epoch = (float(time_array[0]) - timing.model.epoch) + np.arange(len(time_array)) * dt
+        # Half a sample after each sample, for the finite arms' residual of a tapered signal.
+        midway_sky = (
+            _midway_sky(sky[0], sky_line, precession_offsets + 0.5 * dt)
+            if tapered and arm_lengths is not None
+            else None
+        )
     else:
         # Precomputed once for the exact frequency-domain shift.
         spectra = (np.fft.rfft(hp_vals), np.fft.rfft(hc_vals))
@@ -1192,6 +1251,23 @@ def _project_on_host(  # noqa: PLR0913
                 if term.arm is not None:
                     # mu = cos(arm, source): the delay of a point one metre along the arm, in units of 1 / c.
                     alignment = -SPEED_OF_LIGHT_M_S * time_delay_from_geocenter(term.arm, *sky, xp=np)
+                    midway = (
+                        _midway_arm_reading(
+                            term,
+                            midway_sky,
+                            (hp_read, hc_read),
+                            index + factor // 2,
+                            factor=factor,
+                            sample_rate=hp.sample_rate,
+                            lattice_shift=lattice_shift,
+                            timing=None if timing is None else (timing, since_epoch + 0.5 * dt),
+                            polarization_angle=polarization_angle,
+                            taps=sinc_taps,
+                            beta=kaiser_beta,
+                        )
+                        if tapered
+                        else None
+                    )
                     part = finite_arm.apply_residual(
                         part,
                         alignment,
@@ -1200,6 +1276,7 @@ def _project_on_host(  # noqa: PLR0913
                         tapered=tapered,
                         taps=sinc_taps,
                         beta=kaiser_beta,
+                        midway=midway,
                     )
             else:
                 delay = site + lattice_shift * dt
