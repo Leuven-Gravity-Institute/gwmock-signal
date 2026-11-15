@@ -56,7 +56,9 @@ remains the only implementation of the sidereal model, including its IERS UT1 ha
     none, a geocenter delay of 2.1e-15 s. Around the five leap seconds of the period (2950 segments
     starting every 7.3 s from 4200 s before each to 100 s after) it was 6.6e-14 rad, except for a
     segment starting in the last nine seconds before a leap second, which takes the next day's rate
-    (:func:`gmst_piecewise`): up to 4.2e-13 rad measured, 3.2e-12 rad bounded.
+    (:func:`gmst_piecewise`): with starts every 0.05 s through those nine seconds before each of the five
+    (900 segments, sampled every 0.05 s for their first 30 s), up to 1.6e-12 rad measured, at the
+    segment's first sample; 3.2e-12 rad bounded.
     ``tests/projection/test_sidereal.py`` pins a midnight, a leap-second midnight, a day ending with a
     leap second, and a full day.
 

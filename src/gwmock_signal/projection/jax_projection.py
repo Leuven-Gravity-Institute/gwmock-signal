@@ -433,15 +433,15 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     sampling_frequency: float,
     n_samples: int,
     # `ArrayLike`, not `float`, for everything `jax_batch` maps over: under its `jax.vmap` these
-    # arrive as traced per-event arrays, so `float` describes only the single-event caller. Kept as
-    # `float` where the batched path passes one unmapped value -- `gmst_rate` is shared across a batch.
+    # arrive as traced per-event arrays, so `float` describes only the single-event caller. That
+    # includes `gmst_rate`, which is each event's own (`sidereal.gmst_piecewise`).
     right_ascension: ArrayLike,
     declination: ArrayLike,
     right_ascension_rate: ArrayLike,
     declination_rate: ArrayLike,
     polarization_angle: ArrayLike,
     gmst_start: ArrayLike,
-    gmst_rate: float,
+    gmst_rate: ArrayLike,
     extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,

@@ -1,9 +1,9 @@
 """Tests for the sidereal-time model shared by both projection paths.
 
-The device path cannot call Astropy inside a compiled kernel, so the host gives it GMST at every
-sample: an anchor and rate, plus Astropy's departure from that line sampled at regular nodes and
-interpolated between them on the host. These tests pin how closely that reproduces Astropy, within
-a UTC day and across a UTC midnight, and that it does not depend on the length of the series.
+The device path cannot call Astropy inside a compiled kernel, so the host gives it a few numbers --
+the value at the first sample, the rate and its changes at the next UTC midnights, from Astropy
+(``gmst_piecewise``) -- and the kernel evaluates the line that bends there. These tests pin how closely
+that reproduces Astropy, within a UTC day, across a UTC midnight and around leap seconds.
 """
 
 from __future__ import annotations

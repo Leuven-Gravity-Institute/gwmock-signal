@@ -160,9 +160,18 @@ segments = assemble_segments(
   segment crosses a midnight, which are projected apart from the others.
   Measured against Astropy every 0.5 s over 4096 s segments from 2005 to 2026,
   one crossing each UTC midnight and four inside each UTC day, the largest error
-  was 9.95e-14 rad (a geocentre delay of 2.1e-15 s); a segment starting in the
-  last nine seconds before a leap second can be off by up to 3.2e-12 rad (see
-  `gwmock_signal.projection.sidereal`).
+  was 9.95e-14 rad (a geocentre delay of 2.1e-15 s). A segment starting in the
+  last nine seconds before a leap second is the exception: up to 1.6e-12 rad
+  measured there, 3.2e-12 rad bounded (see `gwmock_signal.projection.sidereal`).
+  A batch that mixes events crossing a midnight with events crossing none runs
+  each group separately: it compiles and launches a second kernel variant per
+  detector, and each variant is its own entry in the bounded kernel cache (32
+  executables), so a run whose batches mix the two can hold up to twice as many
+  compiled kernels. Its peak memory is no higher than a batch of one kind, since
+  each group is half the batch: measured on a CPU for 8 events of 1,048,718
+  samples on three detectors, 1.0 GB added by the projection for a mixed batch
+  and 1.7 GB for an all-crossing or all-clear one, against the estimator's 5.9
+  GB.
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,
   simulate in chirp-mass groups to bound memory.

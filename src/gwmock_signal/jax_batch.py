@@ -130,7 +130,7 @@ _GENERATION_BUFFERS = 73.4
 _PROJECTION_BUFFERS_PER_DETECTOR = 4.0
 
 #: Multiplier applied when ``earth_rotation=True``. The rotating path inverse-FFTs the
-#: polarizations, holds per-sample sidereal time, delay and antenna-pattern arrays, and
+#: polarizations, holds the sidereal angle it forms per sample, delay and antenna-pattern arrays, and
 #: gathers through a windowed-sinc kernel, so it needs more live arrays per detector than
 #: the frequency-domain path. Not separately measured -- flagged in the docstring.
 _ROTATION_BUFFER_MULTIPLIER = 1.6
