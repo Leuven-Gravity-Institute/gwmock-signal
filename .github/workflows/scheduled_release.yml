@@ -134,9 +134,11 @@ jobs:
         uses: ./.github/workflows/release.yml
         permissions:
             contents: write
-            id-token: write
+            pull-requests: read
         with:
             tag_name: ${{ needs.create_tag.outputs.new_tag }}
+        secrets:
+            CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
     publish:
         needs: [release, create_tag]
