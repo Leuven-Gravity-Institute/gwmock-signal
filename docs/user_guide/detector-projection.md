@@ -333,8 +333,17 @@ peak at 100 Hz, 4e-10 at 700 Hz and 3e-9 at 1.8 kHz. The difference is bounded
 by the Doppler shift of Earth's rotation (at most 1.5e-6) times the round trip's
 own correction, since the filter is applied in detector time. With
 `tapered=True` that filter is exact up to Nyquist; otherwise it is as accurate
-as the resampling kernel, to 0.8 of Nyquist. The `earth_rotation=False` branch
-applies the whole response exactly in the frequency domain, at the span's
+as the resampling kernel, to 0.8 of Nyquist. The same Doppler shift carries what
+lies within that fraction of Nyquist in the polarizations just past Nyquist in
+an arm's strain. Sampled at the polarizations' rate it would alias and take the
+filter's response at the frequency it aliases to -- `conj R` instead of `R`, a
+difference of 13% of the response at Nyquist for 15 km arms at 8192 Hz -- so
+with `tapered=True` the filter is applied to the arm's strain read also half a
+sample after each sample, twice as finely, and read back at the samples. For a
+signal whose spectrum reaches Nyquist that removed a line at Nyquist of 1.7e-10
+of the peak, spread over hundreds of seconds around the merger; for a packet
+centred 1 Hz below Nyquist, 1.3e-5 of its peak. The `earth_rotation=False`
+branch applies the whole response exactly in the frequency domain, at the span's
 midpoint.
 
 **What it needs and costs.**
@@ -350,6 +359,12 @@ midpoint.
 - About twice the time of the long-wavelength projection on the rotating branch,
   since each arm is resampled separately: 28.5 s against 14.0 s for 64 s of
   signal at 8192 Hz on a three-detector triangle.
+- With `tapered=True`, each arm read a second time, half a sample later, for the
+  residual. On the host that about doubles the finite-arm projection's time (421
+  s against 216 s for 512 s at 8192 Hz on a triangle, two threads); on the
+  device it added 18% at 2048 s (159 s against 134 s) and lowered the peak
+  memory, from 20.8 GB to 17.0 GB, since the residual's response is no longer a
+  constant of the compiled kernel.
 
 ## Scientific notes
 

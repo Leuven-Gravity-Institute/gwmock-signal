@@ -424,6 +424,72 @@ def _interpolate_uniform_sinc(  # noqa: PLR0913
     return jnp.where(in_range, interpolated, 0.0)
 
 
+def _sidereal_angle(
+    offsets: ArrayLike, gmst_start: ArrayLike, gmst_rate: ArrayLike, gmst_kinks: tuple[ArrayLike, ArrayLike] | None
+) -> Array:
+    """Return GMST at ``offsets`` seconds after the first sample.
+
+    The host's line, bending at each UTC midnight when ``gmst_kinks`` is given
+    (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`): the angle
+    :func:`project_polarizations_td_rotating` forms at its samples, here at the half samples.
+    """
+    import jax.numpy as jnp  # noqa: PLC0415 — optional [jax] dep, kept out of module import
+
+    angle = gmst_start + gmst_rate * offsets
+    if gmst_kinks is not None:
+        kinks, changes = gmst_kinks
+        for k in range(GMST_KINKS):
+            angle = angle + changes[k] * jnp.maximum(offsets - kinks[k], 0.0)
+    return angle
+
+
+@dataclass(frozen=True)
+class _Midway:
+    """Half a sample after each sample of the device projection.
+
+    For the finite arms' residual of a tapered signal (``midway`` of
+    :func:`~gwmock_signal.projection.finite_arm.apply_residual`).
+
+    Attributes:
+        offsets: Each half sample's time after the first sample, in seconds.
+        gmst: The sidereal angle there.
+        sky: The source's right ascension and declination of date there.
+        index: Where each half sample lies on the oversampled polarizations: an odd index.
+    """
+
+    offsets: ArrayLike
+    gmst: ArrayLike
+    sky: dict
+    index: ArrayLike
+
+    def reading(  # noqa: PLR0913 -- one arm's geometry, the series read and the kernel settings
+        self,
+        tensor: ArrayLike,
+        point: ArrayLike,
+        series: tuple[ArrayLike, ArrayLike],
+        read_length: int,
+        *,
+        polarization_angle: ArrayLike,
+        sampling_frequency: float,
+        shift_samples: ArrayLike,
+        factor: int,
+        solar: SolarArguments | None,
+        taps: int,
+        beta: float,
+    ) -> Array:
+        """Return the arm's midpoint strain at the half samples, read as the samples are."""
+        f_plus, f_cross = antenna_pattern(tensor, self.gmst, polarization_angle=polarization_angle, **self.sky)
+        site = time_delay_from_geocenter(point, self.gmst, **self.sky)
+        shift = -site * sampling_frequency - shift_samples
+        if solar is not None:
+            shift = shift + solar.delay(self.offsets - site) * sampling_frequency - solar.offset_samples
+        plus, cross = (
+            _interpolate_uniform_sinc(values, self.index, read_length, fraction=factor * shift, taps=taps, beta=beta)
+            for values in series
+        )
+        return f_plus * plus + f_cross * cross
+
+
 def project_polarizations_td_rotating(  # noqa: PLR0913
     plus: ArrayLike,
     cross: ArrayLike,
@@ -619,6 +685,21 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             for k, sign in enumerate((1.0, -1.0))
         ]
 
+    # Half a sample after each sample, for the finite arms' residual of a tapered signal
+    # (`finite_arm.apply_residual`'s `midway`), read on the oversampled series an odd index.
+    midway = None
+    if arms is not None and tapered:
+        midway_offsets = sample_offsets + 0.5 * dt
+        midway = _Midway(
+            offsets=midway_offsets,
+            gmst=_sidereal_angle(midway_offsets, gmst_start, gmst_rate, gmst_kinks),
+            sky={
+                "right_ascension": right_ascension + right_ascension_rate * midway_offsets,
+                "declination": declination + declination_rate * midway_offsets,
+            },
+            index=index + factor // 2,
+        )
+
     strain = jnp.zeros(n_samples)
     for sign, tensor, point, arm, length in terms:
         # Antenna pattern at the detector-time sample, i.e. the time coordinate the output series is
@@ -642,6 +723,23 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         if arm is not None:
             # mu = cos(arm, source): the delay of a point one metre along the arm, in units of 1 / c.
             alignment = -SPEED_OF_LIGHT_M_S * time_delay_from_geocenter(arm, gmst, **sky)
+            between = (
+                None
+                if midway is None
+                else midway.reading(
+                    tensor,
+                    point,
+                    (padded_plus, padded_cross),
+                    read_length,
+                    polarization_angle=polarization_angle,
+                    sampling_frequency=sampling_frequency,
+                    shift_samples=extra_shift_samples,
+                    factor=factor,
+                    solar=solar,
+                    taps=sinc_taps,
+                    beta=kaiser_beta,
+                )
+            )
             part = finite_arm.apply_residual(
                 part,
                 alignment,
@@ -651,6 +749,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
                 taps=sinc_taps,
                 beta=kaiser_beta,
                 xp=jnp,
+                midway=between,
             )
         strain = strain + sign * part
     return strain

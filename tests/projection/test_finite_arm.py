@@ -20,7 +20,7 @@ from gwmock_signal.network import Network
 from gwmock_signal.projection import finite_arm, kernels
 from gwmock_signal.projection.effects import ProjectionEffects
 from gwmock_signal.projection.geometry import arm_lengths, reconstructed_geometry
-from gwmock_signal.projection.network import _gmst_accurate_array, project_polarizations_to_network
+from gwmock_signal.projection.network import _gmst_accurate_array, _midway_sky, project_polarizations_to_network
 from gwmock_signal.projection.resampling import DEFAULT_KAISER_BETA, DEFAULT_SINC_TAPS, SPEED_OF_LIGHT_M_S, edge_padding
 from gwmock_signal.timeseries import TimeSeries
 
@@ -263,6 +263,145 @@ def test_the_rotating_projection_is_the_arm_average_along_the_light_path(frequen
         expected = _by_definition(detector, frequency, times)
         error = np.max(np.abs(projected[detector.name].data[samples] - expected)) / np.max(np.abs(expected))
         assert error < tolerance, detector.name
+
+
+def _band_limited_reader(samples, sample_rate, pad):
+    """Return ``read(positions, delays)``: the series' band-limited interpolant at ``positions - delays``.
+
+    The interpolant the projection itself reads: ``samples`` zero-padded by ``pad`` at each end, and that
+    zero-extended to twice its length. A signal with content up to Nyquist has no interpolant independent
+    of that choice -- its tails reach the ends -- so the definition is evaluated on the projection's own.
+    Each value is an exact Fourier sum: the delay split into whole samples, an index, and a remainder within
+    half a sample, the Taylor series in the remainder summed one inverse transform per order.
+    """
+    padded = np.pad(samples, (pad, pad))
+    period = 2 * padded.size
+    spectrum = np.fft.rfft(padded, period)
+    derivative = 2j * np.pi * np.arange(spectrum.size) * sample_rate / period
+    orders = []
+    for _ in range(40):  # |2 pi f eps| <= pi / 2, so 40 terms are far below roundoff
+        orders.append(np.fft.irfft(spectrum, period))
+        spectrum = spectrum * derivative
+
+    def read(positions, delays):
+        whole = np.rint(delays * sample_rate).astype(np.int64)
+        remainder = delays - whole / sample_rate
+        index = np.mod(positions + pad - whole, period)
+        value, factor = np.zeros(positions.size), np.ones(positions.size)
+        for order, series in enumerate(orders):
+            value = value + factor * series[index]
+            factor = factor * -remainder / (order + 1)
+        return value
+
+    return read
+
+
+@pytest.mark.parametrize("backend", ["numpy", "jax"])
+def test_the_residual_does_not_alias_what_earth_carries_past_nyquist(backend):
+    """A signal reaching Nyquist is still the arm average along the light path, with Earth turning.
+
+    As Earth turns, each arm's delay changes by up to 1.5e-6 s per second, so the strain an arm reads holds
+    frequencies up to that fraction above the polarizations' highest: past Nyquist, for a signal that
+    reaches it. Filtered at the polarizations' rate, that part aliases and takes the residual of the
+    frequency it aliases to, conj R for R: 1.3e-5 of peak here. Applied to the strain sampled twice as
+    finely it is the definition to 1.2e-8, within the bound of applying the residual in detector time
+    (the Doppler fraction times the residual, 4e-7 here).
+
+    The signal is a packet centred 1 Hz below Nyquist (``(-1)^k`` times a tone of 1 Hz), so its spectrum
+    is not small at Nyquist; its Nyquist bin is zero by symmetry, so it has no part the sampling makes
+    ambiguous. 15 km arms, where the residual's imaginary part at Nyquist is largest.
+    """
+    if backend == "jax":
+        jax = pytest.importorskip("jax")
+        jax.config.update("jax_enable_x64", True)
+    rate, n = 8192.0, 32768
+    k = np.arange(n)
+    centre = n // 2
+    envelope = np.exp(-(((k - centre) / rate / 0.25) ** 2)) * np.where(k % 2 == 0, 1.0, -1.0)
+    plus = envelope * np.sin(2 * np.pi * 1.0 * (k - centre) / rate)
+    cross = envelope * np.sin(2 * np.pi * 1.5 * (k - centre) / rate)
+    polarizations = {
+        "plus": TimeSeries(plus, t0=T0, sample_rate=rate),
+        "cross": TimeSeries(cross, t0=T0, sample_rate=rate),
+    }
+    detectors = list(Network.from_preset("ET-2L-Misaligned").detector_names)
+    projected = project_polarizations_to_network(
+        polarizations, detectors, **SKY, effects=_arms(), tapered=True, backend=backend
+    )
+    # The host and the device each pad once to keep the delayed samples and once more for the kernel.
+    pad = 2 * edge_padding(rate)
+    read = {"plus": _band_limited_reader(plus, rate, pad), "cross": _band_limited_reader(cross, rate, pad)}
+    positions = np.arange(centre - int(0.75 * rate), centre + int(0.75 * rate), 7)
+    times = positions / rate
+    ra, dec, psi = SKY["right_ascension"], SKY["declination"], SKY["polarization_angle"]
+    nodes, weights = np.polynomial.legendre.leggauss(16)
+    elapsed, weights = 0.5 * (nodes + 1.0), 0.5 * weights
+    for detector in detectors:
+        fields = detector.geometry_fields()
+        _, vertex = reconstructed_geometry(fields)
+        crossing = detector.arm_length_m / C
+        expected = 0.0
+        for sign, arm in zip((1.0, -1.0), kernels.arm_directions(fields, xp=np), strict=True):
+            for leg in (-1.0, 1.0):  # outward: before the reflection; return: after it
+                for fraction, weight in zip(elapsed, weights, strict=True):
+                    offset = leg * crossing * (1.0 - fraction)
+                    sidereal = _gmst_accurate_array(T0 + times + offset)
+                    x, y = kernels._polarization_basis(np, sidereal, ra, dec, psi)
+                    hour = sidereal - ra
+                    source = np.stack(
+                        [np.cos(dec) * np.cos(hour), -np.cos(dec) * np.sin(hour), np.full_like(hour, np.sin(dec))], -1
+                    )
+                    delay = -(source @ (vertex + fraction * detector.arm_length_m * arm)) / C - offset
+                    expected = expected + sign * 0.5 * weight * (
+                        0.5 * ((x @ arm) ** 2 - (y @ arm) ** 2) * read["plus"](positions, delay)
+                        + (x @ arm) * (y @ arm) * read["cross"](positions, delay)
+                    )
+        series = projected[detector.name]
+        start = round((T0 - float(series.t0)) * rate)
+        error = np.max(np.abs(np.asarray(series.data)[start + positions] - expected))
+        assert error < 1e-7, detector.name
+
+
+def test_the_half_sample_sidereal_angle_is_continuous_across_its_wrap():
+    """The host's angle half a sample later lies between its neighbours' even where Astropy wraps to 0.
+
+    Astropy returns GMST in ``[0, 2 pi)``; averaged across the wrap the two neighbours give an angle pi
+    away, which turns the source through half a day for that one half sample.
+    """
+    rate = 7.29211579558565e-05 / 4096.0  # rad per sample at 4096 Hz
+    gmst = np.mod(2 * np.pi - 5.5 * rate + rate * np.arange(12), 2 * np.pi)  # wraps between samples 5 and 6
+    sky_line = (0.0, 1.3, -0.4, 0.0, 0.0)
+    midway, _, _ = _midway_sky(gmst, sky_line, np.zeros(gmst.size))
+    expected = np.unwrap(gmst) + 0.5 * rate
+    np.testing.assert_allclose(np.cos(midway), np.cos(expected), rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(np.sin(midway), np.sin(expected), rtol=0.0, atol=1e-12)
+    single, _, _ = _midway_sky(gmst[:1], sky_line, np.zeros(1))
+    assert single[0] == gmst[0]
+
+
+def test_the_host_and_device_agree_across_the_sidereal_wrap_with_finite_arms():
+    """A tapered finite-arm projection whose span holds Astropy's GMST wrap to 0 agrees host to device.
+
+    The device forms the angle on an unwrapped line; the host reads Astropy, wrapped, and must not let the
+    wrap reach the half samples its residual reads.
+    """
+    jax = pytest.importorskip("jax")
+    jax.config.update("jax_enable_x64", True)
+    wrap = 1_000_081_544.6497  # Astropy's GMST passes 2 pi here (to 1e-4 s)
+    rate, n = 4096.0, 8192
+    t = np.arange(n) / rate
+    packet = np.exp(-(((t - 1.0) / 0.1) ** 2))
+    polarizations = {
+        "plus": TimeSeries(packet * np.cos(2 * np.pi * 300.0 * t), t0=wrap - 1.0, sample_rate=rate),
+        "cross": TimeSeries(packet * np.sin(2 * np.pi * 300.0 * t), t0=wrap - 1.0, sample_rate=rate),
+    }
+    detectors = _triangle()
+    common = {**SKY, "effects": _arms(), "tapered": True}
+    host = project_polarizations_to_network(polarizations, detectors, **common)
+    device = project_polarizations_to_network(polarizations, detectors, **common, backend="jax")
+    for detector in detectors:
+        peak = np.max(np.abs(host[detector.name].data))
+        assert np.max(np.abs(host[detector.name].data - device[detector.name].data)) / peak < 1e-9, detector.name
 
 
 def test_the_constant_projection_is_the_arm_average_with_earth_held_at_the_midpoint():
