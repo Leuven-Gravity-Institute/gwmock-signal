@@ -270,9 +270,10 @@ Two constraints come with `"jax"`:
   is already the cheap branch; asking for both is refused rather than silently
   served from the host.
 - One call may span at most `MAX_LINEAR_SIDEREAL_SPAN_SECONDS` (86400 s). The
-  device path extrapolates sidereal time linearly from a single Astropy anchor,
-  which is validated to that span and refused beyond it. Consecutive segments
-  are unaffected at any run length, because each one re-anchors.
+  device cannot call Astropy, so it takes sidereal time from the host as chords
+  between Astropy values that bend at each UTC midnight; that model is validated
+  to that span and refused beyond it. Consecutive segments are unaffected at any
+  run length, because each one re-anchors.
 
 It also requires JAX in 64-bit mode, which the simulators enable for you when
 you select it. Calling the projection function directly does not: in 32-bit mode

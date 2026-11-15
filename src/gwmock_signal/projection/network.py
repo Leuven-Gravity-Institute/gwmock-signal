@@ -203,11 +203,16 @@ def _warn_if_constant_pattern_is_stretched(time_array: np.ndarray, *, earth_rota
 #: keeps. ``jax_batch`` keeps its own, smaller cache.
 _KERNEL_CACHE_SIZE = 64
 
-#: Longest span the device path's linear sidereal model is accepted for, in seconds.
+#: Longest span the device path's sidereal model is accepted for, in seconds.
 #:
-#: Set by an error budget rather than by where the validation table ends. The linear model's
-#: deviation from Astropy, converted to the quantity that actually enters the projection -- a
-#: geocenter delay -- is 1.2e-15 s over 8192 s, 6.2e-11 s over a day, and 1.2e-7 s over 90 days.
+#: Set by an error budget rather than by where the validation table ends. The model was once a line
+#: from the first sample, whose deviation from Astropy, converted to the quantity that actually enters
+#: the projection -- a geocenter delay -- was 6.2e-11 s over a day and 1.2e-7 s over 90 days; it is now
+#: chords between Astropy values that bend at each UTC midnight
+#: (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`), measured within 1e-13 rad, 2.1e-15 s
+#: of delay, of Astropy from 2005 to 2026 (that module gives the survey), over spans up to a day. The name is kept because callers
+#: import it.
+#:
 #: The projection still carries a known 8.7e-07 s worst-case disagreement with
 #: ``lalpulsar.Barycenter``, from omitting nutation where LAL includes it, so a day-long span sits
 #: four orders of magnitude below a systematic this code knowingly accepts. (It was 1.8e-04 s and
@@ -320,6 +325,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
     arm_lengths: tuple[float, float] | None = None,
     solar_components: tuple[bool, bool, bool] | None = None,
     barycentric: bool = False,
+    sidereal_bends: bool = False,
 ):
     """Return a jitted rotating projection for one segment shape, compiled once and reused.
 
@@ -360,6 +366,8 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
         polarization_angle,
         gmst_start,
         gmst_rate,
+        gmst_kinks,
+        gmst_changes,
         arms,
         solar_arrays,
         solar_start_offset,
@@ -392,6 +400,7 @@ def _compiled_rotating_projection(  # noqa: PLR0913, PLR0917
             polarization_angle=polarization_angle,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
+            gmst_kinks=(gmst_kinks, gmst_changes) if sidereal_bends else None,
             sinc_taps=sinc_taps,
             kaiser_beta=kaiser_beta,
             tapered=tapered,
@@ -435,11 +444,12 @@ def _project_rotating_on_device(  # noqa: PLR0913
     neither can pad or window differently from the other.
 
     Sidereal time is the one place the two differ in form rather than arithmetic. The host path
-    asks Astropy for GMST at every sample; the device path takes a host-computed anchor and rate
-    and extrapolates linearly, because Astropy cannot be traced. That is not an approximation at
-    these lengths: the linear model deviates by 6.4e-14 rad over 2048 s and 5.6e-14 rad over
-    8192 s, worth 1.2e-15 s of geocenter delay, which is orders below the kernel's own error.
-    See :mod:`~gwmock_signal.projection.sidereal` for the table.
+    asks Astropy for GMST at every sample; the device path, because Astropy cannot be traced, takes
+    from the host an anchor, a rate and the bends at the next UTC midnights, chords between Astropy
+    values (``sidereal.gmst_piecewise``), and evaluates them per sample. A line alone is exact to
+    6e-14 rad within a UTC day but not across a UTC midnight, where Astropy's GMST changes rate; the
+    bends follow it there, to within 1e-13 rad, 2.1e-15 s of geocenter delay, as measured from 2005
+    to 2026. See :mod:`~gwmock_signal.projection.sidereal`.
 
     Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,
     where the arrays are per-event and independent; here there is one pair of polarizations and
@@ -448,7 +458,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     """
     import jax  # noqa: PLC0415 — optional [jax] dep, kept out of module import
 
-    from gwmock_signal.projection.sidereal import gmst_anchor_and_rate  # noqa: PLC0415
+    from gwmock_signal.projection.sidereal import gmst_piecewise  # noqa: PLC0415
 
     # Refused rather than allowed to degrade. Without x64 every `jnp.asarray(..., float64)` in
     # the device path truncates to float32 and the projection still returns a plausible-looking
@@ -477,22 +487,29 @@ def _project_rotating_on_device(  # noqa: PLR0913
             raise ValueError(f"compiled_length ({compiled_length}) is shorter than the series ({n_samples}).")
         hp_vals = np.pad(hp_vals, (0, compiled_length - n_samples))
         hc_vals = np.pad(hc_vals, (0, compiled_length - n_samples))
-    # The linear sidereal model is fitted per call, so a run of many consecutive segments never
-    # accumulates error -- each gets a fresh Astropy anchor. What it cannot absorb is one
-    # unusually long segment. Measured against Astropy at this epoch: 1.5e-10 rad over 8 hours,
-    # 2.9e-9 over a day, 5.8e-6 over 90 days. The tabulated validation in `sidereal` stops at
-    # 8192 s, which is where this refuses, rather than letting the public API accept a span the
-    # model was never checked against and returning a quietly degraded answer.
+    # The sidereal model is fitted per call, so a run of many consecutive segments never accumulates
+    # error -- each gets a fresh Astropy anchor and its own bends. One segment is refused beyond the
+    # span the model has been measured over (MAX_LINEAR_SIDEREAL_SPAN_SECONDS), rather than letting
+    # the public API accept a span nothing has checked.
     span = float(time_array[-1] - time_array[0])
     if span > MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
         raise ValueError(
             f"backend='jax' accepts spans up to {MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
-            f"and this one is {span:.0f} s. The device path extrapolates sidereal time linearly "
-            f"from one anchor, which is exact to 1.2e-15 s of delay over the validated range and "
-            f"degrades beyond it. Project in segments, or use backend='numpy', which asks Astropy "
-            f"for every sample."
+            f"and this one is {span:.0f} s. The device path takes sidereal time as chords between "
+            f"Astropy values that bend at each UTC midnight, which has been measured over spans up to "
+            f"that length. "
+            f"Project in segments, or use backend='numpy', which asks Astropy for every sample."
         )
-    anchors, rate = gmst_anchor_and_rate(float(time_array[0]))
+    # Astropy's GMST bends at every UTC midnight, which a line from the first sample cannot follow:
+    # chords between Astropy values, bending at the next midnights (`sidereal.gmst_piecewise`). They
+    # depend on the first sample's time alone, so a series padded at its end gets the same values.
+    anchors, rates, kinks, changes, _ = gmst_piecewise(float(time_array[0]))
+    # Bends only where the caller's own samples cross a UTC midnight -- not where only the padding to a
+    # compiled length does, which is cut away. Without one the kernel is the line alone, the same
+    # computation it was before the bends existed. That matters beyond tidiness: on arm64 the compiled
+    # projection of a sample can depend on the length it was compiled for, and the line alone is the
+    # form a burst padded to a fixed length has been checked to project exactly as unpadded with.
+    sidereal_bends = bool(kinks[0, 0] < (n_samples - 1) / sampling_frequency)
 
     solar_components = None if timing is None else timing.model.components
     if timing is None:
@@ -527,6 +544,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
             arm_length,
             solar_components,
             timing is not None and timing.absorbed is None,
+            sidereal_bends,
         )
         projected = compiled(
             hp_vals,
@@ -538,8 +556,10 @@ def _project_rotating_on_device(  # noqa: PLR0913
             right_ascension_rate,
             declination_rate,
             polarization_angle,
-            float(np.atleast_1d(anchors)[0]),
-            float(rate),
+            float(anchors[0]),
+            float(rates[0]),
+            kinks[0],
+            changes[0],
             arms,
             *solar,
             lattice_shift,
@@ -917,11 +937,15 @@ def _project(  # noqa: PLR0913
     padding the polarizations with zeros to the next one and cutting each result back. The device kernel
     is compiled once per length, which costs seconds, and only :data:`_KERNEL_CACHE_SIZE` are kept, so a
     caller projecting many series of different lengths -- a burst injection set -- would otherwise
-    compile for nearly every one. The result is unchanged up to rounding: the polarizations already end
-    in ``edge_padding`` zeros, wider than the delay and the kernel's half-width together, so every read
-    the kernel makes past their end, padded or not, is of a zero, and the samples it adds project to
-    exactly zero. What is not bit-identical is the finite-arm residual, a linear convolution evaluated by
-    FFT on a length that grows with the series. Applied only on the device path, with
+    compile for nearly every one. The polarizations already end in ``edge_padding`` zeros, wider than
+    the delay and the kernel's half-width together, so every read the kernel makes past their end, padded
+    or not, is of a zero, and the samples it adds project to exactly zero. For a series whose samples
+    cross no UTC midnight the result is therefore unchanged, bit for bit. For one that crosses a midnight
+    the kernel bends sidereal time there (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`), and
+    with the bends in the graph the compiled arithmetic of a sample can depend on the compiled length on
+    some platforms (seen on arm64 with XLA:CPU): the result then may differ from the unpadded one by
+    floating-point rounding. Nor is the finite-arm residual bit-identical, a linear convolution
+    evaluated by FFT on a length that grows with the series. Applied only on the device path, with
     ``keep_delayed_samples`` (which supplies those zeros), and not to ``tapered`` polarizations, whose
     Fourier oversampling depends on the length of the whole series; otherwise ignored.
 

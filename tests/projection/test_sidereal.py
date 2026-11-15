@@ -1,14 +1,16 @@
 """Tests for the sidereal-time model shared by both projection paths.
 
-The device path cannot call Astropy inside a compiled kernel, so it consumes a
-host-computed anchor and rate instead. That substitution is only legitimate if GMST really
-is linear over a segment, which is what these tests pin.
+The device path cannot call Astropy inside a compiled kernel, so the host gives it a few numbers --
+the value at the first sample, the rate and its changes at the next UTC midnights, from Astropy
+(``gmst_piecewise``) -- and the kernel evaluates the line that bends there. These tests pin how closely
+that reproduces Astropy, within a UTC day, across a UTC midnight and around leap seconds.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
+from astropy.time import Time
 
 from gwmock_signal.projection.sidereal import (
     gmst_anchor_and_rate,
@@ -17,6 +19,20 @@ from gwmock_signal.projection.sidereal import (
 )
 
 _T0 = 1.4e9
+
+#: A UTC midnight at which Astropy's GMST changes rate by 1.25e-13 rad/s: the IERS UT1 - UTC
+#: values it interpolates between are daily, and 2011 is covered by their final values.
+_MIDNIGHT = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+
+
+def _astropy_gmst(start: float, offsets: np.ndarray) -> np.ndarray:
+    """Astropy GMST at ``start + offsets``, the two passed apart so no instant is rounded."""
+    times = Time(np.full(offsets.size, start), offsets, format="gps", scale="utc", location=(0, 0))
+    return np.unwrap(np.asarray(times.sidereal_time("mean").rad, dtype=float))
+
+
+def _wrapped(angle: np.ndarray) -> np.ndarray:
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
 @pytest.mark.parametrize("span", [256.0, 2048.0, 8192.0])
@@ -88,3 +104,115 @@ def test_scalar_start_time_accepted() -> None:
     anchors, rate = gmst_anchor_and_rate(_T0)
     assert anchors.shape == (1,)
     assert rate > 0.0
+
+
+def _piecewise(start: float, offsets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The device model at ``offsets`` from ``start``, evaluated as the kernel evaluates it, and the line alone.
+
+    The new helper is imported here rather than at module level, so this module still collects
+    against a version without it and each test that needs it fails on its own.
+    """
+    from gwmock_signal.projection.sidereal import GMST_KINKS, gmst_piecewise
+
+    anchors, rates, kinks, changes, _ = gmst_piecewise(start)
+    model = anchors[0] + rates[0] * offsets
+    for k in range(GMST_KINKS):
+        model = model + changes[0, k] * np.maximum(offsets - kinks[0, k], 0.0)
+    line_anchor, line_rate = gmst_anchor_and_rate(start)
+    return model, line_anchor[0] + line_rate * offsets
+
+
+def _model_error(start: float, span: float, step: float) -> tuple[float, float]:
+    """The device model's and the old line's largest error against Astropy over a segment."""
+    offsets = np.arange(0.0, span, step)
+    exact = _astropy_gmst(start, offsets)
+    model, line = _piecewise(start, offsets)
+    return float(np.max(np.abs(_wrapped(model - exact)))), float(np.max(np.abs(_wrapped(line - exact))))
+
+
+def test_gmst_model_follows_astropy_across_a_utc_midnight() -> None:
+    """Chords bending at each UTC midnight must reproduce Astropy across one.
+
+    Regression test for the device paths' sidereal time. A line from the segment's first sample is
+    exact within a UTC day, but Astropy's GMST changes rate at each UTC midnight, so after one the
+    line drifts: here by 3.9e-10 rad over the 3096 s that follow, a geocentre delay of 8e-12 s. The
+    model is measured at 3.4e-14 rad here; the largest in a survey of every midnight from 2005 to 2026
+    is 9.95e-14 rad, so 1e-13 holds at this pinned midnight, whose IERS values are final, with margin.
+
+    The start is off the whole second, as an event's buffer is, and the comparison is every 0.25 s.
+    """
+    model, line = _model_error(_MIDNIGHT - 1000.0 + 0.3225957, 4096.0, 0.25)
+    # The premise: across this midnight the line alone is far off, so the test can fail.
+    assert line > 1e-10
+    assert model < 1e-13
+
+
+def test_gmst_model_follows_astropy_across_a_leap_second() -> None:
+    """The same across the UTC midnight that ends 2016-12-31, which had a leap second.
+
+    UTC repeats a second there while GPS time and UT1 run on, so Astropy's UT1 - UTC steps by one
+    second; GMST, from UT1, does not. Measured at 5.1e-14 rad.
+    """
+    midnight = float(Time("2017-01-01T00:00:00", scale="utc").gps)
+    model, _ = _model_error(midnight - 2000.0 + 0.3225957, 4096.0, 0.05)
+    assert model < 1e-13
+
+
+def test_gmst_model_follows_astropy_on_a_day_ending_with_a_leap_second() -> None:
+    """A segment inside a UTC day that ends with a leap second, crossing no midnight.
+
+    Regression test. The rate was a chord to Astropy's value at the next midnight, and an instant at a
+    midnight after a leap second can round into the leap second, where Astropy's UT1 - UTC has not yet
+    stepped: its GMST is a second of rotation off there, and the whole chord was 1.2e-5 rad wrong for
+    this start. Rates are now measured inside the day. Measured at 3.1e-14 rad.
+    """
+    model, _ = _model_error(1119719212.607171, 4096.0, 0.25)
+    assert model < 1e-13
+
+
+def test_gmst_model_follows_astropy_over_the_longest_accepted_span() -> None:
+    """Over a day, the longest span the device path accepts, the model stays within 1e-13 rad.
+
+    The line alone drifts by 5.8e-9 rad over this day; the chords bend where Astropy does, so the error
+    does not grow with the span. Measured at 4.3e-14 rad.
+    """
+    model, line = _model_error(_MIDNIGHT - 40000.0 + 0.3225957, 86400.0, 0.37)
+    assert line > 1e-9
+    assert model < 1e-13
+
+
+def test_gmst_piecewise_bends_at_the_next_utc_midnights() -> None:
+    """Two bends per start, at the next two UTC midnights; rates chords between Astropy values there."""
+    from gwmock_signal.projection.sidereal import GMST_KINKS, gmst_piecewise
+
+    starts = np.array([_MIDNIGHT - 1000.25, _T0, float(Time("2016-12-31T23:59:00", scale="utc").gps)])
+    anchors, rates, kinks, changes, valid_until = gmst_piecewise(starts)
+    assert anchors.shape == rates.shape == valid_until.shape == (3,)
+    assert kinks.shape == changes.shape == (3, GMST_KINKS)
+    # The anchor is the first piece's line at the first sample, which is Astropy there to round-off.
+    np.testing.assert_allclose(_wrapped(anchors - gmst_rad_astropy(starts)), 0.0, rtol=0.0, atol=1e-13)
+    for row, start in enumerate(starts):
+        first = Time(start, format="gps", scale="utc")
+        midnights = [Time(np.floor(first.utc.mjd) + day, format="mjd", scale="utc") for day in (1, 2, 3)]
+        expected = np.array([(midnight - first).sec for midnight in midnights])
+        np.testing.assert_allclose(kinks[row], expected[:GMST_KINKS], rtol=0.0, atol=1e-6)
+        assert valid_until[row] == pytest.approx(expected[-1], abs=1e-6)
+        assert valid_until[row] > 86400.0
+        # The first piece's line reaches the first midnight on Astropy's value there.
+        at_kink = _astropy_gmst(start, kinks[row, :1])
+        assert abs(_wrapped(anchors[row] + rates[row] * kinks[row, 0] - at_kink[0])) < 1e-13
+    # The bends are the size Astropy's rate changes by at a midnight, not whole turns.
+    assert np.all(np.abs(changes) < 1e-12)
+    # Only the start matters: the same start gives the same numbers whatever else is in the batch.
+    alone = gmst_piecewise(starts[1])
+    for together, single in zip((anchors, rates, kinks, changes, valid_until), alone, strict=True):
+        np.testing.assert_array_equal(together[1], single[0])
+
+
+def test_gmst_model_crosses_the_wrap() -> None:
+    """Astropy wraps GMST to [0, 2*pi); a segment that crosses the wrap must not gain a whole turn."""
+    times = _T0 + np.arange(0.0, 90000.0, 50.0)
+    gmst = gmst_rad_astropy(times)
+    start = float(times[int(np.argmax(np.diff(gmst) < 0))]) - 5.0
+    model, _ = _model_error(start, 200.0, 0.5)
+    assert model < 1e-13

@@ -149,12 +149,32 @@ segments = assemble_segments(
   places rows by either needs no change; one that assumed the waveform segment's
   length must read it from the strain's shape.
 - **Sidereal time.** Both paths take sidereal time from Astropy, IERS UT1-UTC
-  included. The batched path evaluates it on the host: once per event at the
-  segment midpoint with `earth_rotation=False`; with `earth_rotation=True`, as
-  an anchor at each event's first sample plus a sidereal rate, which the device
-  extends linearly across the segment. Over segments up to 8192 s that line
-  departs from Astropy by less than 1e-13 rad (see
-  `gwmock_signal.projection.sidereal`).
+  included. With `earth_rotation=False` the batched path evaluates it on the
+  host, once per event at the segment midpoint. With `earth_rotation=True`
+  Astropy's sidereal time is a straight line within each UTC day that bends at
+  every UTC midnight, and the host describes it per event by a few numbers: its
+  value at the event's first sample, the rate to the next UTC midnight, and the
+  change of rate at that midnight and the next, each rate a chord between
+  Astropy values (`gwmock_signal.projection.sidereal.gmst_piecewise`). The
+  device evaluates the line, and adds the bends only for the events whose
+  segment crosses a midnight, which are projected apart from the others.
+  Measured against Astropy every 0.5 s over 4096 s segments from 2005 to 2026,
+  one crossing each UTC midnight and four inside each UTC day, the largest error
+  was 9.95e-14 rad (a geocentre delay of 2.1e-15 s). A segment starting in the
+  last nine seconds before a leap second is the exception: up to 1.6e-12 rad
+  measured there, 3.2e-12 rad bounded (see `gwmock_signal.projection.sidereal`).
+  A batch that mixes events crossing a midnight with events crossing none runs
+  each group separately: it compiles and launches a second kernel variant per
+  detector, and each variant is its own entry in the bounded kernel cache (32
+  executables), so a run whose batches mix the two can hold up to twice as many
+  compiled kernels. While it runs, the full batch's inputs, the two gathered
+  subsets, each group's output and the reassembled result are live at once. In
+  one test on a Linux CPU (peak resident memory, 8 events of 1,048,718 samples
+  on three detectors), the projection added 1.0 GB for a batch split half and
+  half, 1.66 GB with one crossing event and seven clear, and 1.7 GB for an
+  all-crossing or all-clear batch; the batch memory estimate, unchanged by this,
+  gave 5.9 GB there. Peak memory on an accelerator was not measured, and this
+  test does not validate the estimate on a GPU.
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,
   simulate in chirp-mass groups to bound memory.

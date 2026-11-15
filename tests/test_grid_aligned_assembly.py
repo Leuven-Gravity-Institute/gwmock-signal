@@ -477,13 +477,13 @@ def test_sidereal_anchor_uses_the_aligned_start(monkeypatch: pytest.MonkeyPatch)
     from gwmock_signal import jax_batch
 
     captured: list[np.ndarray] = []
-    original = jax_batch.gmst_anchor_and_rate
+    original = jax_batch.gmst_piecewise
 
     def _recording(start_times, **kwargs):
         captured.append(np.atleast_1d(np.asarray(start_times, dtype=float)).copy())
         return original(start_times, **kwargs)
 
-    monkeypatch.setattr(jax_batch, "gmst_anchor_and_rate", _recording)
+    monkeypatch.setattr(jax_batch, "gmst_piecewise", _recording)
 
     grid = _grid()
     parameters = dict(_BASE)

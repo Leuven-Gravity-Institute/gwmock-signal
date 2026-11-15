@@ -774,3 +774,176 @@ def test_device_resampling_places_nothing_for_a_far_or_non_finite_position(fract
     out = np.asarray(_interpolate_uniform_sinc(jnp.ones(16), whole, 16, fraction=fraction))
     np.testing.assert_array_equal(out[1:], np.zeros(2))
     assert (out[0] == 0.0) == (fraction != 0.5)
+
+
+def test_device_projection_keeps_every_earlier_binding() -> None:
+    """Adding the sidereal bends must change no existing call.
+
+    Every parameter after ``plus`` and ``cross`` is keyword-only, and the new option comes after every
+    earlier one, so no positional or keyword call binds differently. A call that omits it gets the line
+    from ``gmst_start`` and ``gmst_rate``, the model it got before: the same series, bit for bit, as
+    passing bends of zero.
+    """
+    import inspect
+
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+
+    parameters = list(inspect.signature(project_polarizations_td_rotating).parameters.values())
+    assert [parameter.name for parameter in parameters[:2]] == ["plus", "cross"]
+    assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in parameters[2:])
+    assert parameters[-1].name == "gmst_kinks"
+
+    fs, n = 256.0, 2048
+    t = np.arange(n) / fs
+    envelope = np.exp(-0.5 * ((t - 4.0) / 0.5) ** 2)
+    response, location = reconstructed_geometry("H1")
+    earlier = {
+        "response": response,
+        "location": location,
+        "sampling_frequency": fs,
+        "n_samples": n,
+        "right_ascension": 1.1,
+        "declination": -0.3,
+        "right_ascension_rate": 0.0,
+        "declination_rate": 0.0,
+        "polarization_angle": 0.4,
+        "gmst_start": 0.5,
+        "gmst_rate": 7.29e-5,
+    }
+    plus, cross = envelope * np.cos(2 * np.pi * 40.0 * t), envelope * np.sin(2 * np.pi * 40.0 * t)
+    old_call = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier))
+    unbent = (np.array([10.0, 20.0]), np.zeros(2))
+    given = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier, gmst_kinks=unbent))
+    np.testing.assert_array_equal(old_call, given)
+    with pytest.raises(TypeError):
+        project_polarizations_td_rotating(
+            plus, cross, response, **{k: v for k, v in earlier.items() if k != "response"}
+        )
+
+
+def _midnight_polarizations(fs: float = 128.0):
+    """Polarizations at ``fs`` over 4096 s from 1000 s before the 2011-10-01 UTC midnight, a 30 Hz burst 2800 s after it."""
+    from gwmock_signal.timeseries import TimeSeries
+
+    start = float(Time("2011-10-01T00:00:00", scale="utc").gps) - 1000.0 + 0.3225957
+    t = np.arange(int(4096.0 * fs)) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    return {
+        "plus": TimeSeries(envelope * np.cos(phase), t0=start, sample_rate=fs),
+        "cross": TimeSeries(envelope * np.sin(phase), t0=start, sample_rate=fs),
+    }, float(np.max(envelope))
+
+
+_MIDNIGHT_SKY = {"right_ascension": 1.232, "declination": -0.603, "polarization_angle": 1.73}
+
+
+def test_padding_leaves_the_device_projection_unchanged_across_a_utc_midnight(monkeypatch) -> None:
+    """A series padded at its end to a fixed compiled length projects exactly as the unpadded one.
+
+    Across a midnight, where the sidereal model bends. Two guards. The sidereal model the kernel
+    receives depends on the first sample's time alone, so both get the same numbers; that holds on
+    every platform. And the projections agree to the bit, which is what a burst projected at its fixed
+    device length relies on. On arm64 that second property failed when the kernel read sidereal time
+    as a per-sample input array, whose compiled antenna pattern depended on the array's length; on
+    x86-64 it held either way, so there this checks the arrangement rather than reproducing the
+    failure.
+    """
+    from gwmock_signal.projection import network, sidereal
+
+    received = []
+    original = sidereal.gmst_piecewise
+
+    def _recording(*args, **kwargs):
+        values = original(*args, **kwargs)
+        received.append(values)
+        return values
+
+    monkeypatch.setattr(sidereal, "gmst_piecewise", _recording)
+    polarizations, _ = _midnight_polarizations()
+    common = {
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
+        "backend": "jax",
+        "sinc_taps": 127,
+        "kaiser_beta": network.DEFAULT_KAISER_BETA,
+        **_MIDNIGHT_SKY,
+    }
+    unpadded = network._project(polarizations, ["E1"], **common)["E1"]
+    padded = network._project(polarizations, ["E1"], fixed_lengths=True, **common)["E1"]
+
+    assert len(received) == 2
+    for short, long in zip(received[0], received[1], strict=True):
+        np.testing.assert_array_equal(short, long)
+    assert 0.0 < received[0][2][0, 0] < 4096.0  # the buffer crosses the first bend
+    assert np.asarray(padded.data).size == np.asarray(unpadded.data).size
+    np.testing.assert_array_equal(np.asarray(padded.data), np.asarray(unpadded.data))
+
+
+def test_a_buffer_crossing_no_midnight_compiles_the_line_alone(monkeypatch) -> None:
+    """Without a UTC midnight among the caller's samples the kernel gets no bends.
+
+    That is the computation it had before them, the form a series padded to a fixed length has been
+    checked to project exactly as unpadded with on arm64. A midnight only in the padding to a compiled
+    length does not count.
+    """
+    from gwmock_signal.projection import jax_projection, network
+    from gwmock_signal.timeseries import TimeSeries
+
+    seen = []
+    original = jax_projection.project_polarizations_td_rotating
+
+    def _recording(*args, **kwargs):
+        seen.append(kwargs.get("gmst_kinks"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(jax_projection, "project_polarizations_td_rotating", _recording)
+    network._compiled_rotating_projection.cache_clear()
+    try:
+        fs = 256.0
+        midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+        common = {
+            "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
+            "backend": "jax",
+            "sinc_taps": 127,
+            "kaiser_beta": network.DEFAULT_KAISER_BETA,
+            **_MIDNIGHT_SKY,
+        }
+        # 3.0 s that, with the padding for the delay, end before the midnight; padded on to a fixed
+        # compiled length they reach past it.
+        n = int(3.0 * fs)
+        t = np.arange(n) / fs
+        series = np.sin(2 * np.pi * 20.0 * t) * np.hanning(n)
+        start = midnight - 3.4
+        before = {k: TimeSeries(series, t0=start, sample_rate=fs) for k in ("plus", "cross")}
+        network._project(before, ["E1"], fixed_lengths=True, **common)
+        # The premise: the compiled length does reach past the midnight.
+        padded_start = start - edge_padding(fs) / fs
+        compiled = network.device_length(n + 2 * edge_padding(fs))
+        assert padded_start + (compiled - 1) / fs > midnight > start + (n - 1 + edge_padding(fs)) / fs
+        assert seen
+        assert seen[-1] is None
+        # Across it, the kernel bends.
+        across = {k: TimeSeries(series, t0=midnight - 1.5, sample_rate=fs) for k in ("plus", "cross")}
+        network._project(across, ["E1"], **common)
+        assert seen[-1] is not None
+    finally:
+        network._compiled_rotating_projection.cache_clear()
+
+
+def test_device_projection_matches_host_across_a_utc_midnight() -> None:
+    """The device projection must agree with the host where the buffer crosses a UTC midnight.
+
+    Regression test: the device path took sidereal time from a line through the buffer's first sample,
+    which drifts from Astropy after a UTC midnight, where Astropy's GMST changes rate. The host asks
+    Astropy at every sample. With the signal 2800 s after the midnight the two differed by 2.1e-10 of
+    the peak; they now agree to 1.4e-14.
+    """
+    from gwmock_signal.projection.network import project_polarizations_to_network
+
+    polarizations, peak = _midnight_polarizations()
+    kwargs = {"effects": ProjectionEffects.long_wavelength(earth_rotation=True), **_MIDNIGHT_SKY}
+    host = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="numpy", **kwargs)
+    device = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="jax", **kwargs)
+    for name in ("E1", "E2", "E3"):
+        difference = np.abs(np.asarray(device[name].data) - np.asarray(host[name].data))
+        assert np.max(difference) < 1e-12 * peak, name

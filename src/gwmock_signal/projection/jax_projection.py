@@ -51,6 +51,7 @@ from gwmock_signal.projection.resampling import (
     kaiser_window_chebyshev,
     validate_kernel,
 )
+from gwmock_signal.projection.sidereal import GMST_KINKS
 
 if TYPE_CHECKING:
     from jax import Array
@@ -432,15 +433,15 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     sampling_frequency: float,
     n_samples: int,
     # `ArrayLike`, not `float`, for everything `jax_batch` maps over: under its `jax.vmap` these
-    # arrive as traced per-event arrays, so `float` describes only the single-event caller. Kept as
-    # `float` where the batched path passes one unmapped value -- `gmst_rate` is shared across a batch.
+    # arrive as traced per-event arrays, so `float` describes only the single-event caller. That
+    # includes `gmst_rate`, which is each event's own (`sidereal.gmst_piecewise`).
     right_ascension: ArrayLike,
     declination: ArrayLike,
     right_ascension_rate: ArrayLike,
     declination_rate: ArrayLike,
     polarization_angle: ArrayLike,
     gmst_start: ArrayLike,
-    gmst_rate: float,
+    gmst_rate: ArrayLike,
     extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
@@ -448,6 +449,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     arms: ArrayLike | None = None,
     arm_lengths: tuple[float, float] | None = None,
     solar: SolarArguments | None = None,
+    gmst_kinks: tuple[ArrayLike, ArrayLike] | None = None,
 ) -> Array:
     """Project time-domain polarizations with a time-dependent antenna pattern.
 
@@ -519,11 +521,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         declination: Source declination in radians.
         polarization_angle: Polarization angle psi in radians.
         gmst_start: Greenwich Mean Sidereal Time in radians at the first sample, computed on
-            the host by :func:`~gwmock_signal.projection.sidereal.gmst_anchor_and_rate`.
+            the host by :func:`~gwmock_signal.projection.sidereal.gmst_piecewise`.
             Supplied rather than computed here so that Astropy remains the only
-            implementation of the sidereal model; see that module for why a linear model
-            is exact at these segment lengths.
-        gmst_rate: dGMST/dt in radians per second.
+            implementation of the sidereal model.
+        gmst_rate: dGMST/dt in radians per second up to the first ``gmst_kinks`` bend, from the same.
         right_ascension_rate: How fast the precessed right ascension moves, in radians per second,
             from :func:`~gwmock_signal.projection.sidereal.precessed_sky_anchor_and_rate`. Required
             rather than defaulted, because a caller that forgets it gets a position frozen for the
@@ -549,6 +550,14 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         arm_lengths: The two arms' lengths in metres; static, since the residual's filters are worked
             out on the host from them.
         solar: The solar-system delay, as :class:`SolarArguments`; ``None`` for none.
+        gmst_kinks: ``(offsets, changes)``, each of shape ``(GMST_KINKS,)``: the UTC midnights after the
+            first sample, in seconds from it, and the change of GMST rate at each, in rad/s, from
+            :func:`~gwmock_signal.projection.sidereal.gmst_piecewise` with ``gmst_start`` and
+            ``gmst_rate``. GMST is then the line bending at each midnight, which follows Astropy to
+            within 1e-13 rad as measured from 2005 to 2026 (:mod:`~gwmock_signal.projection.sidereal`). ``None`` uses the line alone, which is
+            exact to about 6e-14 rad within a UTC day but drifts after a UTC midnight, by 9.3e-11 rad
+            744 s after one: Astropy's GMST changes rate there (:mod:`~gwmock_signal.projection.sidereal`).
+            The projection functions in this package pass it when the samples cross a UTC midnight.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.
@@ -558,9 +567,17 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     dt = 1.0 / sampling_frequency
     sample_offsets = jnp.arange(n_samples, dtype=jnp.float64) * dt
 
-    # GMST from the host-supplied anchor and rate. Deliberately left unwrapped: only its
-    # sine and cosine are used, and wrapping would put a discontinuity mid-segment.
+    # GMST from the host's anchor and rate, bending at each UTC midnight (`sidereal.gmst_piecewise`).
+    # Formed here from the sample index and a few scalars, not read from a per-sample input, and the
+    # bends only when the caller passes them: on some platforms the compiled projection of a sample
+    # depends on the compiled length, and the line alone is the form checked not to (see `sidereal`).
+    # Deliberately left unwrapped: only its sine and cosine are used, and wrapping would put a
+    # discontinuity mid-segment.
     gmst = gmst_start + gmst_rate * sample_offsets
+    if gmst_kinks is not None:
+        kinks, changes = gmst_kinks
+        for k in range(GMST_KINKS):
+            gmst = gmst + changes[k] * jnp.maximum(sample_offsets - kinks[k], 0.0)
 
     # The sky position moves too, because precession is a rotation into the frame *of date* and the
     # date advances across the segment. Linear in absolute time, so two abutting segments agree

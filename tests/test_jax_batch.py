@@ -659,3 +659,164 @@ def test_simulate_cbc_batch_keeps_signal_the_delay_moves_past_an_end(earth_rotat
         assert np.max(difference) < 1e-10 * scale, (
             f"event {event} {name}: {np.max(difference) / scale:.3e} of peak from the host projection"
         )
+
+
+def test_batch_projection_matches_host_across_a_utc_midnight() -> None:
+    """The batched device projection must agree with the host where a buffer crosses a UTC midnight.
+
+    Regression test: the batch took sidereal time from each event's anchor and *one* rate shared
+    across the batch, which drifts from Astropy after a UTC midnight and, for an event days from the
+    first, also by the difference in rate between the days. Both events here cross a midnight: one
+    with the rate measured at its own start, one three days after the first. They differed from the
+    host by 2.1e-10 and 3.9e-10 of the peak and now agree to 1.3e-14.
+
+    Calls the batch's projection directly on spectra of known polarizations, so no waveform model is
+    generated and the comparison is of the projection alone.
+    """
+    from types import SimpleNamespace
+
+    from astropy.time import Time
+
+    from gwmock_signal.jax_batch import _project_rotating
+    from gwmock_signal.projection.geometry import resolve_detectors
+    from gwmock_signal.projection.network import project_polarizations_to_network
+    from gwmock_signal.projection.resampling import edge_padding
+    from gwmock_signal.timeseries import TimeSeries
+
+    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+    fs = 128.0
+    n_samples, padding = int(4096.0 * fs), edge_padding(fs)
+    starts = np.array([midnight - 1000.0 + 0.3225957, midnight + 3 * 86400.0 - 2500.0 + 0.71])
+    t = np.arange(n_samples) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    plus, cross = envelope * np.cos(phase), envelope * np.sin(phase)
+    # The batch inverse-transforms these and multiplies by the rate, so this round-trips `plus` and `cross`.
+    fd = SimpleNamespace(
+        plus=jax.numpy.asarray(np.stack([np.fft.rfft(plus) / fs] * 2)),
+        cross=jax.numpy.asarray(np.stack([np.fft.rfft(cross) / fs] * 2)),
+    )
+    sky = {"right_ascension": 1.232, "declination": -0.603, "polarization_angle": 1.73}
+    strain = np.asarray(
+        _project_rotating(
+            fd,
+            [key for _, key in resolve_detectors(["E1"])],
+            n_samples=n_samples,
+            padding=padding,
+            sampling_frequency=fs,
+            merger_index=0,
+            segment_start_gps=starts - padding / fs,
+            right_ascension=jax.numpy.full(2, sky["right_ascension"]),
+            declination=jax.numpy.full(2, sky["declination"]),
+            right_ascension_rate=jax.numpy.zeros(2),
+            declination_rate=jax.numpy.zeros(2),
+            polarization_angle=jax.numpy.full(2, sky["polarization_angle"]),
+            alignment_shift=np.zeros(2),
+            output_names=["E1"],
+        )
+    )
+    for event, start in enumerate(starts):
+        host = project_polarizations_to_network(
+            {
+                "plus": TimeSeries(plus, t0=start, sample_rate=fs),
+                "cross": TimeSeries(cross, t0=start, sample_rate=fs),
+            },
+            ["E1"],
+            backend="numpy",
+            effects=ProjectionEffects.long_wavelength(earth_rotation=True),
+            **sky,
+        )["E1"]
+        assert strain[event, 0].size == host.n_samples
+        assert np.max(np.abs(strain[event, 0] - np.asarray(host.data))) < 1e-12 * np.max(envelope), event
+
+
+def _batch_project_known(starts: np.ndarray, *, fs: float = 128.0, duration: float = 4096.0) -> np.ndarray:
+    """Project one known signal at each of ``starts`` (first unpadded samples) through the batch kernel, on E1."""
+    from types import SimpleNamespace
+
+    from gwmock_signal.jax_batch import _project_rotating
+    from gwmock_signal.projection.geometry import resolve_detectors
+    from gwmock_signal.projection.resampling import edge_padding
+
+    n_samples, padding = int(duration * fs), edge_padding(fs)
+    t = np.arange(n_samples) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    count = len(starts)
+    fd = SimpleNamespace(
+        plus=jax.numpy.asarray(np.stack([np.fft.rfft(envelope * np.cos(phase)) / fs] * count)),
+        cross=jax.numpy.asarray(np.stack([np.fft.rfft(envelope * np.sin(phase)) / fs] * count)),
+    )
+    return np.asarray(
+        _project_rotating(
+            fd,
+            [key for _, key in resolve_detectors(["E1"])],
+            n_samples=n_samples,
+            padding=padding,
+            sampling_frequency=fs,
+            merger_index=0,
+            segment_start_gps=np.asarray(starts) - padding / fs,
+            right_ascension=jax.numpy.full(count, 1.232),
+            declination=jax.numpy.full(count, -0.603),
+            right_ascension_rate=jax.numpy.zeros(count),
+            declination_rate=jax.numpy.zeros(count),
+            polarization_angle=jax.numpy.full(count, 1.73),
+            alignment_shift=np.zeros(count),
+            output_names=["E1"],
+        )
+    )
+
+
+def test_a_mixed_batch_projects_each_event_as_it_would_alone(monkeypatch) -> None:
+    """In a batch where one event crosses a UTC midnight and one does not, each projects as it would alone.
+
+    The event that crosses none keeps the line-alone kernel, the computation it had before the bends
+    existed, bit for bit: one event that needs the bends must not change the compiled graph of the others,
+    since on some platforms the compiled projection of a sample depends on the graph. The crossing event
+    gets the bends, exactly as it would alone, and the two come back in the order they were given.
+    """
+    from astropy.time import Time
+
+    from gwmock_signal import jax_batch
+
+    flags = []
+    original = jax_batch._rotating_projection_kernel
+
+    def _recording(*args):
+        flags.append(args[-1])
+        return original(*args)
+
+    monkeypatch.setattr(jax_batch, "_rotating_projection_kernel", _recording)
+
+    # The batched inverse FFT that turns spectra into the time series the kernel reads is not part of
+    # this comparison, and its round-off can depend on the batch's size; one event at a time on the host
+    # gives every event the same input whatever batch it is in.
+    def _row_by_row(n_samples, sampling_frequency, merger_index, padding):
+        def convert(spectra):
+            rows = [
+                np.pad(
+                    np.roll(np.fft.irfft(np.asarray(row), n=n_samples) * sampling_frequency, merger_index),
+                    (padding, padding),
+                )
+                for row in spectra
+            ]
+            return jax.numpy.asarray(np.stack(rows))
+
+        return convert
+
+    monkeypatch.setattr(jax_batch, "_time_domain_kernel", _row_by_row)
+    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+    crossing = midnight - 1000.0 + 0.3225957
+    clear = midnight + 3 * 86400.0 + 10000.0 + 0.71  # a 4096 s buffer inside one UTC day
+    mixed = _batch_project_known(np.array([clear, crossing]))
+    assert sorted(flags) == [False, True]
+
+    flags.clear()
+    alone_clear = _batch_project_known(np.array([clear]))
+    assert flags == [False]
+    flags.clear()
+    alone_crossing = _batch_project_known(np.array([crossing]))
+    assert flags == [True]
+
+    np.testing.assert_array_equal(mixed[0], alone_clear[0])
+    np.testing.assert_array_equal(mixed[1], alone_crossing[0])
