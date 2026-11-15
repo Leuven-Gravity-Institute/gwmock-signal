@@ -136,8 +136,8 @@ def test_gmst_model_follows_astropy_across_a_utc_midnight() -> None:
     Regression test for the device paths' sidereal time. A line from the segment's first sample is
     exact within a UTC day, but Astropy's GMST changes rate at each UTC midnight, so after one the
     line drifts: here by 3.9e-10 rad over the 3096 s that follow, a geocentre delay of 8e-12 s. The
-    model is measured at 3.7e-14 rad here; the largest measured at any midnight from 2005 to 2026 is
-    8.7e-14 rad, so 1e-13 holds at this pinned midnight, whose IERS values are final, with margin.
+    model is measured at 3.4e-14 rad here; the largest in a survey of every midnight from 2005 to 2026
+    is 9.95e-14 rad, so 1e-13 holds at this pinned midnight, whose IERS values are final, with margin.
 
     The start is off the whole second, as an event's buffer is, and the comparison is every 0.25 s.
     """
@@ -151,18 +151,30 @@ def test_gmst_model_follows_astropy_across_a_leap_second() -> None:
     """The same across the UTC midnight that ends 2016-12-31, which had a leap second.
 
     UTC repeats a second there while GPS time and UT1 run on, so Astropy's UT1 - UTC steps by one
-    second; GMST, from UT1, does not. Measured at 5.0e-14 rad.
+    second; GMST, from UT1, does not. Measured at 5.1e-14 rad.
     """
     midnight = float(Time("2017-01-01T00:00:00", scale="utc").gps)
     model, _ = _model_error(midnight - 2000.0 + 0.3225957, 4096.0, 0.05)
     assert model < 1e-13
 
 
+def test_gmst_model_follows_astropy_on_a_day_ending_with_a_leap_second() -> None:
+    """A segment inside a UTC day that ends with a leap second, crossing no midnight.
+
+    Regression test. The rate was a chord to Astropy's value at the next midnight, and an instant at a
+    midnight after a leap second can round into the leap second, where Astropy's UT1 - UTC has not yet
+    stepped: its GMST is a second of rotation off there, and the whole chord was 1.2e-5 rad wrong for
+    this start. Rates are now measured inside the day. Measured at 3.1e-14 rad.
+    """
+    model, _ = _model_error(1119719212.607171, 4096.0, 0.25)
+    assert model < 1e-13
+
+
 def test_gmst_model_follows_astropy_over_the_longest_accepted_span() -> None:
     """Over a day, the longest span the device path accepts, the model stays within 1e-13 rad.
 
-    The line alone drifts by 1e-8 rad over this day; the chords bend where Astropy does, so the error
-    does not grow with the span. Measured at 3.2e-14 rad.
+    The line alone drifts by 5.8e-9 rad over this day; the chords bend where Astropy does, so the error
+    does not grow with the span. Measured at 4.3e-14 rad.
     """
     model, line = _model_error(_MIDNIGHT - 40000.0 + 0.3225957, 86400.0, 0.37)
     assert line > 1e-9
@@ -177,7 +189,8 @@ def test_gmst_piecewise_bends_at_the_next_utc_midnights() -> None:
     anchors, rates, kinks, changes, valid_until = gmst_piecewise(starts)
     assert anchors.shape == rates.shape == valid_until.shape == (3,)
     assert kinks.shape == changes.shape == (3, GMST_KINKS)
-    np.testing.assert_allclose(anchors, gmst_rad_astropy(starts), rtol=0.0, atol=1e-15)
+    # The anchor is the first piece's line at the first sample, which is Astropy there to round-off.
+    np.testing.assert_allclose(_wrapped(anchors - gmst_rad_astropy(starts)), 0.0, rtol=0.0, atol=1e-13)
     for row, start in enumerate(starts):
         first = Time(start, format="gps", scale="utc")
         midnights = [Time(np.floor(first.utc.mjd) + day, format="mjd", scale="utc") for day in (1, 2, 3)]
@@ -185,9 +198,9 @@ def test_gmst_piecewise_bends_at_the_next_utc_midnights() -> None:
         np.testing.assert_allclose(kinks[row], expected[:GMST_KINKS], rtol=0.0, atol=1e-6)
         assert valid_until[row] == pytest.approx(expected[-1], abs=1e-6)
         assert valid_until[row] > 86400.0
-        # The first chord ends at the first midnight on Astropy's value there.
+        # The first piece's line reaches the first midnight on Astropy's value there.
         at_kink = _astropy_gmst(start, kinks[row, :1])
-        assert abs(_wrapped(anchors[row] + rates[row] * kinks[row, 0] - at_kink[0])) < 1e-14
+        assert abs(_wrapped(anchors[row] + rates[row] * kinks[row, 0] - at_kink[0])) < 1e-13
     # The bends are the size Astropy's rate changes by at a midnight, not whole turns.
     assert np.all(np.abs(changes) < 1e-12)
     # Only the start matters: the same start gives the same numbers whatever else is in the batch.

@@ -149,11 +149,19 @@ segments = assemble_segments(
   places rows by either needs no change; one that assumed the waveform segment's
   length must read it from the strain's shape.
 - **Sidereal time.** Both paths take sidereal time from Astropy, IERS UT1-UTC
-  included. The batched path evaluates it on the host: once per event at the
-  segment midpoint with `earth_rotation=False`; with `earth_rotation=True`, as
-  an anchor at each event's first sample plus a sidereal rate, which the device
-  extends linearly across the segment. Over segments up to 8192 s that line
-  departs from Astropy by less than 1e-13 rad (see
+  included. With `earth_rotation=False` the batched path evaluates it on the
+  host, once per event at the segment midpoint. With `earth_rotation=True`
+  Astropy's sidereal time is a straight line within each UTC day that bends at
+  every UTC midnight, and the host describes it per event by a few numbers: its
+  value at the event's first sample, the rate to the next UTC midnight, and the
+  change of rate at that midnight and the next, each rate a chord between
+  Astropy values (`gwmock_signal.projection.sidereal.gmst_piecewise`). The
+  device evaluates the line, and adds the bends only for the events whose
+  segment crosses a midnight, which are projected apart from the others.
+  Measured against Astropy every 0.5 s over 4096 s segments from 2005 to 2026,
+  one crossing each UTC midnight and four inside each UTC day, the largest error
+  was 9.95e-14 rad (a geocentre delay of 2.1e-15 s); a segment starting in the
+  last nine seconds before a leap second can be off by up to 3.2e-12 rad (see
   `gwmock_signal.projection.sidereal`).
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,

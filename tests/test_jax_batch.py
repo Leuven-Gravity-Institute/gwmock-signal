@@ -728,3 +728,95 @@ def test_batch_projection_matches_host_across_a_utc_midnight() -> None:
         )["E1"]
         assert strain[event, 0].size == host.n_samples
         assert np.max(np.abs(strain[event, 0] - np.asarray(host.data))) < 1e-12 * np.max(envelope), event
+
+
+def _batch_project_known(starts: np.ndarray, *, fs: float = 128.0, duration: float = 4096.0) -> np.ndarray:
+    """Project one known signal at each of ``starts`` (first unpadded samples) through the batch kernel, on E1."""
+    from types import SimpleNamespace
+
+    from gwmock_signal.jax_batch import _project_rotating
+    from gwmock_signal.projection.geometry import resolve_detectors
+    from gwmock_signal.projection.resampling import edge_padding
+
+    n_samples, padding = int(duration * fs), edge_padding(fs)
+    t = np.arange(n_samples) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    count = len(starts)
+    fd = SimpleNamespace(
+        plus=jax.numpy.asarray(np.stack([np.fft.rfft(envelope * np.cos(phase)) / fs] * count)),
+        cross=jax.numpy.asarray(np.stack([np.fft.rfft(envelope * np.sin(phase)) / fs] * count)),
+    )
+    return np.asarray(
+        _project_rotating(
+            fd,
+            [key for _, key in resolve_detectors(["E1"])],
+            n_samples=n_samples,
+            padding=padding,
+            sampling_frequency=fs,
+            merger_index=0,
+            segment_start_gps=np.asarray(starts) - padding / fs,
+            right_ascension=jax.numpy.full(count, 1.232),
+            declination=jax.numpy.full(count, -0.603),
+            right_ascension_rate=jax.numpy.zeros(count),
+            declination_rate=jax.numpy.zeros(count),
+            polarization_angle=jax.numpy.full(count, 1.73),
+            alignment_shift=np.zeros(count),
+            output_names=["E1"],
+        )
+    )
+
+
+def test_a_mixed_batch_projects_each_event_as_it_would_alone(monkeypatch) -> None:
+    """In a batch where one event crosses a UTC midnight and one does not, each projects as it would alone.
+
+    The event that crosses none keeps the line-alone kernel, the computation it had before the bends
+    existed, bit for bit: one event that needs the bends must not change the compiled graph of the others,
+    since on some platforms the compiled projection of a sample depends on the graph. The crossing event
+    gets the bends, exactly as it would alone, and the two come back in the order they were given.
+    """
+    from astropy.time import Time
+
+    from gwmock_signal import jax_batch
+
+    flags = []
+    original = jax_batch._rotating_projection_kernel
+
+    def _recording(*args):
+        flags.append(args[-1])
+        return original(*args)
+
+    monkeypatch.setattr(jax_batch, "_rotating_projection_kernel", _recording)
+
+    # The batched inverse FFT that turns spectra into the time series the kernel reads is not part of
+    # this comparison, and its round-off can depend on the batch's size; one event at a time on the host
+    # gives every event the same input whatever batch it is in.
+    def _row_by_row(n_samples, sampling_frequency, merger_index, padding):
+        def convert(spectra):
+            rows = [
+                np.pad(
+                    np.roll(np.fft.irfft(np.asarray(row), n=n_samples) * sampling_frequency, merger_index),
+                    (padding, padding),
+                )
+                for row in spectra
+            ]
+            return jax.numpy.asarray(np.stack(rows))
+
+        return convert
+
+    monkeypatch.setattr(jax_batch, "_time_domain_kernel", _row_by_row)
+    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
+    crossing = midnight - 1000.0 + 0.3225957
+    clear = midnight + 3 * 86400.0 + 10000.0 + 0.71  # a 4096 s buffer inside one UTC day
+    mixed = _batch_project_known(np.array([clear, crossing]))
+    assert sorted(flags) == [False, True]
+
+    flags.clear()
+    alone_clear = _batch_project_known(np.array([clear]))
+    assert flags == [False]
+    flags.clear()
+    alone_crossing = _batch_project_known(np.array([crossing]))
+    assert flags == [True]
+
+    np.testing.assert_array_equal(mixed[0], alone_clear[0])
+    np.testing.assert_array_equal(mixed[1], alone_crossing[0])

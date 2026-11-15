@@ -521,10 +521,10 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         declination: Source declination in radians.
         polarization_angle: Polarization angle psi in radians.
         gmst_start: Greenwich Mean Sidereal Time in radians at the first sample, computed on
-            the host by :func:`~gwmock_signal.projection.sidereal.gmst_anchor_and_rate`.
+            the host by :func:`~gwmock_signal.projection.sidereal.gmst_piecewise`.
             Supplied rather than computed here so that Astropy remains the only
             implementation of the sidereal model.
-        gmst_rate: dGMST/dt in radians per second.
+        gmst_rate: dGMST/dt in radians per second up to the first ``gmst_kinks`` bend, from the same.
         right_ascension_rate: How fast the precessed right ascension moves, in radians per second,
             from :func:`~gwmock_signal.projection.sidereal.precessed_sky_anchor_and_rate`. Required
             rather than defaulted, because a caller that forgets it gets a position frozen for the
@@ -554,7 +554,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             first sample, in seconds from it, and the change of GMST rate at each, in rad/s, from
             :func:`~gwmock_signal.projection.sidereal.gmst_piecewise` with ``gmst_start`` and
             ``gmst_rate``. GMST is then the line bending at each midnight, which follows Astropy to
-            within 8.7e-14 rad as measured from 2005 to 2026. ``None`` uses the line alone, which is
+            within 1e-13 rad as measured from 2005 to 2026 (:mod:`~gwmock_signal.projection.sidereal`). ``None`` uses the line alone, which is
             exact to about 6e-14 rad within a UTC day but drifts after a UTC midnight, by 9.3e-11 rad
             744 s after one: Astropy's GMST changes rate there (:mod:`~gwmock_signal.projection.sidereal`).
             The projection functions in this package pass it when the samples cross a UTC midnight.

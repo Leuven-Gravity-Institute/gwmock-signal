@@ -209,8 +209,8 @@ _KERNEL_CACHE_SIZE = 64
 #: from the first sample, whose deviation from Astropy, converted to the quantity that actually enters
 #: the projection -- a geocenter delay -- was 6.2e-11 s over a day and 1.2e-7 s over 90 days; it is now
 #: chords between Astropy values that bend at each UTC midnight
-#: (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`), measured within 8.7e-14 rad, 2e-15 s
-#: of delay, of Astropy from 2005 to 2026, over spans up to a day. The name is kept because callers
+#: (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`), measured within 1e-13 rad, 2.1e-15 s
+#: of delay, of Astropy from 2005 to 2026 (that module gives the survey), over spans up to a day. The name is kept because callers
 #: import it.
 #:
 #: The projection still carries a known 8.7e-07 s worst-case disagreement with
@@ -448,7 +448,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     from the host an anchor, a rate and the bends at the next UTC midnights, chords between Astropy
     values (``sidereal.gmst_piecewise``), and evaluates them per sample. A line alone is exact to
     6e-14 rad within a UTC day but not across a UTC midnight, where Astropy's GMST changes rate; the
-    bends follow it there, to within 8.7e-14 rad, 2e-15 s of geocenter delay, as measured from 2005
+    bends follow it there, to within 1e-13 rad, 2.1e-15 s of geocenter delay, as measured from 2005
     to 2026. See :mod:`~gwmock_signal.projection.sidereal`.
 
     Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,
@@ -937,11 +937,15 @@ def _project(  # noqa: PLR0913
     padding the polarizations with zeros to the next one and cutting each result back. The device kernel
     is compiled once per length, which costs seconds, and only :data:`_KERNEL_CACHE_SIZE` are kept, so a
     caller projecting many series of different lengths -- a burst injection set -- would otherwise
-    compile for nearly every one. The result is unchanged up to rounding: the polarizations already end
-    in ``edge_padding`` zeros, wider than the delay and the kernel's half-width together, so every read
-    the kernel makes past their end, padded or not, is of a zero, and the samples it adds project to
-    exactly zero. What is not bit-identical is the finite-arm residual, a linear convolution evaluated by
-    FFT on a length that grows with the series. Applied only on the device path, with
+    compile for nearly every one. The polarizations already end in ``edge_padding`` zeros, wider than
+    the delay and the kernel's half-width together, so every read the kernel makes past their end, padded
+    or not, is of a zero, and the samples it adds project to exactly zero. For a series whose samples
+    cross no UTC midnight the result is therefore unchanged, bit for bit. For one that crosses a midnight
+    the kernel bends sidereal time there (:func:`~gwmock_signal.projection.sidereal.gmst_piecewise`), and
+    with the bends in the graph the compiled arithmetic of a sample can depend on the compiled length on
+    some platforms (seen on arm64 with XLA:CPU): the result then may differ from the unpadded one by
+    floating-point rounding. Nor is the finite-arm residual bit-identical, a linear convolution
+    evaluated by FFT on a length that grows with the series. Applied only on the device path, with
     ``keep_delayed_samples`` (which supplies those zeros), and not to ``tapered`` polarizations, whose
     Fourier oversampling depends on the length of the whole series; otherwise ignored.
 

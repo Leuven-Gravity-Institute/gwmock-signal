@@ -942,6 +942,7 @@ def _project_rotating(  # noqa: PLR0913
     Returns:
         Strain of shape ``(n_events, n_detectors, n_samples + 2 * padding)``.
     """
+    import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
 
     to_time_domain = _time_domain_kernel(n_samples, sampling_frequency, merger_index, padding)
@@ -959,9 +960,11 @@ def _project_rotating(  # noqa: PLR0913
 
     anchors, rates, kinks, changes, valid_until = gmst_piecewise(segment_start_gps)
     span = (n_samples + 2 * padding - 1) / sampling_frequency
-    # Bends only when some event's buffer crosses a UTC midnight: otherwise the kernel is the line alone,
-    # as in the per-event path (`network._project_rotating_on_device`).
-    sidereal_bends = bool(np.any(kinks[:, 0] < span))
+    # Bends only for the events whose buffer crosses a UTC midnight. The others are projected apart, by the
+    # line alone, as in the per-event path (`network._project_rotating_on_device`): on some platforms the
+    # compiled projection of a sample depends on the compiled length once the bends are in the graph, and
+    # an event that does not need them keeps the computation it had before they existed.
+    crosses = kinks[:, 0] < span
     if span > float(np.min(valid_until)):
         raise ValueError(
             f"A {span:.0f} s buffer is longer than the sidereal model covers from its start "
@@ -988,37 +991,56 @@ def _project_rotating(  # noqa: PLR0913
         jnp.asarray(absorbed, dtype=jnp.float64),
     )
 
-    per_detector = []
-    for name, key in zip(output_names or [None] * len(lookup_keys), lookup_keys, strict=True):
-        response, location = reconstructed_geometry(key)
-        lengths = None if arm_lengths is None else tuple(float(length) for length in arm_lengths[name])
-        terms = _response_terms(key, lengths, sampling_frequency)
-        arms = np.stack([term.arm for term in terms]) if lengths is not None else np.zeros((2, 3))
-        project_batch = _rotating_projection_kernel(
-            n_samples + 2 * padding, sampling_frequency, lengths, components, sidereal_bends
-        )
-        per_detector.append(
-            project_batch(
-                plus_td,
-                cross_td,
-                right_ascension,
-                declination,
-                right_ascension_rate,
-                declination_rate,
-                polarization_angle,
-                gmst_anchors,
-                gmst_kinks,
-                gmst_changes,
-                jnp.asarray(alignment_shift, dtype=jnp.float64),
-                *solar_arguments,
-                gmst_rate,
-                jnp.asarray(response, dtype=jnp.float64),
-                jnp.asarray(location, dtype=jnp.float64),
-                jnp.asarray(arms, dtype=jnp.float64),
-            )
-        )
+    # Everything mapped over events, in the kernel's argument order up to the per-event rate.
+    per_event = (
+        plus_td,
+        cross_td,
+        jnp.asarray(right_ascension),
+        jnp.asarray(declination),
+        jnp.asarray(right_ascension_rate),
+        jnp.asarray(declination_rate),
+        jnp.asarray(polarization_angle),
+        gmst_anchors,
+        gmst_kinks,
+        gmst_changes,
+        jnp.asarray(alignment_shift, dtype=jnp.float64),
+        *solar_arguments,
+        gmst_rate,
+    )
+    groups = [(np.flatnonzero(crosses == bends), bends) for bends in (False, True)]
+    groups = [(events, bends) for events, bends in groups if events.size]
 
-    return jnp.stack(per_detector, axis=1)
+    def _project_group(events: np.ndarray, bends: bool) -> Array:
+        # A batch that is one group is passed as it is, so it projects exactly as an unsplit batch would.
+        if events.size == count:
+            arguments = per_event
+        else:
+            arguments = jax.tree_util.tree_map(lambda values: jnp.take(values, events, axis=0), per_event)
+        per_detector = []
+        for name, key in zip(output_names or [None] * len(lookup_keys), lookup_keys, strict=True):
+            response, location = reconstructed_geometry(key)
+            lengths = None if arm_lengths is None else tuple(float(length) for length in arm_lengths[name])
+            terms = _response_terms(key, lengths, sampling_frequency)
+            arms = np.stack([term.arm for term in terms]) if lengths is not None else np.zeros((2, 3))
+            project_batch = _rotating_projection_kernel(
+                n_samples + 2 * padding, sampling_frequency, lengths, components, bends
+            )
+            per_detector.append(
+                project_batch(
+                    *arguments,
+                    jnp.asarray(response, dtype=jnp.float64),
+                    jnp.asarray(location, dtype=jnp.float64),
+                    jnp.asarray(arms, dtype=jnp.float64),
+                )
+            )
+        return jnp.stack(per_detector, axis=1)
+
+    if len(groups) == 1:
+        return _project_group(*groups[0])
+    # Each group projected with its own kernel, then put back in the caller's order.
+    order = np.concatenate([events for events, _ in groups])
+    projected = jnp.concatenate([_project_group(events, bends) for events, bends in groups], axis=0)
+    return jnp.take(projected, np.argsort(order), axis=0)
 
 
 def assemble_segments(
