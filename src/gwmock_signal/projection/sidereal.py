@@ -20,47 +20,42 @@ cannot be called from inside a JIT-compiled kernel. Those two differ by about 1.
 which enters the geocenter delay as a ~3e-8 s timing error and was, once the resampling
 kernel was made accurate, the largest disagreement between the paths.
 
-The fix is not a better series but a different decomposition. GMST is very nearly linear in
-time, so a segment needs only an anchor and a rate, plus, because "very nearly" is not
-"exactly", a correction sampled from Astropy at regular nodes (:func:`gmst_correction_nodes`)
-and interpolated linearly between them. :func:`gmst_samples` evaluates that on the host, at
-every sample, and the device kernels take the result as an input. Astropy therefore remains
-the only implementation of the sidereal model, including its IERS UT1 handling.
+The fix is not a better series but a different decomposition. Astropy takes UT1 - UTC from the
+IERS tables, which give it once per day at 0h UTC, and interpolates linearly in between, so its
+GMST is a straight line within each UTC day and bends at every UTC midnight, by however much the
+length of day changed. :func:`gmst_piecewise` describes that exactly in a few host-computed
+numbers -- the value at the segment's first sample, the rate to the next UTC midnight, and the
+change of rate at that midnight and the one after -- each rate a chord between Astropy values,
+and the device kernels evaluate it per sample with a multiply-add and two ramps. Astropy therefore
+remains the only implementation of the sidereal model, including its IERS UT1 handling.
 
-The evaluation is on the host, not in the kernel, so that a sample's sidereal time cannot
-depend on the length the kernel was compiled for. NumPy evaluates each sample alone and the
-same way whatever the array's length, so a series padded at its end gets bit-identical values
-over the samples it shares with the unpadded one. Compiled, the same interpolation was not:
-on one platform (macOS on Apple silicon) a padded burst projection differed from the
-unpadded one in about a tenth of its samples, by up to 2.2e-13 of its peak, although the
-nodes it read were identical. The cost is one float64 per sample, beside the two
-polarizations the kernel already takes.
+!!! note "Why not a line, and why not per-sample values"
 
-!!! note "Why a line alone is not enough"
+    A line from the first sample, which this used to be, cannot follow the bend. Within one UTC
+    day it was exact to 6e-14 rad, but after a midnight it drifted by the change in rate times the
+    time since the midnight: 9.3e-11 rad (a 2e-12 s geocenter delay) at the end of one 4096 s
+    segment that crosses midnight 744 s before its end. From 2005 to 2026 the change in rate was
+    9.3e-14 rad/s at the median and at most 3.5e-13 rad/s; over a month of segments from GPS 1e9,
+    one starting every 30 minutes, the line's worst error was 7.2e-10 rad for 4096 s segments and
+    1.6e-9 rad for 8192 s, and about one segment in 21 of 4096 s crosses a midnight.
 
-    Astropy takes UT1 - UTC from the IERS tables, which give it once per day at 0h UTC, and
-    interpolates linearly in between. Its GMST is therefore a straight line within a UTC day
-    and changes slope at every UTC midnight, by however much the length of day changed. From
-    2005 to 2026 that change in rate was 9.3e-14 rad/s at the median and at most 3.5e-13 rad/s.
+    Sidereal time evaluated on the host at every sample and passed to the kernel as an array is
+    as accurate, but on one platform (macOS on Apple silicon) the compiled projection of a sample
+    can depend on the length the kernel was compiled for: a burst padded at its end projected
+    differently from the unpadded one in about a tenth of its samples, by up to 2.2e-13 of its
+    peak, although the sidereal times it read were identical. The same happened when the bends
+    were added to every kernel, though they add exactly zero before a midnight. The compiled
+    arithmetic is not guaranteed to be independent of the length; the line alone, as it was, is
+    the form that has been checked to be. So the device kernels add the bends only when the
+    caller's samples cross a UTC midnight, and are otherwise unchanged; the piecewise form also
+    needs no per-sample memory.
 
-    A single anchor and rate cannot follow the bend. Within one UTC day the line is exact to
-    6e-14 rad, but after a midnight it drifts by the change in rate times the time since the
-    midnight: 9.3e-11 rad (a 2e-12 s geocenter delay) at the end of one 4096 s segment that
-    crosses midnight 744 s before its end. Over a month of segments from GPS 1e9, one starting
-    every 30 minutes, the worst was 7.2e-10 rad for 4096 s segments and 1.6e-9 rad for 8192 s;
-    about one segment in 21 of 4096 s crosses a midnight.
-
-    The nodes remove it. Linear interpolation between nodes ``h`` seconds apart follows each
-    straight piece of Astropy's curve, and the bend at a midnight costs at most the change in
-    rate times ``h / 4`` in the one interval that contains it: with
-    :data:`GMST_NODE_SPACING_SECONDS` = 1 s, 8.8e-14 rad at the largest change in rate measured.
-    That bounds the bend alone. Astropy's GMST also has smooth structure and round-off of its
-    own, so the total is measured rather than derived: against Astropy every 0.05 s, in segments
-    crossing every seventh UTC midnight from 2005 to 2026, the model's largest error was
-    1.07e-13 rad (2024-10-19; 2.3e-15 s of geocenter delay), and 6.6e-14 rad in 4096 s segments
-    that cross no midnight. The five midnights from 2005 to 2026 that follow a leap second
-    (2006-01-01, 2009-01-01, 2012-07-01, 2015-07-01, 2017-01-01) were within 5.7e-14 rad.
-    ``tests/projection/test_sidereal.py`` pins a midnight, a leap-second midnight and a full day.
+    Measured against Astropy (sampled every 0.05 s or 0.5 s), the piecewise form's largest error
+    was 8.0e-14 rad in segments crossing every seventh UTC midnight from 2005 to 2026, 8.7e-14 rad
+    in 4096 s segments crossing every thirtieth, 7.5e-14 rad in 4096 s segments crossing none, at
+    most 5.0e-14 rad across the five midnights after a leap second, and 5.9e-14 rad over a whole
+    day: a geocenter delay below 2e-15 s. ``tests/projection/test_sidereal.py`` pins a midnight,
+    a leap-second midnight and a full day.
 
 Using Astropy also removes the ``dut1`` approximation rather than merely exposing it:
 Astropy applies real IERS UT1-UTC, whereas the on-device series defaulted to ``dut1 = 0``
@@ -100,14 +95,13 @@ from astropy.time import Time
 #: ~0.044 rad across it -- which is what makes the wrap correction below unambiguous.
 _RATE_BASELINE_SECONDS = 600.0
 
-#: Spacing, in seconds, of the Astropy nodes between which :func:`gmst_samples` interpolates sidereal time.
-#: The change of rate at a UTC midnight costs at most that change times a quarter of the spacing, in
-#: the interval containing it: 8.8e-14 rad at the 3.5e-13 rad/s change measured as the largest from
-#: 2005 to 2026. Measured in total, with Astropy's smooth structure included, the error was at most
-#: 1.07e-13 rad (module docstring). 16 s would allow 1.4e-12 rad for the bend alone; a finer spacing
-#: costs Astropy calls and buys nothing the projection can resolve. One node per second is 4097
-#: values (33 kB) for a segment 4096 s from first sample to last, evaluated by Astropy in milliseconds.
-GMST_NODE_SPACING_SECONDS = 1.0
+#: UTC midnights after a segment's first sample at which :func:`gmst_piecewise` lets sidereal time bend.
+#: Two cover any segment shorter than a day from wherever it starts, and the device path accepts no
+#: span longer than a day.
+GMST_KINKS = 2
+
+#: Earth's sidereal rotation rate, used only to count whole turns between two Astropy values.
+_NOMINAL_RATE_RAD_PER_SECOND = 2.0 * np.pi / 86164.0905
 
 
 def gmst_rad_astropy(t_gps: np.ndarray | float) -> np.ndarray:
@@ -173,111 +167,48 @@ def gmst_anchor_and_rate(
     return anchors, gmst_rate_rad_per_second(epoch)
 
 
-def gmst_node_count(duration: float, spacing: float = GMST_NODE_SPACING_SECONDS) -> int:
-    """Return how many nodes :func:`gmst_correction_nodes` needs to cover ``duration`` seconds.
-
-    The first node is at the first sample and the last at or after the last sample, ``duration``
-    later: ``ceil(duration / spacing) + 1``, and at least two, since interpolation needs an interval.
-
-    Args:
-        duration: Time from a segment's first sample to its last, in seconds; finite, not negative.
-        spacing: Node spacing in seconds; finite and positive.
-
-    Returns:
-        The node count.
-
-    Raises:
-        ValueError: If ``duration`` or ``spacing`` is outside those ranges.
-    """
-    if not np.isfinite(duration) or duration < 0.0:
-        raise ValueError(f"duration must be finite and not negative; got {duration!r}.")
-    if not np.isfinite(spacing) or spacing <= 0.0:
-        raise ValueError(f"spacing must be finite and positive; got {spacing!r}.")
-    return max(int(np.ceil(duration / spacing)), 1) + 1
-
-
-def gmst_correction_nodes(
+def gmst_piecewise(
     start_times: np.ndarray | float,
-    anchors: np.ndarray,
-    rate: float,
-    n_nodes: int,
-    spacing: float = GMST_NODE_SPACING_SECONDS,
-) -> np.ndarray:
-    """Return Astropy's GMST less the anchor-and-rate line, at nodes ``spacing`` apart from each start.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return each segment's sidereal time as a line that bends at the next :data:`GMST_KINKS` UTC midnights.
 
-    :func:`gmst_samples` adds the line ``anchor + rate * t`` and this correction interpolated linearly
-    between the nodes, which reproduces Astropy at every node and follows the change in Astropy's
-    rate at a UTC midnight that the line alone cannot (module docstring). The correction is small,
-    about 1e-10 rad over hours, so interpolating it rather than GMST itself costs no precision.
+    Sidereal time ``t`` seconds after a segment's first sample is
+    ``anchor + rate * t + sum_k change[k] * max(t - kink[k], 0)``: a chord between Astropy's values at
+    the first sample and the next UTC midnight, then chords from midnight to midnight. Astropy's GMST
+    is a straight line between UTC midnights (module docstring), so the chords follow it to its own
+    round-off. Every number depends on the first sample's time alone, not on how long the segment is,
+    so a series padded at its end gets exactly the sidereal time of the unpadded one.
 
-    Node ``k`` lies at ``start + k * spacing``, passed to Astropy as the two parts of its time rather
-    than as their float64 sum, which near GPS 1e9 would round to 1.2e-7 s (9e-12 rad).
+    The model covers ``valid_until`` seconds from each start, the :data:`GMST_KINKS` + 1-th midnight:
+    more than a day.
 
     Args:
         start_times: GPS time of each segment's first sample, scalar or shape ``(n_segments,)``.
-        anchors: The anchors :func:`gmst_anchor_and_rate` returned for ``start_times``.
-        rate: The rate it returned.
-        n_nodes: Nodes per segment, from :func:`gmst_node_count`.
-        spacing: Node spacing in seconds.
 
     Returns:
-        The correction in radians, shape ``(n_segments, n_nodes)``.
+        ``(anchors, rates, kinks, changes, valid_until)``: anchors and rates of shape ``(n_segments,)``
+        (GMST in radians at the first sample; rad/s), kink offsets in seconds and rate changes in rad/s
+        of shape ``(n_segments, GMST_KINKS)``, and the covered span in seconds, ``(n_segments,)``.
     """
     starts = np.atleast_1d(np.asarray(start_times, dtype=float))
-    offsets = np.arange(n_nodes) * float(spacing)
-    shape = (starts.size, offsets.size)
-    # Constructed as `gmst_rad_astropy` constructs its times, so node 0 reproduces the anchor exactly.
-    instants = Time(
-        np.broadcast_to(starts[:, None], shape),
-        np.broadcast_to(offsets[None, :], shape),
-        format="gps",
-        scale="utc",
-        location=(0, 0),
+    first = Time(starts, format="gps", scale="utc", location=(0, 0))
+    midnight = np.floor(first.utc.mjd)
+    # The next GMST_KINKS + 1 midnights, as offsets from each first sample: Time differences, not GPS
+    # floats, which near 1e9 s would round to 1.2e-7 s.
+    days = midnight[:, None] + 1.0 + np.arange(GMST_KINKS + 1)[None, :]
+    offsets = (Time(days, format="mjd", scale="utc") - first[:, None]).sec
+    bounds = np.concatenate([np.zeros((starts.size, 1)), offsets], axis=1)
+    shape = bounds.shape
+    instants = Time(np.broadcast_to(starts[:, None], shape), bounds, format="gps", scale="utc", location=(0, 0))
+    raw = np.asarray(instants.sidereal_time("mean").rad, dtype=float)
+    # Whole turns between consecutive values, counted from the nominal rotation rate: the values are
+    # up to a day apart, too far for an unwrap to tell a turn from a step.
+    steps = np.diff(raw, axis=1)
+    steps = steps + 2.0 * np.pi * np.round(
+        (_NOMINAL_RATE_RAD_PER_SECOND * np.diff(bounds, axis=1) - steps) / (2.0 * np.pi)
     )
-    exact = np.unwrap(np.asarray(instants.sidereal_time("mean").rad, dtype=float), axis=-1)
-    line = np.atleast_1d(np.asarray(anchors, dtype=float))[:, None] + float(rate) * offsets[None, :]
-    correction = exact - line
-    # Both are GMST at the same instants, so they differ by whole turns at most where Astropy wrapped
-    # before the first node and the anchor did not; remove those.
-    return correction - 2.0 * np.pi * np.round(correction / (2.0 * np.pi))
-
-
-def gmst_samples(
-    start_times: np.ndarray | float,
-    n_samples: int,
-    sampling_frequency: float,
-    spacing: float = GMST_NODE_SPACING_SECONDS,
-) -> np.ndarray:
-    """Return GMST at every sample of each segment, for a device kernel to take as an input.
-
-    The anchor-and-rate line from :func:`gmst_anchor_and_rate`, plus :func:`gmst_correction_nodes`
-    interpolated linearly between nodes ``spacing`` apart. Sample ``k`` lies ``k / sampling_frequency``
-    after its segment's start, the offsets the device kernels use for everything else that moves with
-    time. Left unwrapped: only its sine and cosine are used, and wrapping would put a discontinuity
-    mid-segment.
-
-    Every sample is computed elementwise, so the values for the first ``m`` samples are the same
-    whatever ``n_samples`` is, to the bit: a series padded at its end projects as the unpadded one over
-    their common samples.
-
-    Args:
-        start_times: GPS time of each segment's first sample, scalar or shape ``(n_segments,)``.
-        n_samples: Samples per segment; positive.
-        sampling_frequency: Sample rate in Hz.
-        spacing: Node spacing in seconds.
-
-    Returns:
-        GMST in radians, shape ``(n_segments, n_samples)``.
-    """
-    starts = np.atleast_1d(np.asarray(start_times, dtype=float))
-    anchors, rate = gmst_anchor_and_rate(starts)
-    n_nodes = gmst_node_count((n_samples - 1) / sampling_frequency, spacing)
-    correction = gmst_correction_nodes(starts, anchors, rate, n_nodes, spacing)
-    # As the device kernels form their own sample offsets, so a sample's time is the same in both.
-    offsets = np.arange(n_samples, dtype=float) * (1.0 / sampling_frequency)
-    nodes = np.arange(n_nodes) * float(spacing)
-    line = anchors[:, None] + rate * offsets[None, :]
-    return line + np.stack([np.interp(offsets, nodes, row) for row in correction])
+    rates = steps / np.diff(bounds, axis=1)
+    return raw[:, 0], rates[:, 0], offsets[:, :GMST_KINKS], np.diff(rates, axis=1), offsets[:, GMST_KINKS]
 
 
 #: Seconds per Julian century, for the precession polynomials.

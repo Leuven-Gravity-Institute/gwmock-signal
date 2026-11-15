@@ -58,9 +58,9 @@ from gwmock_signal.projection.resampling import (
     require_terrestrial_location,
 )
 from gwmock_signal.projection.sidereal import (
-    gmst_anchor_and_rate,
+    GMST_KINKS,
+    gmst_piecewise,
     gmst_rad_astropy,
-    gmst_samples,
     precessed_sky_anchor_and_rate,
 )
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
@@ -134,14 +134,6 @@ _PROJECTION_BUFFERS_PER_DETECTOR = 4.0
 #: gathers through a windowed-sinc kernel, so it needs more live arrays per detector than
 #: the frequency-domain path. Not separately measured -- flagged in the docstring.
 _ROTATION_BUFFER_MULTIPLIER = 1.6
-
-#: Buffers, same units, for the sidereal time the rotating path takes at every sample: one float64 per
-#: event and sample (``sidereal.gmst_samples``), evaluated on the host and passed to the kernel as an
-#: input, so it is resident for the whole call whatever the detector count. Counted exactly rather than
-#: folded into the coefficients above, which predate it and were calibrated without it (the A100
-#: measurement was of the frequency-domain path, which does not take it). Backend temporaries derived
-#: from it are part of :data:`_ROTATION_BUFFER_MULTIPLIER`.
-_SIDEREAL_SAMPLE_BUFFERS = 1.0
 
 #: Fraction of device memory a batch may be sized to occupy. The rest is headroom for
 #: allocator fragmentation and anything else resident.
@@ -277,13 +269,15 @@ def _rotating_projection_kernel(
     sampling_frequency: float,
     arm_lengths: tuple[float, float] | None = None,
     solar_components: tuple[bool, bool, bool] | None = None,
+    sidereal_bends: bool = False,
 ) -> Callable[..., Array]:
     """Return a cached jitted kernel for the rotating (``earth_rotation=True``) path.
 
-    Detector geometry and the sidereal rate are unmapped *arguments*, not closed-over values:
-    the geometry so one compiled kernel serves the whole network, and the rate because it is
-    derived from Astropy per call and would otherwise make every distinct epoch a new cache
-    key -- reintroducing exactly the per-call recompilation this cache removes.
+    Detector geometry is an unmapped *argument*, not a closed-over value, so one compiled kernel
+    serves the whole network. The sidereal rate and its bends are mapped arguments, one per event,
+    because each is a chord between Astropy values at that event's own epoch; closed over, they would
+    make every distinct epoch a new cache key -- reintroducing exactly the per-call recompilation
+    this cache removes.
 
     Args:
         n_samples: Samples in the padded buffer the kernel projects and returns.
@@ -292,12 +286,15 @@ def _rotating_projection_kernel(
         arm_lengths: The two arm lengths for the finite-arm response, ``None`` for the long-wavelength
             one; static, since the residual's filters are worked out on the host from them.
         solar_components: ``(roemer, einstein, shapiro)`` for the solar-system delay, ``None`` for none.
+        sidereal_bends: Whether sidereal time bends at a UTC midnight inside the buffer, for some event;
+            without, the kernel evaluates the line alone and ignores the bend arguments.
 
     Returns:
-        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, gmst_samples,
-        extra_shift, solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response, location,
-        arms)``, batched over events; ``gmst_samples`` is each event's
-        :func:`~gwmock_signal.projection.sidereal.gmst_samples`, and the solar arguments are each event's
+        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, gmst_kinks,
+        gmst_changes, extra_shift, solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response,
+        location, arms)``, batched over events except the geometry; ``gmst_start``, ``gmst_rate``,
+        ``gmst_kinks`` and ``gmst_changes`` are each event's
+        :func:`~gwmock_signal.projection.sidereal.gmst_piecewise`, and the solar arguments are each event's
         :meth:`~gwmock_signal.projection.solar_system.DelayModel.arrays`, first sample's time since the
         model's epoch, and absorbed ``(reference, delay, rate)``.
     """
@@ -312,7 +309,8 @@ def _rotating_projection_kernel(
         dec_rate: Array,
         psi: Array,
         gmst_start: Array,
-        gmst_samples: Array,
+        gmst_kinks: Array,
+        gmst_changes: Array,
         extra_shift: Array,
         solar_arrays: tuple,
         solar_start_offset: Array,
@@ -341,7 +339,7 @@ def _rotating_projection_kernel(
             polarization_angle=psi,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
-            gmst_samples=gmst_samples,
+            gmst_kinks=(gmst_kinks, gmst_changes) if sidereal_bends else None,
             extra_shift_samples=extra_shift,
             arms=None if arm_lengths is None else arms,
             arm_lengths=arm_lengths,
@@ -351,7 +349,7 @@ def _rotating_projection_kernel(
     # The sky-position rates are mapped, not unmapped: where they are non-zero they are per-event,
     # because each event's segment sits at its own epoch and the precession polynomials' derivatives
     # differ between epochs. Sharing one rate across a batch would be a second, silent approximation.
-    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None)))
+    return jax.jit(jax.vmap(_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None)))
 
 
 def estimate_batch_memory_bytes(
@@ -365,9 +363,8 @@ def estimate_batch_memory_bytes(
 
     A vmapped batch holds far more than the strain it returns: the measured peak for an
     IMRPhenomXPHM batch was about 28x its own output. The estimate is therefore
-    ``n_events * n_samples * 8 * (generation + per_detector * n_detectors + sidereal)``, with the
-    coefficients above; ``sidereal`` is one buffer on the rotating path, for the sidereal time it takes
-    at every sample, and zero on the frequency-domain path.
+    ``n_events * n_samples * 8 * (generation + per_detector * n_detectors)``, with the
+    coefficients above.
 
     !!! warning "One calibration point"
 
@@ -390,8 +387,7 @@ def estimate_batch_memory_bytes(
     if min(n_events, n_detectors, n_samples) < 1:
         raise ValueError("n_events, n_detectors and n_samples must all be >= 1")
     per_detector = _PROJECTION_BUFFERS_PER_DETECTOR * (_ROTATION_BUFFER_MULTIPLIER if earth_rotation else 1.0)
-    sidereal = _SIDEREAL_SAMPLE_BUFFERS if earth_rotation else 0.0
-    buffers = _GENERATION_BUFFERS + per_detector * n_detectors + sidereal
+    buffers = _GENERATION_BUFFERS + per_detector * n_detectors
     return int(n_events * n_samples * 8 * buffers)
 
 
@@ -952,24 +948,29 @@ def _project_rotating(  # noqa: PLR0913
     plus_td = to_time_domain(fd.plus)
     cross_td = to_time_domain(fd.cross)
 
-    # Astropy on the host, per event: an anchor and rate for the kernel's line, and GMST at every sample
-    # (`sidereal.gmst_samples`), which the kernel uses instead. Per-sample values carry what one line
-    # cannot -- the change in Astropy's rate at a UTC midnight -- and are evaluated on the host so that
-    # they cannot depend on the compiled length. No second sidereal implementation.
+    # Astropy on the host, per event: an anchor, a rate and the bends at the next UTC midnights
+    # (`sidereal.gmst_piecewise`), chords between Astropy values at the event's own epoch, which the
+    # kernel evaluates per sample. No second sidereal implementation.
     # Checked on the host, where these are concrete: inside the jitted kernel the geometry and
     # the shift are traced, so the padding assumptions cannot be validated there.
     require_shift_within_padding(alignment_shift, name="alignment_shift")
     for key in lookup_keys:
         require_terrestrial_location(reconstructed_geometry(key)[1], name=f"location of {key}")
 
-    gmst_anchors, gmst_rate = gmst_anchor_and_rate(segment_start_gps)
-    gmst_anchors = jnp.asarray(gmst_anchors, dtype=jnp.float64)
-    # Explicit dtype rather than the weakly-typed Python float Astropy hands back. Differing
-    # values do not retrace (measured), but a weak type and a concrete float64 are two
-    # distinct signatures, so anything later passing an array scalar would pay a second
-    # compilation. Pinning it removes that possibility.
-    gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
-    sidereal = jnp.asarray(gmst_samples(segment_start_gps, n_samples + 2 * padding, sampling_frequency))
+    anchors, rates, kinks, changes, valid_until = gmst_piecewise(segment_start_gps)
+    span = (n_samples + 2 * padding - 1) / sampling_frequency
+    # Bends only when some event's buffer crosses a UTC midnight: otherwise the kernel is the line alone,
+    # as in the per-event path (`network._project_rotating_on_device`).
+    sidereal_bends = bool(np.any(kinks[:, 0] < span))
+    if span > float(np.min(valid_until)):
+        raise ValueError(
+            f"A {span:.0f} s buffer is longer than the sidereal model covers from its start "
+            f"({float(np.min(valid_until)):.0f} s, the next {GMST_KINKS + 1} UTC midnights); project shorter buffers."
+        )
+    # Explicit dtype, so every call shares one signature and the kernel compiles once per shape.
+    gmst_anchors, gmst_rate, gmst_kinks, gmst_changes = (
+        jnp.asarray(values, dtype=jnp.float64) for values in (anchors, rates, kinks, changes)
+    )
 
     count = len(segment_start_gps)
     if solar is None:
@@ -993,7 +994,9 @@ def _project_rotating(  # noqa: PLR0913
         lengths = None if arm_lengths is None else tuple(float(length) for length in arm_lengths[name])
         terms = _response_terms(key, lengths, sampling_frequency)
         arms = np.stack([term.arm for term in terms]) if lengths is not None else np.zeros((2, 3))
-        project_batch = _rotating_projection_kernel(n_samples + 2 * padding, sampling_frequency, lengths, components)
+        project_batch = _rotating_projection_kernel(
+            n_samples + 2 * padding, sampling_frequency, lengths, components, sidereal_bends
+        )
         per_detector.append(
             project_batch(
                 plus_td,
@@ -1004,7 +1007,8 @@ def _project_rotating(  # noqa: PLR0913
                 declination_rate,
                 polarization_angle,
                 gmst_anchors,
-                sidereal,
+                gmst_kinks,
+                gmst_changes,
                 jnp.asarray(alignment_shift, dtype=jnp.float64),
                 *solar_arguments,
                 gmst_rate,

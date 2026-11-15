@@ -51,6 +51,7 @@ from gwmock_signal.projection.resampling import (
     kaiser_window_chebyshev,
     validate_kernel,
 )
+from gwmock_signal.projection.sidereal import GMST_KINKS
 
 if TYPE_CHECKING:
     from jax import Array
@@ -448,7 +449,7 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     arms: ArrayLike | None = None,
     arm_lengths: tuple[float, float] | None = None,
     solar: SolarArguments | None = None,
-    gmst_samples: ArrayLike | None = None,
+    gmst_kinks: tuple[ArrayLike, ArrayLike] | None = None,
 ) -> Array:
     """Project time-domain polarizations with a time-dependent antenna pattern.
 
@@ -549,14 +550,14 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         arm_lengths: The two arms' lengths in metres; static, since the residual's filters are worked
             out on the host from them.
         solar: The solar-system delay, as :class:`SolarArguments`; ``None`` for none.
-        gmst_samples: GMST in radians at every sample, shape ``(n_samples,)``, from
-            :func:`~gwmock_signal.projection.sidereal.gmst_samples`: the line from ``gmst_start`` and
-            ``gmst_rate`` plus Astropy's departure from it, interpolated on the host, which follows
-            Astropy to within 1.07e-13 rad as measured from 2005 to 2026. Used instead of the line
-            when given. ``None`` uses the line alone, which is exact to about 6e-14 rad within a UTC
-            day but drifts after a UTC midnight, by 9.3e-11 rad 744 s after one: Astropy's GMST
-            changes rate there (:mod:`~gwmock_signal.projection.sidereal`). The projection functions
-            in this package always pass it.
+        gmst_kinks: ``(offsets, changes)``, each of shape ``(GMST_KINKS,)``: the UTC midnights after the
+            first sample, in seconds from it, and the change of GMST rate at each, in rad/s, from
+            :func:`~gwmock_signal.projection.sidereal.gmst_piecewise` with ``gmst_start`` and
+            ``gmst_rate``. GMST is then the line bending at each midnight, which follows Astropy to
+            within 8.7e-14 rad as measured from 2005 to 2026. ``None`` uses the line alone, which is
+            exact to about 6e-14 rad within a UTC day but drifts after a UTC midnight, by 9.3e-11 rad
+            744 s after one: Astropy's GMST changes rate there (:mod:`~gwmock_signal.projection.sidereal`).
+            The projection functions in this package pass it when the samples cross a UTC midnight.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.
@@ -566,13 +567,17 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     dt = 1.0 / sampling_frequency
     sample_offsets = jnp.arange(n_samples, dtype=jnp.float64) * dt
 
-    # GMST at every sample, evaluated on the host (`sidereal.gmst_samples`) so that it cannot depend on
-    # the length this kernel was compiled for; the line alone without it. Deliberately left unwrapped:
-    # only its sine and cosine are used, and wrapping would put a discontinuity mid-segment.
-    if gmst_samples is None:
-        gmst = gmst_start + gmst_rate * sample_offsets
-    else:
-        gmst = jnp.asarray(gmst_samples, dtype=jnp.float64)
+    # GMST from the host's anchor and rate, bending at each UTC midnight (`sidereal.gmst_piecewise`).
+    # Formed here from the sample index and a few scalars, not read from a per-sample input, and the
+    # bends only when the caller passes them: on some platforms the compiled projection of a sample
+    # depends on the compiled length, and the line alone is the form checked not to (see `sidereal`).
+    # Deliberately left unwrapped: only its sine and cosine are used, and wrapping would put a
+    # discontinuity mid-segment.
+    gmst = gmst_start + gmst_rate * sample_offsets
+    if gmst_kinks is not None:
+        kinks, changes = gmst_kinks
+        for k in range(GMST_KINKS):
+            gmst = gmst + changes[k] * jnp.maximum(sample_offsets - kinks[k], 0.0)
 
     # The sky position moves too, because precession is a rotation into the frame *of date* and the
     # date advances across the segment. Linear in absolute time, so two abutting segments agree
