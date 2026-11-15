@@ -777,11 +777,12 @@ def test_device_resampling_places_nothing_for_a_far_or_non_finite_position(fract
 
 
 def test_device_projection_keeps_every_earlier_binding() -> None:
-    """Adding the sidereal correction must change no existing call.
+    """Adding per-sample sidereal time must change no existing call.
 
-    Every parameter after ``plus`` and ``cross`` is keyword-only, and the two new options come after
-    every earlier one, so no positional or keyword call binds differently. A call that omits them gets
-    the line alone, the model it got before: the same series as passing a zero correction.
+    Every parameter after ``plus`` and ``cross`` is keyword-only, and the new option comes after every
+    earlier one, so no positional or keyword call binds differently. A call that omits it gets the line
+    from ``gmst_start`` and ``gmst_rate``, the model it got before: here, the same series as passing that
+    line evaluated on the host.
     """
     import inspect
 
@@ -790,7 +791,7 @@ def test_device_projection_keeps_every_earlier_binding() -> None:
     parameters = list(inspect.signature(project_polarizations_td_rotating).parameters.values())
     assert [parameter.name for parameter in parameters[:2]] == ["plus", "cross"]
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in parameters[2:])
-    assert [parameter.name for parameter in parameters[-2:]] == ["gmst_correction", "gmst_node_spacing"]
+    assert parameters[-1].name == "gmst_samples"
 
     fs, n = 256.0, 2048
     t = np.arange(n) / fs
@@ -811,23 +812,68 @@ def test_device_projection_keeps_every_earlier_binding() -> None:
     }
     plus, cross = envelope * np.cos(2 * np.pi * 40.0 * t), envelope * np.sin(2 * np.pi * 40.0 * t)
     old_call = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier))
-    zero = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier, gmst_correction=np.zeros(10)))
-    np.testing.assert_array_equal(old_call, zero)
+    line = 0.5 + 7.29e-5 * (np.arange(n, dtype=float) * (1.0 / fs))
+    given = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier, gmst_samples=line))
+    np.testing.assert_allclose(old_call, given, rtol=0.0, atol=1e-13 * np.max(np.abs(old_call)))
     with pytest.raises(TypeError):
         project_polarizations_td_rotating(
             plus, cross, response, **{k: v for k, v in earlier.items() if k != "response"}
         )
 
 
-def test_device_node_interpolation_matches_numpy_interp() -> None:
-    """The device's uniform-node interpolation equals :func:`numpy.interp` inside the nodes."""
-    from gwmock_signal.projection.jax_projection import _interpolate_nodes
+def _midnight_polarizations(fs: float = 128.0):
+    """Polarizations at ``fs`` over 4096 s from 1000 s before the 2011-10-01 UTC midnight, a 30 Hz burst 2800 s after it."""
+    from gwmock_signal.timeseries import TimeSeries
 
-    rng = np.random.default_rng(3)
-    nodes = rng.normal(size=9) * 1e-10
-    offsets = np.concatenate([[0.0, 8.0], rng.uniform(0.0, 8.0, 200)])
-    expected = np.interp(offsets, np.arange(9.0), nodes)
-    np.testing.assert_allclose(np.asarray(_interpolate_nodes(nodes, offsets, 1.0)), expected, rtol=0.0, atol=1e-24)
+    start = float(Time("2011-10-01T00:00:00", scale="utc").gps) - 1000.0 + 0.3225957
+    t = np.arange(int(4096.0 * fs)) / fs
+    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
+    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
+    return {
+        "plus": TimeSeries(envelope * np.cos(phase), t0=start, sample_rate=fs),
+        "cross": TimeSeries(envelope * np.sin(phase), t0=start, sample_rate=fs),
+    }, float(np.max(envelope))
+
+
+_MIDNIGHT_SKY = {"right_ascension": 1.232, "declination": -0.603, "polarization_angle": 1.73}
+
+
+def test_padding_leaves_the_device_projection_unchanged_across_a_utc_midnight(monkeypatch) -> None:
+    """A series padded at its end to a fixed compiled length projects exactly as the unpadded one.
+
+    Across a midnight, where the sidereal correction is not zero. The kernel's sidereal time is an input
+    evaluated on the host, so the guard is two-fold: the values the kernel receives agree to the bit over
+    the common samples, which holds on every platform by construction and is checked here directly, and
+    the projections agree to the bit, which is what a burst projected at its fixed device length relies on.
+    """
+    from gwmock_signal.projection import network, sidereal
+
+    received = []
+    original = sidereal.gmst_samples
+
+    def _recording(*args, **kwargs):
+        values = original(*args, **kwargs)
+        received.append(values)
+        return values
+
+    monkeypatch.setattr(sidereal, "gmst_samples", _recording)
+    polarizations, _ = _midnight_polarizations()
+    common = {
+        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
+        "backend": "jax",
+        "sinc_taps": 127,
+        "kaiser_beta": network.DEFAULT_KAISER_BETA,
+        **_MIDNIGHT_SKY,
+    }
+    unpadded = network._project(polarizations, ["E1"], **common)["E1"]
+    padded = network._project(polarizations, ["E1"], fixed_lengths=True, **common)["E1"]
+
+    short, long = received[0][0], received[1][0]
+    assert long.size > short.size  # the fixed length did pad
+    line = short[0] + (short[1] - short[0]) * np.arange(short.size)
+    assert np.max(np.abs(short - line)) > 1e-11  # and the correction is not zero here
+    np.testing.assert_array_equal(long[: short.size], short)
+    np.testing.assert_array_equal(np.asarray(padded.data), np.asarray(unpadded.data))
 
 
 def test_device_projection_matches_host_across_a_utc_midnight() -> None:
@@ -839,25 +885,11 @@ def test_device_projection_matches_host_across_a_utc_midnight() -> None:
     the peak; they now agree to 1.4e-14.
     """
     from gwmock_signal.projection.network import project_polarizations_to_network
-    from gwmock_signal.timeseries import TimeSeries
 
-    midnight = float(Time("2011-10-01T00:00:00", scale="utc").gps)
-    start, fs = midnight - 1000.0 + 0.3225957, 128.0
-    t = np.arange(int(4096.0 * fs)) / fs
-    envelope = np.exp(-0.5 * ((t - 3800.0) / 2.0) ** 2)
-    phase = 2.0 * np.pi * 30.0 * (t - 3800.0)
-    polarizations = {
-        "plus": TimeSeries(envelope * np.cos(phase), t0=start, sample_rate=fs),
-        "cross": TimeSeries(envelope * np.sin(phase), t0=start, sample_rate=fs),
-    }
-    kwargs = {
-        "right_ascension": 1.232,
-        "declination": -0.603,
-        "polarization_angle": 1.73,
-        "effects": ProjectionEffects.long_wavelength(earth_rotation=True),
-    }
+    polarizations, peak = _midnight_polarizations()
+    kwargs = {"effects": ProjectionEffects.long_wavelength(earth_rotation=True), **_MIDNIGHT_SKY}
     host = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="numpy", **kwargs)
     device = project_polarizations_to_network(polarizations, ["E1", "E2", "E3"], backend="jax", **kwargs)
     for name in ("E1", "E2", "E3"):
         difference = np.abs(np.asarray(device[name].data) - np.asarray(host[name].data))
-        assert np.max(difference) < 1e-12 * np.max(envelope), name
+        assert np.max(difference) < 1e-12 * peak, name

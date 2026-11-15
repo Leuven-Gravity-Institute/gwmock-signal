@@ -214,6 +214,35 @@ def test_gmst_node_count_refuses_a_bad_duration_or_spacing(duration: float, spac
         gmst_node_count(duration, spacing)
 
 
+def test_gmst_samples_are_the_same_whatever_the_length() -> None:
+    """GMST per sample from the host is bit-identical over the samples two lengths share.
+
+    So a series padded at its end gets exactly the sidereal time of the unpadded one: the property a
+    burst projected at a fixed device length relies on. Across a midnight, where the correction is not
+    zero, and at a rate that is not a power of two.
+    """
+    from gwmock_signal.projection.sidereal import gmst_samples
+
+    start, fs = _MIDNIGHT - 1000.0 + 0.3225957, 3000.0
+    short = gmst_samples(start, 4_000_000, fs)[0]
+    long = gmst_samples(start, 5_000_000, fs)[0]
+    np.testing.assert_array_equal(long[: short.size], short)
+    anchors, rate = gmst_anchor_and_rate(start)
+    line = anchors[0] + rate * (np.arange(short.size, dtype=float) * (1.0 / fs))
+    assert np.max(np.abs(short - line)) > 1e-11
+
+
+def test_gmst_samples_follow_astropy_across_a_utc_midnight() -> None:
+    """Per-sample GMST, as the device takes it, against Astropy at those samples, across a midnight."""
+    from gwmock_signal.projection.sidereal import gmst_samples
+
+    start, fs = _MIDNIGHT - 1000.0 + 0.3225957, 4.0
+    values = gmst_samples(np.array([start, start + 86400.0 * 3]), int(4096 * fs), fs)
+    offsets = np.arange(values.shape[1], dtype=float) * (1.0 / fs)
+    for row, first in enumerate((start, start + 86400.0 * 3)):
+        assert np.max(np.abs(_wrapped(values[row] - _astropy_gmst(first, offsets)))) < 1e-13
+
+
 def test_gmst_correction_unwraps_a_start_just_before_the_wrap() -> None:
     """Astropy wraps GMST to [0, 2*pi); a segment that crosses the wrap must not gain a whole turn."""
     from gwmock_signal.projection.sidereal import gmst_correction_nodes, gmst_node_count

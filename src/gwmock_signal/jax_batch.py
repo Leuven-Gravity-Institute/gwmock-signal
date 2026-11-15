@@ -59,9 +59,8 @@ from gwmock_signal.projection.resampling import (
 )
 from gwmock_signal.projection.sidereal import (
     gmst_anchor_and_rate,
-    gmst_correction_nodes,
-    gmst_node_count,
     gmst_rad_astropy,
+    gmst_samples,
     precessed_sky_anchor_and_rate,
 )
 from gwmock_signal.projection.solar_system import SolarSystemEphemeris
@@ -287,10 +286,10 @@ def _rotating_projection_kernel(
         solar_components: ``(roemer, einstein, shapiro)`` for the solar-system delay, ``None`` for none.
 
     Returns:
-        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, gmst_correction,
+        A callable over ``(plus, cross, ra, dec, ra_rate, dec_rate, psi, gmst_start, gmst_samples,
         extra_shift, solar_arrays, solar_start_offset, solar_absorbed, gmst_rate, response, location,
-        arms)``, batched over events; ``gmst_correction`` is each event's
-        :func:`~gwmock_signal.projection.sidereal.gmst_correction_nodes`, and the solar arguments are each event's
+        arms)``, batched over events; ``gmst_samples`` is each event's
+        :func:`~gwmock_signal.projection.sidereal.gmst_samples`, and the solar arguments are each event's
         :meth:`~gwmock_signal.projection.solar_system.DelayModel.arrays`, first sample's time since the
         model's epoch, and absorbed ``(reference, delay, rate)``.
     """
@@ -305,7 +304,7 @@ def _rotating_projection_kernel(
         dec_rate: Array,
         psi: Array,
         gmst_start: Array,
-        gmst_correction: Array,
+        gmst_samples: Array,
         extra_shift: Array,
         solar_arrays: tuple,
         solar_start_offset: Array,
@@ -334,7 +333,7 @@ def _rotating_projection_kernel(
             polarization_angle=psi,
             gmst_start=gmst_start,
             gmst_rate=gmst_rate,
-            gmst_correction=gmst_correction,
+            gmst_samples=gmst_samples,
             extra_shift_samples=extra_shift,
             arms=None if arm_lengths is None else arms,
             arm_lengths=arm_lengths,
@@ -943,11 +942,10 @@ def _project_rotating(  # noqa: PLR0913
     plus_td = to_time_domain(fd.plus)
     cross_td = to_time_domain(fd.cross)
 
-    # Astropy on the host, per event: an anchor, one rate shared across the batch, and each event's
-    # departure from that line at nodes one second apart, which the kernel interpolates. The nodes carry
-    # both what one line cannot -- the change in Astropy's rate at a UTC midnight -- and the difference
-    # between the shared rate and an event's own, since the events sit at different epochs. No second
-    # sidereal implementation.
+    # Astropy on the host, per event: an anchor and rate for the kernel's line, and GMST at every sample
+    # (`sidereal.gmst_samples`), which the kernel uses instead. Per-sample values carry what one line
+    # cannot -- the change in Astropy's rate at a UTC midnight -- and are evaluated on the host so that
+    # they cannot depend on the compiled length. No second sidereal implementation.
     # Checked on the host, where these are concrete: inside the jitted kernel the geometry and
     # the shift are traced, so the padding assumptions cannot be validated there.
     require_shift_within_padding(alignment_shift, name="alignment_shift")
@@ -961,15 +959,7 @@ def _project_rotating(  # noqa: PLR0913
     # distinct signatures, so anything later passing an array scalar would pay a second
     # compilation. Pinning it removes that possibility.
     gmst_rate = jnp.asarray(gmst_rate, dtype=jnp.float64)
-    gmst_correction = jnp.asarray(
-        gmst_correction_nodes(
-            segment_start_gps,
-            np.asarray(gmst_anchors),
-            float(gmst_rate),
-            gmst_node_count((n_samples + 2 * padding - 1) / sampling_frequency),
-        ),
-        dtype=jnp.float64,
-    )
+    sidereal = jnp.asarray(gmst_samples(segment_start_gps, n_samples + 2 * padding, sampling_frequency))
 
     count = len(segment_start_gps)
     if solar is None:
@@ -1004,7 +994,7 @@ def _project_rotating(  # noqa: PLR0913
                 declination_rate,
                 polarization_angle,
                 gmst_anchors,
-                gmst_correction,
+                sidereal,
                 jnp.asarray(alignment_shift, dtype=jnp.float64),
                 *solar_arguments,
                 gmst_rate,
