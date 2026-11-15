@@ -12,10 +12,7 @@ import pytest
 from astropy.time import Time
 
 from gwmock_signal.projection.sidereal import (
-    GMST_NODE_SPACING_SECONDS,
     gmst_anchor_and_rate,
-    gmst_correction_nodes,
-    gmst_node_count,
     gmst_rad_astropy,
     gmst_rate_rad_per_second,
 )
@@ -108,66 +105,122 @@ def test_scalar_start_time_accepted() -> None:
     assert rate > 0.0
 
 
+def _model_error(start: float, span: float, step: float) -> tuple[float, float, np.ndarray]:
+    """The device model's and the line's largest error against Astropy over a segment, and the nodes.
+
+    The model is the line plus the correction nodes interpolated linearly, as the device evaluates it.
+    The new helpers are imported here rather than at module level, so this module still collects
+    against a version without them and each test that needs them fails on its own.
+    """
+    from gwmock_signal.projection.sidereal import (
+        GMST_NODE_SPACING_SECONDS,
+        gmst_correction_nodes,
+        gmst_node_count,
+    )
+
+    anchors, rate = gmst_anchor_and_rate(start)
+    correction = gmst_correction_nodes(start, anchors, rate, gmst_node_count(span))[0]
+    offsets = np.arange(0.0, span, step)
+    exact = _astropy_gmst(start, offsets)
+    line = anchors[0] + rate * offsets
+    model = line + np.interp(offsets, np.arange(correction.size) * GMST_NODE_SPACING_SECONDS, correction)
+    return (
+        float(np.max(np.abs(_wrapped(model - exact)))),
+        float(np.max(np.abs(_wrapped(line - exact)))),
+        correction,
+    )
+
+
 def test_gmst_model_follows_astropy_across_a_utc_midnight() -> None:
     """The line plus interpolated correction nodes must reproduce Astropy across a UTC midnight.
 
     Regression test for the device paths' sidereal time. A line from the segment's first sample is
     exact within a UTC day, but Astropy's GMST changes rate at each UTC midnight, so after one the
     line drifts: here by 3.9e-10 rad over the 3096 s that follow, a geocentre delay of 8e-12 s. The
-    nodes are within the change in rate times a quarter of their spacing, 3e-14 rad here.
+    model is measured at 2.8e-14 rad here. Its bound for the bend alone is 3.1e-14 (the 1.25e-13 rad/s
+    change in rate times a quarter of the 1 s spacing); the largest total measured at any midnight
+    from 2005 to 2026 is 1.07e-13 rad, so 1e-13 holds with margin at this pinned midnight, whose IERS
+    values are final, but is not a bound for every midnight.
 
     The start is off the whole second, as an event's buffer is, and the comparison is every 0.25 s,
     so it covers points between nodes as well as the interval that contains the midnight.
     """
-    start, span = _MIDNIGHT - 1000.0 + 0.3225957, 4096.0
-    anchors, rate = gmst_anchor_and_rate(start)
-    correction = gmst_correction_nodes(start, anchors, rate, gmst_node_count(span))[0]
-    offsets = np.arange(0.0, span, 0.25)
-    exact = _astropy_gmst(start, offsets)
-    line = anchors[0] + rate * offsets
-    nodes = np.arange(correction.size) * GMST_NODE_SPACING_SECONDS
-    model = line + np.interp(offsets, nodes, correction)
-
+    model, line, correction = _model_error(_MIDNIGHT - 1000.0 + 0.3225957, 4096.0, 0.25)
     # The premise: across this midnight the line alone is far off, so the test can fail.
-    assert np.max(np.abs(_wrapped(line - exact))) > 1e-10
-    assert np.max(np.abs(_wrapped(model - exact))) < 1e-13
+    assert line > 1e-10
+    assert model < 1e-13
     # Node zero is the anchor itself, so the correction there is zero.
     assert correction[0] == 0.0
 
 
-def test_gmst_correction_nodes_cover_each_segment() -> None:
-    """One row of nodes per start, enough to cover the span, each Astropy less the line at that node."""
-    starts = np.array([_MIDNIGHT - 10.5, _T0])
-    anchors, rate = gmst_anchor_and_rate(starts)
-    count = gmst_node_count(20.25)
-    assert count == 22  # nodes at 0..21 s: the last sample, 20.25 s in, lies inside the last interval
-    correction = gmst_correction_nodes(starts, anchors, rate, count)
-    assert correction.shape == (2, count)
-    offsets = np.arange(count) * GMST_NODE_SPACING_SECONDS
-    for row, start in enumerate(starts):
-        expected = _wrapped(_astropy_gmst(start, offsets) - (anchors[row] + rate * offsets))
-        np.testing.assert_allclose(correction[row], expected, rtol=0.0, atol=1e-15)
+def test_gmst_model_follows_astropy_across_a_leap_second() -> None:
+    """The same across the UTC midnight that ends 2016-12-31, which had a leap second.
 
-
-def test_gmst_correction_unwraps_a_start_just_before_the_wrap() -> None:
-    """Astropy wraps GMST to [0, 2*pi); a segment that crosses the wrap must not gain a whole turn."""
-    times = _T0 + np.arange(0.0, 90000.0, 50.0)
-    gmst = gmst_rad_astropy(times)
-    start = float(times[int(np.argmax(np.diff(gmst) < 0))]) - 5.0
-    anchors, rate = gmst_anchor_and_rate(start)
-    correction = gmst_correction_nodes(start, anchors, rate, gmst_node_count(200.0))[0]
-    assert np.max(np.abs(correction)) < 1e-12
+    UTC repeats a second there while GPS time and UT1 run on, so Astropy's UT1 - UTC steps by one
+    second; GMST, from UT1, does not. Measured at 5.7e-14 rad.
+    """
+    midnight = float(Time("2017-01-01T00:00:00", scale="utc").gps)
+    model, _, _ = _model_error(midnight - 2000.0 + 0.3225957, 4096.0, 0.05)
+    assert model < 1e-13
 
 
 def test_gmst_model_follows_astropy_over_the_longest_accepted_span() -> None:
     """Over a day, the longest span the device path accepts, the model stays within 1e-13 rad.
 
     The line alone drifts by 1e-8 rad over this day; the nodes keep the error local to the one
-    interval that holds the midnight, so it does not grow with the span.
+    interval that holds the midnight, so it does not grow with the span. Measured at 3.7e-14 rad.
     """
-    start, span = _MIDNIGHT - 40000.0 + 0.3225957, 86400.0
+    model, line, _ = _model_error(_MIDNIGHT - 40000.0 + 0.3225957, 86400.0, 0.37)
+    assert line > 1e-9
+    assert model < 1e-13
+
+
+def test_gmst_correction_nodes_cover_each_segment() -> None:
+    """One row of nodes per start, each Astropy less the line at that node."""
+    from gwmock_signal.projection.sidereal import (
+        GMST_NODE_SPACING_SECONDS,
+        gmst_correction_nodes,
+    )
+
+    starts = np.array([_MIDNIGHT - 10.5, _T0])
+    anchors, rate = gmst_anchor_and_rate(starts)
+    correction = gmst_correction_nodes(starts, anchors, rate, 22)
+    assert correction.shape == (2, 22)
+    offsets = np.arange(22) * GMST_NODE_SPACING_SECONDS
+    for row, start in enumerate(starts):
+        expected = _wrapped(_astropy_gmst(start, offsets) - (anchors[row] + rate * offsets))
+        np.testing.assert_allclose(correction[row], expected, rtol=0.0, atol=1e-15)
+
+
+@pytest.mark.parametrize(
+    ("duration", "count"),
+    [(4096.0, 4097), (4096.0 + 479.0 / 8192.0, 4098), (20.25, 22), (1.0, 2), (0.5, 2), (0.0, 2)],
+)
+def test_gmst_node_count_covers_the_last_sample(duration: float, count: int) -> None:
+    """``ceil(duration / spacing) + 1`` nodes, the last at or after the last sample; never fewer than two."""
+    from gwmock_signal.projection.sidereal import gmst_node_count
+
+    assert gmst_node_count(duration) == count
+
+
+@pytest.mark.parametrize(
+    ("duration", "spacing"), [(-1.0, 1.0), (np.inf, 1.0), (np.nan, 1.0), (1.0, 0.0), (1.0, -1.0), (1.0, np.inf)]
+)
+def test_gmst_node_count_refuses_a_bad_duration_or_spacing(duration: float, spacing: float) -> None:
+    """A negative or non-finite duration, or a spacing that is not finite and positive, is refused."""
+    from gwmock_signal.projection.sidereal import gmst_node_count
+
+    with pytest.raises(ValueError, match="must be finite"):
+        gmst_node_count(duration, spacing)
+
+
+def test_gmst_correction_unwraps_a_start_just_before_the_wrap() -> None:
+    """Astropy wraps GMST to [0, 2*pi); a segment that crosses the wrap must not gain a whole turn."""
+    from gwmock_signal.projection.sidereal import gmst_correction_nodes, gmst_node_count
+
+    times = _T0 + np.arange(0.0, 90000.0, 50.0)
+    gmst = gmst_rad_astropy(times)
+    start = float(times[int(np.argmax(np.diff(gmst) < 0))]) - 5.0
     anchors, rate = gmst_anchor_and_rate(start)
-    correction = gmst_correction_nodes(start, anchors, rate, gmst_node_count(span))[0]
-    offsets = np.arange(0.0, span, 0.37)
-    model = anchors[0] + rate * offsets + np.interp(offsets, np.arange(correction.size), correction)
-    assert np.max(np.abs(_wrapped(model - _astropy_gmst(start, offsets)))) < 1e-13
+    correction = gmst_correction_nodes(start, anchors, rate, gmst_node_count(200.0))[0]
+    assert np.max(np.abs(correction)) < 1e-12

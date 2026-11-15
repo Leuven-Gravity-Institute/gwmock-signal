@@ -776,6 +776,49 @@ def test_device_resampling_places_nothing_for_a_far_or_non_finite_position(fract
     assert (out[0] == 0.0) == (fraction != 0.5)
 
 
+def test_device_projection_keeps_every_earlier_binding() -> None:
+    """Adding the sidereal correction must change no existing call.
+
+    Every parameter after ``plus`` and ``cross`` is keyword-only, and the two new options come after
+    every earlier one, so no positional or keyword call binds differently. A call that omits them gets
+    the line alone, the model it got before: the same series as passing a zero correction.
+    """
+    import inspect
+
+    from gwmock_signal.projection.jax_projection import project_polarizations_td_rotating
+
+    parameters = list(inspect.signature(project_polarizations_td_rotating).parameters.values())
+    assert [parameter.name for parameter in parameters[:2]] == ["plus", "cross"]
+    assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in parameters[2:])
+    assert [parameter.name for parameter in parameters[-2:]] == ["gmst_correction", "gmst_node_spacing"]
+
+    fs, n = 256.0, 2048
+    t = np.arange(n) / fs
+    envelope = np.exp(-0.5 * ((t - 4.0) / 0.5) ** 2)
+    response, location = reconstructed_geometry("H1")
+    earlier = {
+        "response": response,
+        "location": location,
+        "sampling_frequency": fs,
+        "n_samples": n,
+        "right_ascension": 1.1,
+        "declination": -0.3,
+        "right_ascension_rate": 0.0,
+        "declination_rate": 0.0,
+        "polarization_angle": 0.4,
+        "gmst_start": 0.5,
+        "gmst_rate": 7.29e-5,
+    }
+    plus, cross = envelope * np.cos(2 * np.pi * 40.0 * t), envelope * np.sin(2 * np.pi * 40.0 * t)
+    old_call = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier))
+    zero = np.asarray(project_polarizations_td_rotating(plus, cross, **earlier, gmst_correction=np.zeros(10)))
+    np.testing.assert_array_equal(old_call, zero)
+    with pytest.raises(TypeError):
+        project_polarizations_td_rotating(
+            plus, cross, response, **{k: v for k, v in earlier.items() if k != "response"}
+        )
+
+
 def test_device_node_interpolation_matches_numpy_interp() -> None:
     """The device's uniform-node interpolation equals :func:`numpy.interp` inside the nodes."""
     from gwmock_signal.projection.jax_projection import _interpolate_nodes

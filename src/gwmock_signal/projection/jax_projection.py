@@ -458,8 +458,6 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     polarization_angle: ArrayLike,
     gmst_start: ArrayLike,
     gmst_rate: float,
-    gmst_correction: ArrayLike | None = None,
-    gmst_node_spacing: float = GMST_NODE_SPACING_SECONDS,
     extra_shift_samples: ArrayLike = 0.0,
     sinc_taps: int = DEFAULT_SINC_TAPS,
     kaiser_beta: float = DEFAULT_KAISER_BETA,
@@ -467,6 +465,8 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
     arms: ArrayLike | None = None,
     arm_lengths: tuple[float, float] | None = None,
     solar: SolarArguments | None = None,
+    gmst_correction: ArrayLike | None = None,
+    gmst_node_spacing: float = GMST_NODE_SPACING_SECONDS,
 ) -> Array:
     """Project time-domain polarizations with a time-dependent antenna pattern.
 
@@ -542,15 +542,6 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
             Supplied rather than computed here so that Astropy remains the only
             implementation of the sidereal model.
         gmst_rate: dGMST/dt in radians per second.
-        gmst_correction: Astropy's GMST less ``gmst_start + gmst_rate * t`` at nodes
-            ``gmst_node_spacing`` apart from the first sample, from
-            :func:`~gwmock_signal.projection.sidereal.gmst_correction_nodes`, covering the segment
-            (:func:`~gwmock_signal.projection.sidereal.gmst_node_count` nodes); interpolated linearly
-            and added to the line. ``None`` uses the line alone, which is exact to 6e-14 rad within
-            a UTC day but drifts after a UTC midnight, by 9.3e-11 rad 744 s after one: Astropy's GMST
-            changes rate there (:mod:`~gwmock_signal.projection.sidereal`). The projection functions
-            in this package always pass it.
-        gmst_node_spacing: Spacing of the ``gmst_correction`` nodes in seconds; static.
         right_ascension_rate: How fast the precessed right ascension moves, in radians per second,
             from :func:`~gwmock_signal.projection.sidereal.precessed_sky_anchor_and_rate`. Required
             rather than defaulted, because a caller that forgets it gets a position frozen for the
@@ -576,6 +567,16 @@ def project_polarizations_td_rotating(  # noqa: PLR0913
         arm_lengths: The two arms' lengths in metres; static, since the residual's filters are worked
             out on the host from them.
         solar: The solar-system delay, as :class:`SolarArguments`; ``None`` for none.
+        gmst_correction: Astropy's GMST less ``gmst_start + gmst_rate * t`` at nodes
+            ``gmst_node_spacing`` apart from the first sample, from
+            :func:`~gwmock_signal.projection.sidereal.gmst_correction_nodes`, covering the segment
+            (:func:`~gwmock_signal.projection.sidereal.gmst_node_count` nodes); interpolated linearly
+            and added to the line, which then follows Astropy to within 1.07e-13 rad as measured from
+            2005 to 2026. ``None`` uses the line alone, which is exact to 6e-14 rad within a UTC day
+            but drifts after a UTC midnight, by 9.3e-11 rad 744 s after one: Astropy's GMST changes
+            rate there (:mod:`~gwmock_signal.projection.sidereal`). The projection functions in this
+            package always pass it.
+        gmst_node_spacing: Spacing of the ``gmst_correction`` nodes in seconds; static.
 
     Returns:
         The time-domain detector strain, shape ``(n_samples,)``.

@@ -209,9 +209,8 @@ _KERNEL_CACHE_SIZE = 64
 #: from the first sample, whose deviation from Astropy, converted to the quantity that actually enters
 #: the projection -- a geocenter delay -- was 6.2e-11 s over a day and 1.2e-7 s over 90 days; it is now
 #: that line plus Astropy's departure from it interpolated between nodes one second apart
-#: (:mod:`~gwmock_signal.projection.sidereal`), exact at every node and within 1.9e-15 s of delay
-#: between them at the largest change of rate measured from 2005 to 2026. The name is kept because
-#: callers import it.
+#: (:mod:`~gwmock_signal.projection.sidereal`), exact at every node and measured within 1.07e-13 rad,
+#: 2.3e-15 s of delay, of Astropy from 2005 to 2026. The name is kept because callers import it.
 #:
 #: The projection still carries a known 8.7e-07 s worst-case disagreement with
 #: ``lalpulsar.Barycenter``, from omitting nutation where LAL includes it, so a day-long span sits
@@ -446,7 +445,7 @@ def _project_rotating_on_device(  # noqa: PLR0913
     a host-computed anchor and rate plus Astropy's departure from that line at nodes one second
     apart, interpolated linearly. A line alone is exact to 6e-14 rad within a UTC day but not across
     a UTC midnight, where Astropy's GMST changes rate; with the nodes the device follows Astropy to
-    8.8e-14 rad, 1.9e-15 s of geocenter delay, at any span. See
+    within 1.07e-13 rad, 2.3e-15 s of geocenter delay, as measured from 2005 to 2026. See
     :mod:`~gwmock_signal.projection.sidereal`.
 
     Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,

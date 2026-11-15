@@ -41,12 +41,17 @@ the sidereal model, including its IERS UT1 handling.
     every 30 minutes, the worst was 7.2e-10 rad for 4096 s segments and 1.6e-9 rad for 8192 s;
     about one segment in 21 of 4096 s crosses a midnight.
 
-    The nodes remove it. Linear interpolation between nodes ``h`` seconds apart is exact on
-    each straight piece of Astropy's curve, and in the one interval that contains a midnight
-    it is off by at most the change in rate times ``h / 4``. With
-    :data:`GMST_NODE_SPACING_SECONDS` = 1 s that is 8.8e-14 rad (a 1.9e-15 s geocenter delay)
-    at the largest change in rate measured, comparable to the line's own error within a day.
-    ``tests/projection/test_sidereal.py`` pins this across a midnight.
+    The nodes remove it. Linear interpolation between nodes ``h`` seconds apart follows each
+    straight piece of Astropy's curve, and the bend at a midnight costs at most the change in
+    rate times ``h / 4`` in the one interval that contains it: with
+    :data:`GMST_NODE_SPACING_SECONDS` = 1 s, 8.8e-14 rad at the largest change in rate measured.
+    That bounds the bend alone. Astropy's GMST also has smooth structure and round-off of its
+    own, so the total is measured rather than derived: against Astropy every 0.05 s, in segments
+    crossing every seventh UTC midnight from 2005 to 2026, the model's largest error was
+    1.07e-13 rad (2024-10-19; 2.3e-15 s of geocenter delay), and 6.6e-14 rad in 4096 s segments
+    that cross no midnight. The five midnights from 2005 to 2026 that follow a leap second
+    (2006-01-01, 2009-01-01, 2012-07-01, 2015-07-01, 2017-01-01) were within 5.7e-14 rad.
+    ``tests/projection/test_sidereal.py`` pins a midnight, a leap-second midnight and a full day.
 
 Using Astropy also removes the ``dut1`` approximation rather than merely exposing it:
 Astropy applies real IERS UT1-UTC, whereas the on-device series defaulted to ``dut1 = 0``
@@ -87,12 +92,12 @@ from astropy.time import Time
 _RATE_BASELINE_SECONDS = 600.0
 
 #: Spacing, in seconds, of the Astropy nodes from which the device paths interpolate sidereal time.
-#: Linear interpolation is exact between UTC midnights, where Astropy's GMST is a straight line,
-#: and off by at most the change in rate times a quarter of the spacing in the interval containing
-#: one: 8.8e-14 rad at the 3.5e-13 rad/s change measured as the largest from 2005 to 2026 (see the
-#: module docstring). A finer spacing costs Astropy calls and device memory and buys nothing the
-#: projection can resolve; 16 s would allow 1.4e-12 rad. One node per second is 4097 values for a
-#: 4096 s segment, evaluated by Astropy in milliseconds.
+#: The change of rate at a UTC midnight costs at most that change times a quarter of the spacing, in
+#: the interval containing it: 8.8e-14 rad at the 3.5e-13 rad/s change measured as the largest from
+#: 2005 to 2026. Measured in total, with Astropy's smooth structure included, the error was at most
+#: 1.07e-13 rad (module docstring). 16 s would allow 1.4e-12 rad for the bend alone; a finer spacing
+#: costs Astropy calls and buys nothing the projection can resolve. One node per second is 4097
+#: values (33 kB) for a segment 4096 s from first sample to last, evaluated by Astropy in milliseconds.
 GMST_NODE_SPACING_SECONDS = 1.0
 
 
@@ -162,16 +167,24 @@ def gmst_anchor_and_rate(
 def gmst_node_count(duration: float, spacing: float = GMST_NODE_SPACING_SECONDS) -> int:
     """Return how many nodes :func:`gmst_correction_nodes` needs to cover ``duration`` seconds.
 
-    Enough that the last sample, ``duration`` after the first, lies inside the last interval.
+    The first node is at the first sample and the last at or after the last sample, ``duration``
+    later: ``ceil(duration / spacing) + 1``, and at least two, since interpolation needs an interval.
 
     Args:
-        duration: Time from a segment's first sample to its last, in seconds; not negative.
-        spacing: Node spacing in seconds; positive.
+        duration: Time from a segment's first sample to its last, in seconds; finite, not negative.
+        spacing: Node spacing in seconds; finite and positive.
 
     Returns:
-        The node count, at least two.
+        The node count.
+
+    Raises:
+        ValueError: If ``duration`` or ``spacing`` is outside those ranges.
     """
-    return int(np.floor(duration / spacing)) + 2
+    if not np.isfinite(duration) or duration < 0.0:
+        raise ValueError(f"duration must be finite and not negative; got {duration!r}.")
+    if not np.isfinite(spacing) or spacing <= 0.0:
+        raise ValueError(f"spacing must be finite and positive; got {spacing!r}.")
+    return max(int(np.ceil(duration / spacing)), 1) + 1
 
 
 def gmst_correction_nodes(
