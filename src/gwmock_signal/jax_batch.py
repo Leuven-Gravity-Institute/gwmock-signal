@@ -135,6 +135,14 @@ _PROJECTION_BUFFERS_PER_DETECTOR = 4.0
 #: the frequency-domain path. Not separately measured -- flagged in the docstring.
 _ROTATION_BUFFER_MULTIPLIER = 1.6
 
+#: Buffers, same units, for the sidereal time the rotating path takes at every sample: one float64 per
+#: event and sample (``sidereal.gmst_samples``), evaluated on the host and passed to the kernel as an
+#: input, so it is resident for the whole call whatever the detector count. Counted exactly rather than
+#: folded into the coefficients above, which predate it and were calibrated without it (the A100
+#: measurement was of the frequency-domain path, which does not take it). Backend temporaries derived
+#: from it are part of :data:`_ROTATION_BUFFER_MULTIPLIER`.
+_SIDEREAL_SAMPLE_BUFFERS = 1.0
+
 #: Fraction of device memory a batch may be sized to occupy. The rest is headroom for
 #: allocator fragmentation and anything else resident.
 _DEFAULT_MEMORY_FRACTION = 0.6
@@ -357,8 +365,9 @@ def estimate_batch_memory_bytes(
 
     A vmapped batch holds far more than the strain it returns: the measured peak for an
     IMRPhenomXPHM batch was about 28x its own output. The estimate is therefore
-    ``n_events * n_samples * 8 * (generation + per_detector * n_detectors)``, with the
-    coefficients above.
+    ``n_events * n_samples * 8 * (generation + per_detector * n_detectors + sidereal)``, with the
+    coefficients above; ``sidereal`` is one buffer on the rotating path, for the sidereal time it takes
+    at every sample, and zero on the frequency-domain path.
 
     !!! warning "One calibration point"
 
@@ -381,7 +390,8 @@ def estimate_batch_memory_bytes(
     if min(n_events, n_detectors, n_samples) < 1:
         raise ValueError("n_events, n_detectors and n_samples must all be >= 1")
     per_detector = _PROJECTION_BUFFERS_PER_DETECTOR * (_ROTATION_BUFFER_MULTIPLIER if earth_rotation else 1.0)
-    buffers = _GENERATION_BUFFERS + per_detector * n_detectors
+    sidereal = _SIDEREAL_SAMPLE_BUFFERS if earth_rotation else 0.0
+    buffers = _GENERATION_BUFFERS + per_detector * n_detectors + sidereal
     return int(n_events * n_samples * 8 * buffers)
 
 

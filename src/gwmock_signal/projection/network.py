@@ -208,8 +208,10 @@ _KERNEL_CACHE_SIZE = 64
 #: Set by an error budget rather than by where the validation table ends. The model was once a line
 #: from the first sample, whose deviation from Astropy, converted to the quantity that actually enters
 #: the projection -- a geocenter delay -- was 6.2e-11 s over a day and 1.2e-7 s over 90 days; it is now
-#: that line plus Astropy's departure from it interpolated between nodes one second apart
-#: (:mod:`~gwmock_signal.projection.sidereal`), exact at every node and measured within 1.07e-13 rad,
+#: GMST at every sample, which the host evaluates as that line plus Astropy's departure from it,
+#: sampled from Astropy one second apart and interpolated linearly between those samples
+#: (:func:`~gwmock_signal.projection.sidereal.gmst_samples`), and passes to the device: exact at every
+#: Astropy sample and measured within 1.07e-13 rad,
 #: 2.3e-15 s of delay, of Astropy from 2005 to 2026. The name is kept because callers import it.
 #:
 #: The projection still carries a known 8.7e-07 s worst-case disagreement with
@@ -442,10 +444,11 @@ def _project_rotating_on_device(  # noqa: PLR0913
 
     Sidereal time is the one place the two differ in form rather than arithmetic. The host path
     asks Astropy for GMST at every sample; the device path, because Astropy cannot be traced, takes
-    GMST at every sample from the host, as an anchor and rate plus Astropy's departure from that line
-    at nodes one second apart, interpolated linearly (``sidereal.gmst_samples``). A line alone is
-    exact to 6e-14 rad within a UTC day but not across a UTC midnight, where Astropy's GMST changes
-    rate; with the nodes the device follows Astropy to within 1.07e-13 rad, 2.3e-15 s of geocenter
+    GMST at every sample from the host, which evaluates an anchor and rate plus Astropy's departure
+    from that line, sampled one second apart and interpolated linearly on the host
+    (``sidereal.gmst_samples``). A line alone is exact to 6e-14 rad within a UTC day but not across a
+    UTC midnight, where Astropy's GMST changes rate; with the host's per-sample values the device
+    follows Astropy to within 1.07e-13 rad, 2.3e-15 s of geocenter
     delay, as measured from 2005 to 2026. See :mod:`~gwmock_signal.projection.sidereal`.
 
     Detectors are looped rather than vmapped. ``jax_batch`` vmaps this primitive over *events*,
@@ -485,15 +488,16 @@ def _project_rotating_on_device(  # noqa: PLR0913
         hp_vals = np.pad(hp_vals, (0, compiled_length - n_samples))
         hc_vals = np.pad(hc_vals, (0, compiled_length - n_samples))
     # The sidereal model is fitted per call, so a run of many consecutive segments never accumulates
-    # error -- each gets a fresh Astropy anchor and its own nodes. One segment is refused beyond the
+    # error -- each gets a fresh Astropy anchor and its own Astropy samples. One segment is refused beyond the
     # span the model has been measured over (MAX_LINEAR_SIDEREAL_SPAN_SECONDS), rather than letting
     # the public API accept a span nothing has checked.
     span = float(time_array[-1] - time_array[0])
     if span > MAX_LINEAR_SIDEREAL_SPAN_SECONDS:
         raise ValueError(
             f"backend='jax' accepts spans up to {MAX_LINEAR_SIDEREAL_SPAN_SECONDS:.0f} s "
-            f"and this one is {span:.0f} s. The device path interpolates sidereal time from Astropy "
-            f"values at nodes one second apart, which has been measured over spans up to that length. "
+            f"and this one is {span:.0f} s. For the device path the host interpolates sidereal time "
+            f"between Astropy values one second apart and passes it to the device per sample, which "
+            f"has been measured over spans up to that length. "
             f"Project in segments, or use backend='numpy', which asks Astropy for every sample."
         )
     anchors, rate = gmst_anchor_and_rate(float(time_array[0]))

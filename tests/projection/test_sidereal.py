@@ -1,8 +1,9 @@
 """Tests for the sidereal-time model shared by both projection paths.
 
-The device path cannot call Astropy inside a compiled kernel, so it consumes a
-host-computed anchor and rate, plus Astropy's departure from that line at nodes, instead.
-These tests pin how closely that reproduces Astropy, within a UTC day and across a UTC midnight.
+The device path cannot call Astropy inside a compiled kernel, so the host gives it GMST at every
+sample: an anchor and rate, plus Astropy's departure from that line sampled at regular nodes and
+interpolated between them on the host. These tests pin how closely that reproduces Astropy, within
+a UTC day and across a UTC midnight, and that it does not depend on the length of the series.
 """
 
 from __future__ import annotations
@@ -108,7 +109,8 @@ def test_scalar_start_time_accepted() -> None:
 def _model_error(start: float, span: float, step: float) -> tuple[float, float, np.ndarray]:
     """The device model's and the line's largest error against Astropy over a segment, and the nodes.
 
-    The model is the line plus the correction nodes interpolated linearly, as the device evaluates it.
+    The model is the line plus the correction nodes interpolated linearly, as the host evaluates it for
+    the device.
     The new helpers are imported here rather than at module level, so this module still collects
     against a version without them and each test that needs them fails on its own.
     """

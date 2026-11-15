@@ -50,6 +50,27 @@ def test_rotating_path_is_estimated_larger() -> None:
     )
 
 
+@pytest.mark.parametrize("n_detectors", [1, 3])
+def test_rotating_estimate_counts_the_per_sample_sidereal_time(n_detectors: int) -> None:
+    """The rotating path takes sidereal time at every sample: one float64 per event and sample.
+
+    Counted exactly, on top of the generation and per-detector buffers, and only on the rotating path:
+    the frequency-domain path does not take it.
+    """
+    n_events, n_samples = 7, 33554912
+    per_detector = jax_batch._PROJECTION_BUFFERS_PER_DETECTOR * n_detectors
+    without = (
+        n_events
+        * n_samples
+        * 8
+        * (jax_batch._GENERATION_BUFFERS + per_detector * jax_batch._ROTATION_BUFFER_MULTIPLIER)
+    )
+    rotating = estimate_batch_memory_bytes(n_events, n_detectors, n_samples, earth_rotation=True)
+    assert rotating - without == pytest.approx(n_events * n_samples * 8, rel=1e-9)
+    static = estimate_batch_memory_bytes(n_events, n_detectors, n_samples, earth_rotation=False)
+    assert static == int(n_events * n_samples * 8 * (jax_batch._GENERATION_BUFFERS + per_detector))
+
+
 @pytest.mark.parametrize(
     ("n_events", "n_samples", "fits"),
     [
