@@ -167,11 +167,14 @@ segments = assemble_segments(
   each group separately: it compiles and launches a second kernel variant per
   detector, and each variant is its own entry in the bounded kernel cache (32
   executables), so a run whose batches mix the two can hold up to twice as many
-  compiled kernels. Its peak memory is no higher than a batch of one kind, since
-  each group is half the batch: measured on a CPU for 8 events of 1,048,718
-  samples on three detectors, 1.0 GB added by the projection for a mixed batch
-  and 1.7 GB for an all-crossing or all-clear one, against the estimator's 5.9
-  GB.
+  compiled kernels. While it runs, the full batch's inputs, the two gathered
+  subsets, each group's output and the reassembled result are live at once. In
+  one test on a Linux CPU (peak resident memory, 8 events of 1,048,718 samples
+  on three detectors), the projection added 1.0 GB for a batch split half and
+  half, 1.66 GB with one crossing event and seven clear, and 1.7 GB for an
+  all-crossing or all-clear batch; the batch memory estimate, unchanged by this,
+  gave 5.9 GB there. Peak memory on an accelerator was not measured, and this
+  test does not validate the estimate on a GPU.
 - **Worst-case buffer.** A wide mass range makes the shared generation buffer as
   long as the lowest-mass event needs. For very heterogeneous catalogues,
   simulate in chirp-mass groups to bound memory.
