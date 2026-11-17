@@ -21,7 +21,8 @@ LVK all-sky short-burst searches (O3: Phys. Rev. D 104, 122004, Eq. (2)):
 
     E_GW^iso = (pi^2 c^3 / G) r^2 f0^2 hrss^2.
 
-A white-noise burst is taken to radiate isotropically. An elliptical sine-Gaussian is a rotating
+A white-noise burst is taken to radiate isotropically, as in O3; its drawn inclination only sets the
+ellipse its polarizations trace. An elliptical sine-Gaussian is a rotating
 source, ``E_GW^rot = (2/5) E_GW^iso`` evaluated at its face-on hrss (ibid., Sec. IV), and its
 observed hrss follows the rotating pattern ``((1 + cos^2 i) / 2)^2 + cos^2 i``. Gaussians are
 broadband, the relation does not hold for them, and they are refused.
@@ -66,6 +67,9 @@ _C_SI = 299_792_458.0
 #: Seconds in a Julian year, the year of a rate density in Gpc^-3 yr^-1.
 _YEAR_S = 365.25 * 86_400.0
 _GPC3_PER_MPC3 = 1.0e-9
+#: Keys the population draws itself: a family that fixed one would contradict the rate density,
+#: the volume or the energy the population stands for.
+_POPULATION_KEYS = frozenset({"peak_time", "distance", "energy", "hrss", "injection_set"})
 #: Largest seed handed to the white-noise generator (an unsigned 32-bit integer).
 _MAX_SEED = 2**32 - 1
 
@@ -156,7 +160,9 @@ def draw_standard_candle_population(  # noqa: PLR0913
         max_distance: Farthest source, Mpc; at most :data:`MAX_DISTANCE_LIMIT`.
         rng: Source of randomness; pass a seeded generator for a reproducible population.
         families: Family templates, each with ``burst_model`` (sine-Gaussian or white-noise
-            burst) and its fixed parameters.
+            burst) and its fixed parameters. A template may fix shape parameters such as
+            ``frequency``, but none of ``peak_time``, ``distance``, ``energy``, ``hrss`` and
+            ``injection_set``, which the population draws.
         sine_gaussian_frequency_range: ``(low, high)`` Hz for sine-Gaussian central frequencies.
 
     Returns:
@@ -167,8 +173,8 @@ def draw_standard_candle_population(  # noqa: PLR0913
     Raises:
         ValueError: If the span is empty, a rate, energy, distance or frequency range is not
             positive, *max_distance* exceeds :data:`MAX_DISTANCE_LIMIT`, or *families* is empty
-            or holds a family without ``burst_model`` or with a model other than a sine-Gaussian
-            or a white-noise burst.
+            or holds a family without ``burst_model``, with a model other than a sine-Gaussian or
+            a white-noise burst, or fixing a key the population draws.
     """
     if not (math.isfinite(start_time) and math.isfinite(end_time) and end_time > start_time):
         raise ValueError(f"end_time must be after start_time, got [{start_time}, {end_time}).")
@@ -193,6 +199,12 @@ def draw_standard_candle_population(  # noqa: PLR0913
         raise ValueError(
             f"families {unsupported} are not supported: the energy-to-hrss relation holds for "
             f"narrow-band {SINE_GAUSSIAN!r} and {WHITE_NOISE_BURST!r} families only."
+        )
+    fixed = sorted({key for family in families for key in family if key in _POPULATION_KEYS})
+    if fixed:
+        raise ValueError(
+            f"families must not fix {fixed}: the population draws them from the rate density, the "
+            "volume and the energy."
         )
     low, high = (float(b) for b in sine_gaussian_frequency_range)
     if not (math.isfinite(low) and math.isfinite(high) and 0 < low <= high):

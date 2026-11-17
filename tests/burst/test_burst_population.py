@@ -167,6 +167,8 @@ def test_population_draws_each_family_and_labels_every_event():
     assert len(keys) == len(STANDARD_CANDLE_FAMILIES)
     assert all(e["injection_set"] == STANDARD_CANDLE_LABEL for e in events)
     freqs = np.log10([e["frequency"] for e in events if e["burst_model"] == "sine_gaussian"])
+    u_freq = np.sort((freqs - math.log10(30.0)) / math.log10(1800.0 / 30.0))
+    assert np.max(np.abs(u_freq - np.arange(1, u_freq.size + 1) / u_freq.size)) < 1.95 / math.sqrt(u_freq.size)
     assert freqs.min() >= math.log10(30.0)
     assert freqs.max() <= math.log10(1800.0)
     for event in events:
@@ -199,6 +201,10 @@ def test_population_may_be_empty():
         ({"families": ({"burst_model": "gaussian", "duration": 1e-3},)}, "gaussian"),
         ({"families": ({"burst_model": "model_a"},)}, "model_a"),
         ({"sine_gaussian_frequency_range": (0.0, 10.0)}, "sine_gaussian_frequency_range"),
+        ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "distance": 0.5},)}, "distance"),
+        ({"families": ({"burst_model": "white_noise_burst", "low_frequency": 100.0, "energy": 1.0},)}, "energy"),
+        ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "hrss": 1e-22},)}, "hrss"),
+        ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "peak_time": START},)}, "peak_time"),
     ],
 )
 def test_population_rejects_invalid_configuration(overrides, match):
@@ -218,3 +224,19 @@ def test_population_events_simulate_at_their_drawn_hrss():
         dt = 1.0 / 8192.0
         measured = math.sqrt(float(np.sum(np.asarray(hp.value) ** 2 + np.asarray(hc.value) ** 2)) * dt)
         assert measured == pytest.approx(event["hrss"], rel=1e-9, abs=0.0)
+
+
+def test_population_family_may_fix_a_shape_parameter():
+    """A family fixing its frequency keeps it, and the hrss follows from it."""
+    family = {"burst_model": "sine_gaussian", "quality_factor": 9.0, "frequency": 235.0}
+    events = _draw(families=(family,))
+    assert events
+    for event in events:
+        assert event["frequency"] == 235.0
+        assert event["hrss"] == standard_candle_hrss(
+            energy=1.0e-8,
+            distance=event["distance"],
+            frequency=235.0,
+            inclination=event["inclination"],
+            elliptical=True,
+        )
