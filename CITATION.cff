@@ -1,6 +1,5 @@
 cff-version: 1.2.0
-title:
-    'gwmock-signal: A Python package for simulating gravitational wave signals'
+title: 'gwmock-signal: A Python package for simulating gravitational wave signals'
 license: 'GPL-3.0-or-later'
 type: software
 authors:

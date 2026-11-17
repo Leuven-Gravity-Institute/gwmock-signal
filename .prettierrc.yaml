@@ -4,4 +4,4 @@ useTabs: false
 semi: false
 singleQuote: true
 printWidth: 80
-proseWrap: always
+proseWrap: preserve

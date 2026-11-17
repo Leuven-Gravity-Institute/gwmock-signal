@@ -24,7 +24,7 @@ rules, and method contracts** are documented only under
     Use **API → Multichannel** as the single source of truth for stacking
     semantics; the snippets below show typical call patterns.
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-restore -->
 
 ## Example 1 — From projection dict to NumPy array
 

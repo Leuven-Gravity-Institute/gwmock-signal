@@ -1,7 +1,6 @@
 ---
 title: Batched simulation
-description:
-    Catalogue-scale on-device CBC simulation (simulate_cbc_catalogue,
+description: Catalogue-scale on-device CBC simulation (simulate_cbc_catalogue,
     simulate_cbc_batch, assemble_segments).
 icon: material/chip
 ---

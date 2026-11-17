@@ -46,8 +46,7 @@ jobs:
                   token: ${{ steps.app-token.outputs.token }}
                   branch: dependency-support-policy/update
                   title: 'chore(deps): raise minimum supported versions'
-                  commit-message:
-                      'chore(deps): raise minimum supported versions'
+                  commit-message: 'chore(deps): raise minimum supported versions'
                   body: |
                       Automated rolling support-floor update (SPEC 0).
 

@@ -1,7 +1,6 @@
 ---
 title: User guide
-description:
-    Overview of gravitational-wave signal simulation workflows with
+description: Overview of gravitational-wave signal simulation workflows with
     gwmock-signal.
 icon: material/book-open-page-variant
 ---

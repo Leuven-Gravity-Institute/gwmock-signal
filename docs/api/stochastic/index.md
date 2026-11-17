@@ -1,7 +1,6 @@
 ---
 title: Stochastic
-description:
-    SGWB spectral models, overlap-reduction helpers, and simulator APIs.
+description: SGWB spectral models, overlap-reduction helpers, and simulator APIs.
 icon: material/waves
 ---
 
