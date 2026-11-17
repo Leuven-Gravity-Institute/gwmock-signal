@@ -59,8 +59,7 @@ jobs:
               uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
               with:
                   path: ${{ github.workspace }}/.ephemeris-cache
-                  key:
-                      lalpulsar-ephemeris-${{
+                  key: lalpulsar-ephemeris-${{
                       hashFiles('tests/data/ephemeris.sha256') }}
 
             # Warms the cache on a miss and fails the job if it cannot, which reads better than tests
@@ -166,8 +165,7 @@ jobs:
               uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
               with:
                   path: ${{ github.workspace }}/.ephemeris-cache
-                  key:
-                      lalpulsar-ephemeris-${{
+                  key: lalpulsar-ephemeris-${{
                       hashFiles('tests/data/ephemeris.sha256') }}
 
             # Warms the cache on a miss and fails the job if it cannot, which reads better than tests
@@ -211,8 +209,7 @@ jobs:
             # explicitly (scoped to the ripple suite so this job does not pull in
             # integration tests that need the pycbc/sgwb extras).
             - name: Run ripple-vs-LAL overlap anchors
-              run:
-                  uv run --frozen pytest -m integration
+              run: uv run --frozen pytest -m integration
                   tests/waveform/test_ripple_backend.py
 
             # Upload the JAX-backend coverage too: the ripple/JAX lines run only
@@ -258,8 +255,7 @@ jobs:
               uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
               with:
                   path: ${{ github.workspace }}/.ephemeris-cache
-                  key:
-                      lalpulsar-ephemeris-${{
+                  key: lalpulsar-ephemeris-${{
                       hashFiles('tests/data/ephemeris.sha256') }}
 
             # Warms the cache on a miss and fails the job if it cannot, which reads better than tests
@@ -296,6 +292,5 @@ jobs:
                   exit 1
 
             - name: Run the integration tests
-              run:
-                  uv run --frozen pytest -m integration
+              run: uv run --frozen pytest -m integration
                   --ignore=tests/smoke_test.py

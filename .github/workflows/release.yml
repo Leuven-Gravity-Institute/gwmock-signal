@@ -53,8 +53,7 @@ jobs:
             - name: Check for the Claude Code OAuth token
               id: claude
               env:
-                  CLAUDE_CODE_OAUTH_TOKEN:
-                      ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+                  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
               run: |
                   if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
                     echo "available=true" >> "$GITHUB_OUTPUT"
@@ -74,8 +73,7 @@ jobs:
               continue-on-error: true
               uses: anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc # v1.0.276
               with:
-                  claude_code_oauth_token:
-                      ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+                  claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
                   github_token: ${{ github.token }}
                   display_report: 'false'
                   prompt: |
@@ -114,8 +112,7 @@ jobs:
             - name: Parse highlights
               id: parse
               env:
-                  STRUCTURED_OUTPUT:
-                      ${{ steps.highlights.outputs.structured_output }}
+                  STRUCTURED_OUTPUT: ${{ steps.highlights.outputs.structured_output }}
               run: |
                   HIGHLIGHTS=$(jq -r '.highlights // empty' <<< "$STRUCTURED_OUTPUT" 2>/dev/null || true)
                   DELIMITER="HIGHLIGHTS_$(openssl rand -hex 16)"
@@ -177,12 +174,10 @@ jobs:
             - name: Create Release
               uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
               with:
-                  tag_name:
-                      ${{ inputs.tag_name || github.event.inputs.tag_name }}
+                  tag_name: ${{ inputs.tag_name || github.event.inputs.tag_name }}
                   body_path: RELEASE_NOTES.md
                   draft: false
-                  prerelease:
-                      ${{ contains(inputs.tag_name ||
+                  prerelease: ${{ contains(inputs.tag_name ||
                       github.event.inputs.tag_name, 'alpha') ||
                       contains(inputs.tag_name || github.event.inputs.tag_name,
                       'beta') }}

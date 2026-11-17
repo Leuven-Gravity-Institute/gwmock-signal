@@ -26,7 +26,7 @@ and exceptions** for `project_polarizations_to_network` live exclusively in the
     Use **API → Projection** for the full contract; the sections below are
     narrative + runnable snippets.
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-restore -->
 
 ## Example 1 — Waveform then H1 / L1 / V1 projection
 

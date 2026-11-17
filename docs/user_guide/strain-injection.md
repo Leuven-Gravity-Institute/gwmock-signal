@@ -1,7 +1,6 @@
 ---
 title: Strain injection examples
-description:
-    Example workflows for adding simulated strain into a target time series.
+description: Example workflows for adding simulated strain into a target time series.
 ---
 
 # Strain injection examples
@@ -25,7 +24,7 @@ for `inject_strain` / `inject_strains_sequential` are documented only under
     Use **API → Injection** for the authoritative behavior description; examples
     below illustrate common patterns.
 
-<!-- markdownlint-enable -->
+<!-- markdownlint-restore -->
 
 ## Example 1 — Inject one CBC into a zero-filled segment
 

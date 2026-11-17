@@ -1,7 +1,6 @@
 ---
 title: Custom detectors
-description:
-    How to construct a CustomDetector for non-standard ground-based
+description: How to construct a CustomDetector for non-standard ground-based
     interferometers and use it in projection and injection pipelines.
 icon: material/plus-circle-outline
 ---

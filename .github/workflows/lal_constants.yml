@@ -50,8 +50,7 @@ jobs:
                   persist-credentials: false
                   # Full history (0) only for a pull request, whose base the scope step
                   # diffs against. 0 is falsy in an expression, so it must come last.
-                  fetch-depth:
-                      ${{ github.event_name != 'pull_request' && 1 || 0 }}
+                  fetch-depth: ${{ github.event_name != 'pull_request' && 1 || 0 }}
 
             # A pull request that touches none of these files cannot change the
             # outcome, so it skips the comparison and the job passes at once.

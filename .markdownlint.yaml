@@ -1,13 +1,6 @@
 ---
-# Enable line length check, set to 80 for readability
-MD013:
-    line_length: 120
-    # Allow headings to exceed line length
-    headings: false
-    # Allow code blocks to exceed line length
-    code_blocks: false
-    # Allow tables to exceed line length
-    tables: false
+# Prose keeps its line breaks as written (prettier proseWrap: preserve), so no line length.
+MD013: false
 
 # Require ATX-style headings (# instead of = or -)
 MD003:
