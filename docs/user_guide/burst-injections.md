@@ -1,8 +1,9 @@
 ---
 title: Burst injections
 description:
-    BurstSimulator, the ad hoc burst families, numerical burst waveforms, and
-    the specification of the burst test injection set.
+    BurstSimulator, the ad hoc burst families, numerical burst waveforms, the
+    specification of the burst test injection set, and a standard-candle burst
+    population.
 ---
 
 # Burst injections
@@ -279,6 +280,64 @@ The rate is chosen to measure a search's sensitivity, not drawn from any
 astrophysical rate: a Galactic core-collapse rate would give essentially no
 events in a month. Every event therefore carries `injection_set="test"`, and
 results from it must not be read as an astrophysical population.
+
+## Standard-candle population
+
+`draw_standard_candle_population` draws an astrophysical alternative to the test
+set: sources that each radiate the same energy $E_\mathrm{GW}$ in gravitational
+waves, at a constant rate density $\mathcal{R}$ per unit volume and time. It is
+the population the O3 all-sky search's rate-density upper limits describe [O3,
+Sect. IV], so a rate density at or below a limit, for a stated energy, gives a
+population consistent with O3:
+
+```python
+import numpy as np
+
+from gwmock_signal.burst import draw_standard_candle_population
+
+events = draw_standard_candle_population(
+    start_time=1419724818.0,
+    end_time=1419724818.0 + 30 * 86400.0,
+    rate_density=1.0e4,  # Gpc^-3 yr^-1, summed over the families
+    energy=1.0e-6,  # solar masses c^2
+    max_distance=10.0,  # Mpc
+    rng=np.random.default_rng(1102),
+)
+```
+
+- **Number and times.** The number of events is Poisson with mean $\mathcal{R}
+  \cdot \tfrac{4}{3}\pi d_\mathrm{max}^3 \cdot T$, with $T$ the span in Julian
+  years, and their peak times are uniform over the span. A burst near either end
+  may run past it.
+- **Distances.** Uniform in Euclidean volume out to `max_distance`, at most 100
+  Mpc. Redshift is ignored; at 100 Mpc ($z \approx 0.02$) that is already an
+  error of a few per cent in distance and volume. Choose `max_distance` where
+  the faintest source, at the highest central frequency, is well below the
+  network's threshold.
+- **Families.** The elliptical sine-Gaussians and the white-noise bursts of the
+  test set, chosen uniformly; sine-Gaussian central frequencies are drawn
+  log-uniformly over 30–1800 Hz. The Gaussians are left out: they are broadband,
+  and the energy relation below does not hold for them [O3, Sect. IV].
+- **Orientation.** Isotropic sky, uniform polarisation angle, inclination
+  uniform in $\cos\iota$.
+- **Strength.** Each event's $h_\mathrm{rss}$ follows from its energy, distance
+  $r$ and central frequency $f_0$ (a white-noise burst's is the middle of its
+  band) through the narrow-band relation of the O3 search [O3, Eq. (2)]:
+
+    $$E_\mathrm{GW}^\mathrm{iso} = \frac{\pi^2 c^3}{G}\, r^2 f_0^2 h_\mathrm{rss}^2 .$$
+
+    A white-noise burst radiates isotropically. A sine-Gaussian is a rotating
+    source, $E_\mathrm{GW}^\mathrm{rot} = \tfrac{2}{5}
+    E_\mathrm{GW}^\mathrm{iso}$ at its face-on $h_\mathrm{rss}$ [O3, Sect. IV],
+    and its observed $h_\mathrm{rss}^2$ follows the rotating pattern
+    $\left(\tfrac{1+\cos^2\iota}{2}\right)^2 + \cos^2\iota$. Averaged over
+    orientations, $h_\mathrm{rss}^2$ is the isotropic value, so every source
+    radiates the stated energy. `standard_candle_hrss` evaluates the relation.
+
+Every event carries its `distance` (Mpc), its `energy` and
+`injection_set="standard_candle"`. The rate density and the energy are the
+user's choice: an upper limit bounds the rate density for a given energy, and
+scales as $E_\mathrm{GW}^{-3/2}$ [O3, Sect. IV].
 
 ## Numerical waveforms
 

@@ -1,6 +1,8 @@
 ---
 title: Burst
-description: Burst simulator, ad hoc burst waveforms and the test injection set.
+description:
+    Burst simulator, ad hoc burst waveforms, the test injection set and a
+    standard-candle population.
 icon: material/flash
 ---
 
@@ -11,6 +13,14 @@ icon: material/flash
         show_root_heading: true
         heading_level: 2
         inherited_members: true
+        show_if_no_docstring: false
+        docstring_style: google
+        show_source: true
+
+::: gwmock_signal.burst.population
+    options:
+        show_root_heading: true
+        heading_level: 2
         show_if_no_docstring: false
         docstring_style: google
         show_source: true
