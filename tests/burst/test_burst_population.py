@@ -205,6 +205,9 @@ def test_population_may_be_empty():
         ({"families": ({"burst_model": "white_noise_burst", "low_frequency": 100.0, "energy": 1.0},)}, "energy"),
         ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "hrss": 1e-22},)}, "hrss"),
         ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "peak_time": START},)}, "peak_time"),
+        ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "inclination": 0.0},)}, "inclination"),
+        ({"families": ({"burst_model": "sine_gaussian", "quality_factor": 9.0, "declination": 0.0},)}, "declination"),
+        ({"families": ({"burst_model": "white_noise_burst", "low_frequency": 100.0, "seed": 1},)}, "seed"),
     ],
 )
 def test_population_rejects_invalid_configuration(overrides, match):

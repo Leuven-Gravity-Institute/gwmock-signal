@@ -318,8 +318,9 @@ events = draw_standard_candle_population(
   test set, chosen uniformly; sine-Gaussian central frequencies are drawn
   log-uniformly over 30–1800 Hz. The Gaussians are left out: they are broadband,
   and the energy relation below does not hold for them [O3, Sect. IV]. A family
-  may fix shape parameters such as `frequency`, but not `peak_time`, `distance`,
-  `energy`, `hrss` or `injection_set`, which the population draws.
+  fixes only its model and shape (`quality_factor`, `frequency`,
+  `low_frequency`, `bandwidth`, `duration`); the population draws the times,
+  distances, orientations and white-noise seeds.
 - **Orientation.** Isotropic sky, uniform polarisation angle, inclination
   uniform in $\cos\iota$.
 - **Strength.** Each event's $h_\mathrm{rss}$ follows from its energy, distance
